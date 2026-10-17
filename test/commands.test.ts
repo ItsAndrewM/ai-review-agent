@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest"
 import { parseCommand } from "../src/commands.ts"
 
 describe("parseCommand", () => {
-  it("finds the mention anywhere and reads the command after it", () => {
+  it("finds the mention anywhere and reads the command after it, in any case", () => {
     expect(parseCommand("@andabot review", "andabot")).toEqual({ kind: "review", full: false })
     expect(parseCommand("Please @AndaBot Full Review", "andabot")).toEqual({ kind: "review", full: true })
     expect(parseCommand("@andabot", "andabot")).toEqual({ kind: "review", full: false })

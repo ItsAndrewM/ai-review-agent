@@ -1,8 +1,3 @@
-/**
- * GitHub webhook signature verification: `X-Hub-Signature-256` is
- * `sha256=` + HMAC-SHA256 of the raw body with the App's webhook secret.
- */
-
 const encoder = new TextEncoder()
 
 export async function verifyWebhookSignature(
@@ -35,7 +30,6 @@ function toHex(bytes: Uint8Array): string {
   return out
 }
 
-/** Constant-time comparison of two equal-length hex strings. */
 function timingSafeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false
   let diff = 0

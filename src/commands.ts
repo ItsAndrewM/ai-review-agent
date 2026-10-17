@@ -1,8 +1,3 @@
-/**
- * `@andabot <command>` in a PR comment. Commands are case-insensitive. Any
- * other text after the mention is a chat turn for the PR's session.
- */
-
 export type Command = { kind: "review"; full: boolean } | { kind: "help" } | { kind: "chat"; text: string }
 
 export function parseCommand(body: string, botLogin: string): Command | undefined {

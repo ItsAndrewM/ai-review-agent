@@ -1,14 +1,5 @@
 import crypto from "node:crypto"
 import fs from "node:fs"
-/**
- * Registers the GitHub App from a manifest, so GitHub generates the webhook
- * secret and private key and hands them to this script instead of a form and
- * a download. Run it, open http://localhost:8790/ in a browser signed in to
- * GitHub, and confirm. The App's id, slug, private key and webhook secret are
- * written to the output file (mode 600), ready for scripts/set-secrets.sh.
- *
- *   node scripts/register-app.mjs <out.json> [name] [webhook url] [homepage]
- */
 import http from "node:http"
 
 const [
@@ -32,7 +23,6 @@ const manifest = {
   hook_attributes: { url: webhookUrl, active: true },
   redirect_url: `http://localhost:${port}/callback`,
   public: false,
-  // check_suite needs checks: read, or GitHub rejects the manifest.
   default_permissions: { pull_requests: "write", contents: "read", issues: "write", checks: "read", metadata: "read" },
   default_events: [
     "pull_request",

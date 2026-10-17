@@ -1,48 +1,39 @@
-import type { Provider } from "@earendil-works/pi-ai"
+import { fauxAssistantMessage, fauxProvider, normalizeContext, type SimpleStreamOptions } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
 import { withOutputLimit } from "../src/models.ts"
 
-function stubProvider(record: (options: unknown) => void): Provider {
-  return {
-    id: "cloudflare",
-    name: "Cloudflare",
-    auth: { apiKey: { name: "x", resolve: async () => ({ auth: {} }) } },
-    getModels: () => [],
-    stream: () => ({}) as never,
-    streamSimple: (_model: unknown, _context: unknown, options: unknown) => {
-      record(options)
-      return {} as never
+function recordingProvider() {
+  const faux = fauxProvider({ models: [{ id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000, maxTokens: 16_000 }] })
+  const seen: (SimpleStreamOptions | undefined)[] = []
+  faux.setResponses([
+    (_context, options) => {
+      seen.push(options)
+      return fauxAssistantMessage("ok")
     },
-  } as unknown as Provider
+  ])
+  return { faux, seen }
 }
 
-const model = {
-  api: "cloudflare-ai",
-  provider: "cloudflare",
-  id: "@cf/openai/gpt-oss-120b",
-  contextWindow: 128_000,
-  maxTokens: 16_000,
-} as never
-const context = { messages: [] } as never
+const context = normalizeContext({ messages: [] })
 
 describe("withOutputLimit", () => {
-  it("adds the model's output cap when the caller passed none", () => {
-    let seen: Record<string, unknown> | undefined
-    withOutputLimit(stubProvider((o) => (seen = o as Record<string, unknown>))).streamSimple(model, context)
-    expect(seen?.maxTokens).toBe(16_000)
+  it("adds the model's output cap when the caller passed none, which Workers AI would hold to 256 tokens", async () => {
+    const { faux, seen } = recordingProvider()
+    await withOutputLimit(faux.provider).streamSimple(faux.getModel(), context).result()
+    expect(seen[0]?.maxTokens).toBe(16_000)
   })
 
-  it("keeps an explicit output cap the caller passed", () => {
-    let seen: Record<string, unknown> | undefined
-    withOutputLimit(stubProvider((o) => (seen = o as Record<string, unknown>))).streamSimple(model, context, {
-      maxTokens: 500,
-    } as never)
-    expect(seen?.maxTokens).toBe(500)
+  it("keeps an explicit output cap the caller passed", async () => {
+    const { faux, seen } = recordingProvider()
+    await withOutputLimit(faux.provider).streamSimple(faux.getModel(), context, { maxTokens: 500 }).result()
+    expect(seen[0]?.maxTokens).toBe(500)
   })
 
   it("leaves the provider's other members in place", () => {
-    const wrapped = withOutputLimit(stubProvider(() => {}))
-    expect(wrapped.id).toBe("cloudflare")
-    expect(wrapped.name).toBe("Cloudflare")
+    const { faux } = recordingProvider()
+    const wrapped = withOutputLimit(faux.provider)
+    expect(wrapped.id).toBe(faux.provider.id)
+    expect(wrapped.name).toBe(faux.provider.name)
+    expect(wrapped.getModels()).toEqual(faux.provider.getModels())
   })
 })

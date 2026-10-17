@@ -1,22 +1,15 @@
-/**
- * Unified diff parsing for one purpose: which lines of a pull request can
- * carry a review comment. GitHub accepts a comment on a line that appears
- * in the diff, on the RIGHT side (added or context, numbered in the new
- * file) or the LEFT side (deleted, numbered in the old file).
- */
+import { Type, type Static } from "typebox"
 
 export type Side = "LEFT" | "RIGHT"
 
 export interface CommentableLines {
-  /** New-file line numbers of added and context lines. */
   right: Set<number>
-  /** Old-file line numbers of deleted lines. */
   left: Set<number>
 }
 
 const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+const NO_NEWLINE_AT_END_OF_FILE = "\\"
 
-/** Parse the `patch` GitHub returns for one file of a pull request. */
 export function commentableLines(patch: string | undefined): CommentableLines {
   const right = new Set<number>()
   const left = new Set<number>()
@@ -33,14 +26,13 @@ export function commentableLines(patch: string | undefined): CommentableLines {
       continue
     }
     if (!inHunk) continue
-    if (line.startsWith("\\")) continue // "\ No newline at end of file"
+    if (line.startsWith(NO_NEWLINE_AT_END_OF_FILE)) continue
     const marker = line[0]
     if (marker === "+") {
       right.add(newLine++)
     } else if (marker === "-") {
       left.add(oldLine++)
     } else {
-      // context line (" ") or an empty trailing line
       right.add(newLine++)
       oldLine++
     }
@@ -48,16 +40,16 @@ export function commentableLines(patch: string | undefined): CommentableLines {
   return { right, left }
 }
 
-export interface ChangedFile {
-  filename: string
-  status: string
-  additions: number
-  deletions: number
-  patch?: string
-  previous_filename?: string
-}
+export const ChangedFile = Type.Object({
+  filename: Type.String(),
+  status: Type.String(),
+  additions: Type.Integer(),
+  deletions: Type.Integer(),
+  patch: Type.Optional(Type.String()),
+})
 
-/** Commentable lines for every changed file, keyed by path. */
+export type ChangedFile = Static<typeof ChangedFile>
+
 export function indexCommentableLines(files: readonly ChangedFile[]): Map<string, CommentableLines> {
   const index = new Map<string, CommentableLines>()
   for (const file of files) index.set(file.filename, commentableLines(file.patch))
@@ -70,12 +62,10 @@ const GENERATED = [
   /(^|\/)(dist|build|\.wrangler)\//,
 ]
 
-/** Lock files and build output: listed, but their patches are not worth the model's context. */
 export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
 }
 
-/** Renders the changed files as the model reads them: one patch per file, with a header. */
 export function renderPatches(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
   return files
     .map((file) => {

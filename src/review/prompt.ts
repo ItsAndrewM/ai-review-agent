@@ -1,7 +1,3 @@
-/**
- * What the reviewer is told, and how a review request is phrased.
- */
-
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderPatches, type ChangedFile } from "../github/diff.ts"
 

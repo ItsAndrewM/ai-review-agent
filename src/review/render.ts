@@ -1,18 +1,13 @@
-/**
- * Markdown the bot posts: the summary comment it edits in place, and the
- * body of each review.
- */
-
 import type { ReviewEvent } from "../github/client.ts"
 import { countBySeverity, type FindingInput, type ReviewSubmissionInput } from "./findings.ts"
 
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
-const VERDICT_LABEL: Record<ReviewEvent, string> = {
+const VERDICT_LABEL = {
   APPROVE: "Approved",
   REQUEST_CHANGES: "Changes requested",
   COMMENT: "Commented",
-}
+} satisfies Record<ReviewEvent, string>
 
 export function renderSummaryComment(input: {
   botLogin: string

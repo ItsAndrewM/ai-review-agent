@@ -1,21 +1,18 @@
-/**
- * GitHub App authentication with WebCrypto only.
- *
- * An App authenticates with a short-lived RS256 JWT signed by its private
- * key, then exchanges it for an installation access token that lasts an hour.
- * GitHub hands out the key as PKCS#1 (`BEGIN RSA PRIVATE KEY`); WebCrypto
- * imports only PKCS#8, so the key is wrapped on the way in.
- */
+import { Type } from "typebox"
+import { Value } from "typebox/value"
 
 export interface InstallationToken {
   token: string
-  /** Unix milliseconds. GitHub tokens last one hour. */
   expiresAt: number
 }
 
+const InstallationTokenResponse = Type.Object({ token: Type.String(), expires_at: Type.String() })
+
+const CLOCK_DRIFT_SECONDS = 60
+
 export async function createAppJwt(appId: string, privateKeyPem: string, now = Date.now()): Promise<string> {
   const key = await importPrivateKey(privateKeyPem)
-  const iat = Math.floor(now / 1000) - 60 // allow for clock drift
+  const iat = Math.floor(now / 1000) - CLOCK_DRIFT_SECONDS
   const header = base64Url(new TextEncoder().encode(JSON.stringify({ alg: "RS256", typ: "JWT" })))
   const payload = base64Url(new TextEncoder().encode(JSON.stringify({ iat, exp: iat + 9 * 60, iss: appId })))
   const signingInput = `${header}.${payload}`
@@ -42,7 +39,8 @@ export async function fetchInstallationToken(
   if (!response.ok) {
     throw new Error(`installation token: ${response.status} ${await response.text()}`)
   }
-  const data = (await response.json()) as { token: string; expires_at: string }
+  const data: unknown = await response.json()
+  if (!Value.Check(InstallationTokenResponse, data)) throw new Error("installation token: unexpected response")
   return { token: data.token, expiresAt: Date.parse(data.expires_at) }
 }
 
@@ -56,20 +54,18 @@ export async function importPrivateKey(pem: string): Promise<CryptoKey> {
   return crypto.subtle.importKey("pkcs8", pkcs8, { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"])
 }
 
-/**
- * PKCS#8 PrivateKeyInfo around a PKCS#1 RSAPrivateKey:
- *   SEQUENCE { INTEGER 0, SEQUENCE { OID rsaEncryption, NULL }, OCTET STRING { pkcs1 } }
- */
+const DER_SEQUENCE = 0x30
+const DER_OCTET_STRING = 0x04
+
 export function wrapPkcs1InPkcs8(pkcs1: Uint8Array): Uint8Array {
-  const version = new Uint8Array([0x02, 0x01, 0x00])
-  const algorithm = new Uint8Array([
+  const versionZero = new Uint8Array([0x02, 0x01, 0x00])
+  const rsaEncryption = new Uint8Array([
     0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
   ])
-  const octetString = derTagged(0x04, pkcs1)
-  return derTagged(0x30, concat(version, algorithm, octetString))
+  const privateKey = derTagged(DER_OCTET_STRING, pkcs1)
+  return derTagged(DER_SEQUENCE, concat(versionZero, rsaEncryption, privateKey))
 }
 
-/** The inverse, for tests: the RSAPrivateKey inside a PKCS#8 PrivateKeyInfo. */
 export function unwrapPkcs8ToPkcs1(pkcs8: Uint8Array): Uint8Array {
   let offset = 0
   const outer = readTlv(pkcs8, offset)
@@ -79,11 +75,17 @@ export function unwrapPkcs8ToPkcs1(pkcs8: Uint8Array): Uint8Array {
   const algorithm = readTlv(pkcs8, offset)
   offset = algorithm.end
   const octet = readTlv(pkcs8, offset)
-  if (octet.tag !== 0x04) throw new Error("pkcs8: expected OCTET STRING")
+  if (octet.tag !== DER_OCTET_STRING) throw new Error("pkcs8: expected OCTET STRING")
   return pkcs8.slice(octet.contentStart, octet.end)
 }
 
-function readTlv(bytes: Uint8Array, offset: number): { tag: number; contentStart: number; end: number } {
+interface DerElement {
+  tag: number
+  contentStart: number
+  end: number
+}
+
+function readTlv(bytes: Uint8Array, offset: number): DerElement {
   const tag = bytes[offset]
   if (tag === undefined) throw new Error("der: truncated")
   let lengthByte = bytes[offset + 1]

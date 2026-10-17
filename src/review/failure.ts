@@ -1,12 +1,9 @@
-/**
- * Why a Pi run ended without an answer, in words a person can act on.
- */
-
 import type { EntryRecord } from "@earendil-works/pi-durable"
 import type { PiOperationResult } from "agents/harness/pi"
 
-/** The provider's message from the newest assistant entry that stopped with an error. */
-export function lastModelError(messages: readonly EntryRecord[]): string | undefined {
+export type TranscriptEntry = Pick<EntryRecord, "kind" | "model">
+
+export function lastModelError(messages: readonly TranscriptEntry[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const entry = messages[i]
     if (entry?.kind !== "pi.assistant") continue
@@ -19,9 +16,8 @@ export function lastModelError(messages: readonly EntryRecord[]): string | undef
   return undefined
 }
 
-/** `reason`, then the stored detail or the newest model error, whichever is known. */
 export function describeFailure(
-  result: PiOperationResult & { messages?: readonly EntryRecord[] },
+  result: PiOperationResult & { messages?: readonly TranscriptEntry[] },
   storedDetail?: string,
 ): string {
   const reason = result.reason ?? "unknown reason"

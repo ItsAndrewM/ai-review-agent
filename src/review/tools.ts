@@ -1,8 +1,3 @@
-/**
- * The tools the reviewer can call, as a Pi Durable extension. They reach
- * GitHub through the host, which knows the pull request and holds the token.
- */
-
 import { Type } from "@earendil-works/pi-ai"
 import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
@@ -10,14 +5,11 @@ import type { ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { systemPrompt } from "./prompt.ts"
 
-/** What the tools need from the Durable Object that hosts them. */
 export interface ReviewHost {
   botLogin(): string
   github(): Promise<GitHubClient>
-  /** The pull request this object serves. Throws before the first event. */
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
-  /** Validates and posts; returns what the model should hear. */
   submitReview(submission: ReviewSubmissionInput): Promise<string>
 }
 
@@ -71,8 +63,8 @@ export function createReviewExtension(host: ReviewHost): Extension {
     callers: ["model"],
     async execute(submission) {
       const outcome = await host.submitReview(submission)
-      const posted = outcome.startsWith("Posted")
-      return { ...text(outcome), ...(posted ? { control: { terminate: true as const } } : {}) }
+      if (!outcome.startsWith("Posted")) return text(outcome)
+      return { ...text(outcome), control: { terminate: true as const } }
     },
   })
 

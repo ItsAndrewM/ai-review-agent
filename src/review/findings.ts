@@ -1,9 +1,3 @@
-/**
- * What the model hands back, and the host's check of it before anything
- * reaches GitHub. The model proposes a review; this module decides which
- * findings are well-formed enough to post.
- */
-
 import { Type } from "@earendil-works/pi-ai"
 import type { Static } from "typebox"
 import type { ReviewComment } from "../github/client.ts"
@@ -69,7 +63,6 @@ export interface ValidatedReview {
   rejected: Rejected[]
 }
 
-/** Keeps findings that anchor to a real diff line. Everything else is rejected with a reason the model can act on. */
 export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
@@ -78,7 +71,7 @@ export function validateFindings(
   const rejected: Rejected[] = []
   const seen = new Set<string>()
   for (const finding of findings) {
-    const reason = rejectReason(finding, commentable)
+    const reason = anchorProblem(finding, commentable) ?? contentProblem(finding)
     if (reason) {
       rejected.push({ finding, reason })
       continue
@@ -98,27 +91,31 @@ export function validateFindings(
   return { accepted, rejected }
 }
 
-function rejectReason(finding: FindingInput, commentable: ReadonlyMap<string, CommentableLines>): string | undefined {
+function anchorProblem(finding: FindingInput, commentable: ReadonlyMap<string, CommentableLines>): string | undefined {
   const lines = commentable.get(finding.path)
   if (!lines) return `path "${finding.path}" is not a changed file`
   const side = finding.side ?? "RIGHT"
   const set = side === "RIGHT" ? lines.right : lines.left
   if (!set.has(finding.line)) return `line ${finding.line} (${side}) is not in the diff of ${finding.path}`
-  if (finding.start_line !== undefined) {
-    if (finding.start_line > finding.line) return "start_line must be before line"
-    if (!set.has(finding.start_line)) return `start_line ${finding.start_line} (${side}) is not in the diff`
-  }
-  if (finding.suggestion !== undefined && side !== "RIGHT") return "a suggestion needs the RIGHT side"
+  if (finding.start_line === undefined) return undefined
+  if (finding.start_line > finding.line) return "start_line must be before line"
+  if (!set.has(finding.start_line)) return `start_line ${finding.start_line} (${side}) is not in the diff`
+  return undefined
+}
+
+function contentProblem(finding: FindingInput): string | undefined {
+  if (finding.suggestion !== undefined && (finding.side ?? "RIGHT") !== "RIGHT")
+    return "a suggestion needs the RIGHT side"
   if (finding.title.trim() === "" || finding.body.trim() === "") return "title and body are required"
   if (finding.body.length > MAX_BODY_CHARS) return `body longer than ${MAX_BODY_CHARS} characters`
   return undefined
 }
 
-const SEVERITY_LABEL: Record<FindingInput["severity"], string> = {
+const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
   suggestion: "🟡 Suggestion",
   nitpick: "⚪ Nitpick",
-}
+} satisfies Record<FindingInput["severity"], string>
 
 export function toReviewComment(finding: FindingInput): ReviewComment {
   const side = finding.side ?? "RIGHT"
@@ -134,8 +131,8 @@ export function toReviewComment(finding: FindingInput): ReviewComment {
   return comment
 }
 
-export function countBySeverity(findings: readonly FindingInput[]): Record<FindingInput["severity"], number> {
-  const counts = { blocking: 0, suggestion: 0, nitpick: 0 }
+export function countBySeverity(findings: readonly FindingInput[]) {
+  const counts = { blocking: 0, suggestion: 0, nitpick: 0 } satisfies Record<FindingInput["severity"], number>
   for (const finding of findings) counts[finding.severity]++
   return counts
 }

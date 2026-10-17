@@ -75,9 +75,13 @@ Methods, each an idempotent Pi submission:
 
 The object is addressed only through the router. It has no public HTTP surface.
 
+After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build.
+
 ### Pi harness inside the object
 
 Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI })` as the Pi AI provider, `createRegistry()` with one extension for the system prompt and tools, `Harness.open(storage, { models, registry, settings })` in the `PiHarness` factory, `Lifecycle.install(this).use(this.harness)`.
+
+Pi applies the harness's `defaults` only when it creates a session, so every run sets the configured model with `setModel` before it prompts. Each review starts with `session().reset()`, so earlier reviews and their large prompts don't pile up in the context or overflow it.
 
 Tools offered to the model, all read only and `replay: "safe"`:
 
@@ -157,7 +161,7 @@ Workers AI through the Pi AI provider, with AI Gateway for anything else. The ac
 | Verify findings, chat replies (phase 2) | `@cf/moonshotai/kimi-k2.7-code` | `@cf/openai/gpt-oss-120b` | Code-tuned, stronger reasoning, called on a small input |
 | Emergency fallback | OpenRouter `:free` models via AI Gateway | | 50 requests a day without a card; models rotate, so never primary |
 
-Every request must carry an output limit. The Agents SDK's Cloudflare provider (agents 0.28.1) sends `max_tokens` only when the caller passes one, Pi Durable never does, and Workers AI then stops at 256 output tokens, before a reasoning model reaches its tool call. `src/models.ts` supplies the model's limit, as pi-ai's own adapters do.
+Every request must carry an output limit. The Agents SDK's Cloudflare provider (agents 0.28.1) sends `max_tokens` only when the caller passes one, Pi Durable never does, and Workers AI then stops at 256 output tokens, before a reasoning model reaches its tool call. `src/models.ts` supplies the model's limit, as pi-ai's own adapters do. A review asks for up to 16,000 output tokens, since gpt-oss reasons before it calls a tool.
 
 The Pi AI provider's `fallback` option gives a chain per model. Costs are tracked per conversation in Pi's `pi.usage` document, so the summary comment can print what the review cost.
 
@@ -180,6 +184,10 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 | `wrangler` | 4.151.1 | |
 | `@octokit/webhooks-methods` | 6.0.0 | HMAC verification (WebCrypto) |
 | `@octokit/auth-app` | 8.3.1 | App JWT and installation tokens, or a hand-rolled RS256 if the dependency is heavy on Workers |
+
+## Tests
+
+`pnpm test` runs unit tests of the pure modules in Node, whose WebCrypto is the one the Worker uses, and `test/lint` checks that every folder gets the lint rules. Tests against the Durable Object itself are phase 2.
 
 ## Phases
 
