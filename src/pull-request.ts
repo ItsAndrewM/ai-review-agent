@@ -176,7 +176,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       body: renderReviewBody(event, accepted),
       comments: accepted.map(toReviewComment),
     })
-    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, { reviewId: review.id, event, at: Date.now() })
+    this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, { reviewId: review.id, event, at: Date.now() })
     await this.ctx.storage.delete("pending")
     const dropped =
       rejected.length > 0 ? ` ${rejected.length} finding(s) were dropped: ${rejectedMessage(rejected)}` : ""
