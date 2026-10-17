@@ -10,7 +10,7 @@ A Worker receives GitHub webhooks and hands each pull request to its own Durable
 ```sh
 pnpm install
 pnpm check     # typecheck and unit tests
-pnpm deploy
+pnpm run deploy
 ```
 
 Status: phase 1, the walking skeleton. Full review on open and on push, `@andabot review`, `@andabot help`, and questions in PR comments.

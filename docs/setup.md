@@ -4,22 +4,23 @@ What Andrew does once, and what the Worker needs from it.
 
 ## 1. Register the GitHub App
 
-At <https://github.com/settings/apps/new> (or under an organization's settings):
+`scripts/register-app.mjs` registers the App from a [manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest), so GitHub generates the webhook secret and the private key and hands them back to the script. Nothing is typed into a form or downloaded.
 
-| Field | Value |
+```sh
+node scripts/register-app.mjs ~/andabot-app.json            # then open http://localhost:8790/ signed in to GitHub
+```
+
+Confirm on GitHub's page (it may ask for sudo mode first). The script writes the App's id, slug, private key and webhook secret to the output file with mode 600; keep it somewhere private, or delete it once the secrets are in the Worker. GitHub can generate a new key at any time.
+
+The manifest registers, and the script's arguments can change: the name `andabot` (fall back to `andabot-review` if taken, and set `BOT_LOGIN` to match), the webhook URL `https://andabot.dinocode.workers.dev/webhook`, and the homepage. It asks for these permissions and events:
+
+| | |
 | --- | --- |
-| GitHub App name | `andabot` (people will tag `@andabot`; fall back to `andabot-review` if taken) |
-| Homepage URL | this repository |
-| Webhook | Active, URL `https://<worker>.workers.dev/webhook`, a secret you generate |
-| Repository permissions | Pull requests: Read and write · Contents: Read-only · Issues: Read and write · Metadata: Read-only |
-| Subscribe to events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite |
-| Where can it be installed | Only on this account |
+| Repository permissions | Pull requests: Read and write · Contents: Read-only · Issues: Read and write · Checks: Read-only · Metadata: Read-only |
+| Events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite |
+| Where it can be installed | Only on this account |
 
-The webhook URL can be filled in after the first deploy. After creating the App:
-
-1. Note the **App ID** on the App's page.
-2. **Generate a private key**. GitHub downloads a `.pem` in PKCS#1 form (`BEGIN RSA PRIVATE KEY`); the Worker accepts that as is.
-3. **Install** the App on the repositories it should review.
+Then **install** the App on the repositories it should review, at `https://github.com/apps/andabot/installations/new`. It is installed on `ai-review-agent` only, for now.
 
 GitHub's "Code review limits" setting on a repository can block an App from submitting approving or request-changes reviews. If reviews come back as plain comments, check that setting.
 
@@ -29,13 +30,11 @@ GitHub's "Code review limits" setting on a repository can block an App from subm
 pnpm install
 pnpm check                      # typecheck and unit tests
 pnpm exec wrangler login        # once per machine
-pnpm exec wrangler secret put GITHUB_APP_ID
-pnpm exec wrangler secret put GITHUB_WEBHOOK_SECRET
-pnpm exec wrangler secret put GITHUB_PRIVATE_KEY   # paste the whole PEM, newlines included
-pnpm deploy
+pnpm run deploy                 # `pnpm run`, since pnpm has a built-in `deploy` command
+scripts/set-secrets.sh ~/andabot-app.json
 ```
 
-Then set the App's webhook URL to `https://andabot.<account>.workers.dev/webhook` and deliver a test ping from the App's **Advanced** tab. A `ping` answers `200 {"ignored":"event ping"}`; a bad secret answers `401`.
+The Worker is at `https://andabot.dinocode.workers.dev`. `GET /health` answers `{"name":"andabot","ok":true}`; a webhook with a bad signature answers `401`, and a signed `ping` answers `200 {"ignored":"no installation or repository"}`. The App's **Advanced** tab lists every delivery and can redeliver one.
 
 Variables in `wrangler.jsonc`:
 
