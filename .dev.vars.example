@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `pnpm dev`. Never commit .dev.vars.
+GITHUB_APP_ID=123456
+GITHUB_WEBHOOK_SECRET=change-me
+# Paste the PEM with real newlines, or as one line with \n escapes.
+GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----
+...
+-----END RSA PRIVATE KEY-----"
