@@ -1,27 +1,19 @@
-/**
- * The tools the reviewer can call, as a Pi Durable extension. They reach
- * GitHub through the host, which knows the pull request and holds the token.
- */
+import { Type } from "@earendil-works/pi-ai"
+import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable"
+import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
+import type { ChangedFile } from "../github/diff.ts"
+import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
+import { systemPrompt } from "./prompt.ts"
 
-import { Type } from "@earendil-works/pi-ai";
-import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable";
-import type { GitHubClient, PullRequestInfo } from "../github/client.ts";
-import type { ChangedFile } from "../github/diff.ts";
-import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts";
-import { systemPrompt } from "./prompt.ts";
-
-/** What the tools need from the Durable Object that hosts them. */
 export interface ReviewHost {
-  botLogin(): string;
-  github(): Promise<GitHubClient>;
-  /** The pull request this object serves. Throws before the first event. */
-  pullRequest(): Promise<PullRequestInfo>;
-  changedFiles(): Promise<ChangedFile[]>;
-  /** Validates and posts; returns what the model should hear. */
-  submitReview(submission: ReviewSubmissionInput): Promise<string>;
+  botLogin(): string
+  github(): Promise<GitHubClient>
+  pullRequest(): Promise<PullRequestInfo>
+  changedFiles(): Promise<ChangedFile[]>
+  submitReview(submission: ReviewSubmissionInput): Promise<string>
 }
 
-const MAX_FILE_CHARS = 60_000;
+const MAX_FILE_CHARS = 60_000
 
 export function createReviewExtension(host: ReviewHost): Extension {
   const readFile = defineTool({
@@ -31,22 +23,23 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: Type.Object({
       path: Type.String({ description: "Path from the repository root." }),
       ref: Type.Optional(
-        Type.Union([Type.Literal("head"), Type.Literal("base")], { description: "head (default) or base." })
-      )
+        Type.Union([Type.Literal("head"), Type.Literal("base")], { description: "head (default) or base." }),
+      ),
     }),
     replay: "safe",
     async execute({ path, ref }) {
-      const pr = await host.pullRequest();
-      const sha = ref === "base" ? pr.base.sha : pr.head.sha;
-      const github = await host.github();
-      const content = await github.getFileContent({ owner: owner(pr), repo: repo(pr) }, path, sha);
-      if (content === undefined) return text(`${path} does not exist at ${ref ?? "head"} (${sha.slice(0, 7)}).`);
-      const lines = content.split("\n");
-      let out = lines.map((line, i) => `${String(i + 1).padStart(5)} | ${line}`).join("\n");
-      if (out.length > MAX_FILE_CHARS) out = `${out.slice(0, MAX_FILE_CHARS)}\n... (truncated at ${MAX_FILE_CHARS} characters)`;
-      return text(out);
-    }
-  });
+      const pr = await host.pullRequest()
+      const sha = ref === "base" ? pr.base.sha : pr.head.sha
+      const github = await host.github()
+      const content = await github.getFileContent({ owner: owner(pr), repo: repo(pr) }, path, sha)
+      if (content === undefined) return text(`${path} does not exist at ${ref ?? "head"} (${sha.slice(0, 7)}).`)
+      const lines = content.split("\n")
+      let out = lines.map((line, i) => `${String(i + 1).padStart(5)} | ${line}`).join("\n")
+      if (out.length > MAX_FILE_CHARS)
+        out = `${out.slice(0, MAX_FILE_CHARS)}\n... (truncated at ${MAX_FILE_CHARS} characters)`
+      return text(out)
+    },
+  })
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
@@ -54,12 +47,13 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: Type.Object({}),
     replay: "safe",
     async execute() {
-      const files = await host.changedFiles();
+      const files = await host.changedFiles()
       return text(
-        files.map((f) => `${f.status.padEnd(9)} +${f.additions} -${f.deletions}  ${f.filename}`).join("\n") || "(no files)"
-      );
-    }
-  });
+        files.map((f) => `${f.status.padEnd(9)} +${f.additions} -${f.deletions}  ${f.filename}`).join("\n") ||
+          "(no files)",
+      )
+    },
+  })
 
   const submitReview = defineTool({
     name: "submit_review",
@@ -68,27 +62,27 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: ReviewSubmission,
     callers: ["model"],
     async execute(submission) {
-      const outcome = await host.submitReview(submission);
-      const posted = outcome.startsWith("Posted");
-      return { ...text(outcome), ...(posted ? { control: { terminate: true as const } } : {}) };
-    }
-  });
+      const outcome = await host.submitReview(submission)
+      if (!outcome.startsWith("Posted")) return text(outcome)
+      return { ...text(outcome), control: { terminate: true as const } }
+    },
+  })
 
   return defineExtension({
     name: "andabot",
     sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
-    tools: [readFile, listChangedFiles, submitReview]
-  });
+    tools: [readFile, listChangedFiles, submitReview],
+  })
 }
 
 function text(value: string) {
-  return { output: [{ type: "text" as const, text: value }] };
+  return { output: [{ type: "text" as const, text: value }] }
 }
 
 function owner(pr: PullRequestInfo): string {
-  return pr.base.repo.full_name.split("/")[0] ?? "";
+  return pr.base.repo.full_name.split("/")[0] ?? ""
 }
 
 function repo(pr: PullRequestInfo): string {
-  return pr.base.repo.full_name.split("/")[1] ?? "";
+  return pr.base.repo.full_name.split("/")[1] ?? ""
 }

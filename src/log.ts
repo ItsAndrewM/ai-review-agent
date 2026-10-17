@@ -1,17 +1,15 @@
-/**
- * One JSON line per event, which Workers Logs indexes field by field.
- */
+type LogValue = string | number | boolean | undefined
 
-export type LogFields = Record<string, unknown>;
+export type LogFields = Record<string, LogValue>
 
 export function log(event: string, fields: LogFields = {}): void {
-  console.log(JSON.stringify({ event, ...fields }));
+  console.log(JSON.stringify({ event, ...fields }))
 }
 
 export function logError(event: string, fields: LogFields = {}): void {
-  console.error(JSON.stringify({ event, ...fields }));
+  console.error(JSON.stringify({ event, ...fields }))
 }
 
-export function errorText(error: unknown): string {
-  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+export function errorText(cause: unknown): string {
+  return cause instanceof Error ? `${cause.name}: ${cause.message}` : String(cause)
 }

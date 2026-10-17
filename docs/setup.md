@@ -20,6 +20,8 @@ The manifest registers, and the script's arguments can change: the name `andabot
 | Events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite |
 | Where it can be installed | Only on this account |
 
+The Check suite event needs Checks: Read-only, or GitHub rejects the manifest.
+
 Then **install** the App on the repositories it should review, at `https://github.com/apps/andabot/installations/new`. It is installed on `ai-review-agent` only, for now.
 
 GitHub's "Code review limits" setting on a repository can block an App from submitting approving or request-changes reviews. If reviews come back as plain comments, check that setting.
@@ -28,7 +30,7 @@ GitHub's "Code review limits" setting on a repository can block an App from subm
 
 ```sh
 pnpm install
-pnpm check                      # typecheck and unit tests
+pnpm check                      # lint, typecheck and unit tests
 pnpm exec wrangler login        # once per machine
 pnpm run deploy                 # `pnpm run`, since pnpm has a built-in `deploy` command
 scripts/set-secrets.sh ~/andabot-app.json

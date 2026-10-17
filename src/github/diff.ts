@@ -1,92 +1,83 @@
-/**
- * Unified diff parsing for one purpose: which lines of a pull request can
- * carry a review comment. GitHub accepts a comment on a line that appears
- * in the diff, on the RIGHT side (added or context, numbered in the new
- * file) or the LEFT side (deleted, numbered in the old file).
- */
+import { Type, type Static } from "typebox"
 
-export type Side = "LEFT" | "RIGHT";
+export type Side = "LEFT" | "RIGHT"
 
 export interface CommentableLines {
-  /** New-file line numbers of added and context lines. */
-  right: Set<number>;
-  /** Old-file line numbers of deleted lines. */
-  left: Set<number>;
+  right: Set<number>
+  left: Set<number>
 }
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/
+const NO_NEWLINE_AT_END_OF_FILE = "\\"
 
-/** Parse the `patch` GitHub returns for one file of a pull request. */
 export function commentableLines(patch: string | undefined): CommentableLines {
-  const right = new Set<number>();
-  const left = new Set<number>();
-  if (!patch) return { right, left };
-  let oldLine = 0;
-  let newLine = 0;
-  let inHunk = false;
+  const right = new Set<number>()
+  const left = new Set<number>()
+  if (!patch) return { right, left }
+  let oldLine = 0
+  let newLine = 0
+  let inHunk = false
   for (const line of patch.split("\n")) {
-    const header = HUNK_HEADER.exec(line);
+    const header = HUNK_HEADER.exec(line)
     if (header) {
-      oldLine = Number(header[1]);
-      newLine = Number(header[3]);
-      inHunk = true;
-      continue;
+      oldLine = Number(header[1])
+      newLine = Number(header[3])
+      inHunk = true
+      continue
     }
-    if (!inHunk) continue;
-    if (line.startsWith("\\")) continue; // "\ No newline at end of file"
-    const marker = line[0];
+    if (!inHunk) continue
+    if (line.startsWith(NO_NEWLINE_AT_END_OF_FILE)) continue
+    const marker = line[0]
     if (marker === "+") {
-      right.add(newLine++);
+      right.add(newLine++)
     } else if (marker === "-") {
-      left.add(oldLine++);
+      left.add(oldLine++)
     } else {
-      // context line (" ") or an empty trailing line
-      right.add(newLine++);
-      oldLine++;
+      right.add(newLine++)
+      oldLine++
     }
   }
-  return { right, left };
+  return { right, left }
 }
 
-export interface ChangedFile {
-  filename: string;
-  status: string;
-  additions: number;
-  deletions: number;
-  patch?: string;
-  previous_filename?: string;
-}
+export const ChangedFile = Type.Object({
+  filename: Type.String(),
+  status: Type.String(),
+  additions: Type.Integer(),
+  deletions: Type.Integer(),
+  patch: Type.Optional(Type.String()),
+})
 
-/** Commentable lines for every changed file, keyed by path. */
+export type ChangedFile = Static<typeof ChangedFile>
+
 export function indexCommentableLines(files: readonly ChangedFile[]): Map<string, CommentableLines> {
-  const index = new Map<string, CommentableLines>();
-  for (const file of files) index.set(file.filename, commentableLines(file.patch));
-  return index;
+  const index = new Map<string, CommentableLines>()
+  for (const file of files) index.set(file.filename, commentableLines(file.patch))
+  return index
 }
 
 const GENERATED = [
   /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum)$/,
   /\.(min\.js|min\.css|map|snap)$/,
-  /(^|\/)(dist|build|\.wrangler)\//
-];
+  /(^|\/)(dist|build|\.wrangler)\//,
+]
 
-/** Lock files and build output: listed, but their patches are not worth the model's context. */
 export function isGenerated(path: string): boolean {
-  return GENERATED.some((pattern) => pattern.test(path));
+  return GENERATED.some((pattern) => pattern.test(path))
 }
 
-/** Renders the changed files as the model reads them: one patch per file, with a header. */
 export function renderPatches(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
   return files
     .map((file) => {
-      const header = `### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`;
-      if (isGenerated(file.filename)) return `${header}\n(patch omitted: generated or lock file; read_file shows it if it matters)`;
-      if (!file.patch) return `${header}\n(no textual diff: binary, too large, or a rename without changes)`;
+      const header = `### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`
+      if (isGenerated(file.filename))
+        return `${header}\n(patch omitted: generated or lock file; read_file shows it if it matters)`
+      if (!file.patch) return `${header}\n(no textual diff: binary, too large, or a rename without changes)`
       const patch =
         file.patch.length > maxCharsPerFile
           ? `${file.patch.slice(0, maxCharsPerFile)}\n... (patch truncated at ${maxCharsPerFile} characters)`
-          : file.patch;
-      return `${header}\n\`\`\`diff\n${patch}\n\`\`\``;
+          : file.patch
+      return `${header}\n\`\`\`diff\n${patch}\n\`\`\``
     })
-    .join("\n\n");
+    .join("\n\n")
 }

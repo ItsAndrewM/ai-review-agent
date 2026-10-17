@@ -9,7 +9,7 @@ A Worker receives GitHub webhooks and hands each pull request to its own Durable
 
 ```sh
 pnpm install
-pnpm check     # typecheck and unit tests
+pnpm check     # lint, typecheck and unit tests
 pnpm run deploy
 ```
 
