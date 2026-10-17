@@ -325,6 +325,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ms: Date.now() - run.started,
       staleBuild: run.staleBuild,
     })
+    if (await this.superseded(pr, run)) return
     await this.upsertSummary(
       renderUnpostedSummary({
         botLogin: this.botLogin(),

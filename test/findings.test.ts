@@ -84,6 +84,12 @@ describe("parseWrittenReview", () => {
     expect(parseWrittenReview(text)).toEqual({ kind: "submission", submission: submitted })
   })
 
+  it("ends a bare submission at its own closing brace, past braces and quotes in its strings", () => {
+    const quoting = { ...submitted, summary: 'Returns "}" where it returned "{".' }
+    const text = `${JSON.stringify(quoting, null, 2)}\n\nI left {} out of the findings.`
+    expect(parseWrittenReview(text)).toEqual({ kind: "submission", submission: quoting })
+  })
+
   it("keeps prose as prose, trimmed, so it can stay the summary's note", () => {
     expect(parseWrittenReview("\n  The change looks sound.\n")).toEqual({
       kind: "prose",

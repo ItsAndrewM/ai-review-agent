@@ -78,7 +78,31 @@ function jsonIn(text: string): string | undefined {
   const fenced = JSON_FENCE.exec(text)?.[1]
   if (fenced !== undefined) return fenced
   const start = text.search(JSON_OBJECT_START)
-  return start === -1 ? undefined : text.slice(start, text.lastIndexOf("}") + 1)
+  return start === -1 ? undefined : text.slice(start, objectEnd(text, start))
+}
+
+function objectEnd(text: string, start: number): number {
+  let depth = 0
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (char === '"') {
+      i = stringEnd(text, i)
+    } else if (char === "{") {
+      depth++
+    } else if (char === "}") {
+      depth--
+      if (depth === 0) return i + 1
+    }
+  }
+  return text.length
+}
+
+function stringEnd(text: string, quote: number): number {
+  for (let i = quote + 1; i < text.length; i++) {
+    if (text[i] === "\\") i++
+    else if (text[i] === '"') return i
+  }
+  return text.length
 }
 
 export const MAX_FINDINGS = 25
