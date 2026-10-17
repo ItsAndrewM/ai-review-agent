@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commentableLines, renderPatches } from "../src/github/diff.ts";
+import { commentableLines, isGenerated, renderPatches } from "../src/github/diff.ts";
 
 const patch = [
   "@@ -1,4 +1,5 @@",
@@ -44,5 +44,18 @@ describe("renderPatches", () => {
     expect(text).toContain("### a.ts (modified, +3 -2)\n```diff\n@@ -1,4 +1,5 @@");
     expect(text).toContain("### big.bin (added, +0 -0)\n(no textual diff");
     expect(text).toContain("patch truncated at 20 characters");
+  });
+
+  it("lists a lock file without its patch", () => {
+    const text = renderPatches([{ filename: "pnpm-lock.yaml", status: "added", additions: 4000, deletions: 0, patch: "+lockfileVersion: 9" }]);
+    expect(text).toContain("### pnpm-lock.yaml (added, +4000 -0)\n(patch omitted");
+    expect(text).not.toContain("lockfileVersion");
+  });
+});
+
+describe("isGenerated", () => {
+  it("matches lock files, minified assets and build output, not source", () => {
+    for (const path of ["pnpm-lock.yaml", "apps/web/package-lock.json", "a.min.js", "x.snap", "dist/index.js", "Cargo.lock"]) expect(isGenerated(path)).toBe(true);
+    for (const path of ["src/index.ts", "package.json", "docs/lock.md", "distribution.ts"]) expect(isGenerated(path)).toBe(false);
   });
 });

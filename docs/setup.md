@@ -41,7 +41,7 @@ Variables in `wrangler.jsonc`:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. |
-| `REVIEW_MODEL` | `@cf/moonshotai/kimi-k2.7-code` | Workers AI model. Needs a paid billing method on the account. |
+| `REVIEW_MODEL` | `@cf/openai/gpt-oss-120b` | Workers AI model. Kimi K2.7 Code, GLM 5.x and DeepSeek V4 need the Workers Paid plan; on Free, the daily allowance of 10,000 neurons is about 300k input tokens for this model. |
 | `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. |
 
 ## 3. Local development

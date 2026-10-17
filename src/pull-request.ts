@@ -14,6 +14,7 @@ import { canCommand, GitHubClient, type PullRequestInfo, type RepoRef } from "./
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts";
 import { helpText, parseCommand } from "./commands.ts";
 import { toReviewComment, validateFindings, type ReviewSubmissionInput } from "./review/findings.ts";
+import { describeFailure } from "./review/failure.ts";
 import { chatPrompt, reviewPrompt } from "./review/prompt.ts";
 import { chooseReviewEvent, renderReviewBody, renderSummaryComment, SUMMARY_MARKER } from "./review/render.ts";
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts";
@@ -73,12 +74,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         context
       );
     },
-    defaults: { model: this.ai(this.env.REVIEW_MODEL as WorkersAIModelId), thinkingLevel: "low" }
+    defaults: { model: this.reviewModel(), thinkingLevel: "low" }
   });
   readonly lifecycle = Lifecycle.install(this).use(this.harness);
 
   #pr: PullRequestInfo | undefined;
   #files: ChangedFile[] | undefined;
+
+  /** The configured model. Pi applies `defaults` to new sessions only, so each run sets it again. */
+  reviewModel() {
+    return this.ai(this.env.REVIEW_MODEL as WorkersAIModelId);
+  }
 
   // ---- RPC from the Worker ------------------------------------------------
 
@@ -192,17 +198,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`);
     const files = await this.changedFiles();
     await this.ctx.storage.put<PendingReview>("pending", { headSha: pr.head.sha, deliveryId: incoming.deliveryId });
+    console.log("andabot: review", pr.head.sha.slice(0, 7), "files", files.length, "model", this.env.REVIEW_MODEL);
 
+    await this.harness.session().setModel(this.reviewModel());
     const result = await this.harness.prompt(reviewPrompt(pr, files, incoming.full), {
       operationId: `review:${incoming.deliveryId}`
     });
 
     if (await this.ctx.storage.get(`posted:${pr.head.sha}`)) return;
     // The run ended without submit_review posting anything. Leave a trace rather than silence.
+    if (result.status !== "done") console.error("andabot: review failed", pr.head.sha.slice(0, 7), describeFailure(result));
     const note =
       result.status === "done"
         ? (result.text?.trim() || "_The reviewer finished without submitting a structured review._")
-        : `_The review did not complete: ${result.reason ?? "unknown reason"}._`;
+        : `_The review did not complete: ${describeFailure(result)}._`;
     await this.upsertSummary(
       `${SUMMARY_MARKER}\n## ${this.botLogin()} review\n\n**Head:** \`${pr.head.sha.slice(0, 7)}\`\n\n${note}`
     );
@@ -236,13 +245,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return;
       }
       case "chat": {
+        await this.harness.session().setModel(this.reviewModel());
         const result = await this.harness.prompt(chatPrompt(incoming.author, command.text), {
           operationId: `chat:${incoming.deliveryId}`
         });
         const answer =
           result.status === "done" && result.text?.trim()
             ? result.text.trim()
-            : `I could not answer that: ${result.reason ?? "the model returned nothing"}.`;
+            : `I could not answer that: ${result.status === "done" ? "the model returned nothing" : describeFailure(result)}.`;
         await github.createIssueComment(key, key.number, `@${incoming.author} ${answer}`);
         return;
       }

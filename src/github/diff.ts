@@ -64,11 +64,23 @@ export function indexCommentableLines(files: readonly ChangedFile[]): Map<string
   return index;
 }
 
+const GENERATED = [
+  /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|composer\.lock|Gemfile\.lock|go\.sum)$/,
+  /\.(min\.js|min\.css|map|snap)$/,
+  /(^|\/)(dist|build|\.wrangler)\//
+];
+
+/** Lock files and build output: listed, but their patches are not worth the model's context. */
+export function isGenerated(path: string): boolean {
+  return GENERATED.some((pattern) => pattern.test(path));
+}
+
 /** Renders the changed files as the model reads them: one patch per file, with a header. */
 export function renderPatches(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
   return files
     .map((file) => {
       const header = `### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`;
+      if (isGenerated(file.filename)) return `${header}\n(patch omitted: generated or lock file; read_file shows it if it matters)`;
       if (!file.patch) return `${header}\n(no textual diff: binary, too large, or a rename without changes)`;
       const patch =
         file.patch.length > maxCharsPerFile

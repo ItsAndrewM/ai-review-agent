@@ -10,8 +10,9 @@
   "vars": {
     // The GitHub App's login, without the [bot] suffix. People tag @andabot.
     "BOT_LOGIN": "andabot",
-    // Workers AI model for the review. Kimi K2.7 Code needs a paid billing method.
-    "REVIEW_MODEL": "@cf/moonshotai/kimi-k2.7-code",
+    // Workers AI model for the review. Kimi K2.7 Code, GLM 5.x and DeepSeek V4
+    // need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash run on Free.
+    "REVIEW_MODEL": "@cf/openai/gpt-oss-120b",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true"
