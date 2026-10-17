@@ -1,5 +1,5 @@
 import type { ReviewEvent } from "../github/client.ts"
-import { countBySeverity, type FindingInput, type ReviewSubmissionInput } from "./findings.ts"
+import { countBySeverity, type FindingInput, type ReviewSubmissionInput, type WrittenReview } from "./findings.ts"
 
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
@@ -47,6 +47,23 @@ export function renderSummaryComment(input: {
     "",
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
+}
+
+export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {
+  return [
+    SUMMARY_MARKER,
+    `## ${input.botLogin} review`,
+    "",
+    `**Head:** \`${input.headSha.slice(0, 7)}\``,
+    "",
+    input.note,
+  ].join("\n")
+}
+
+export function renderUnpostedNote(written: WrittenReview, retryFailure: string | undefined): string {
+  const asked = retryFailure === undefined ? "even when asked again" : `and asking again failed: ${retryFailure}`
+  const reason = `_The review couldn't be posted: the model didn't submit one that could be, ${asked}._`
+  return written.kind === "prose" && written.text !== "" ? `${reason}\n\n${written.text}` : reason
 }
 
 export function renderReviewBody(event: ReviewEvent, accepted: readonly FindingInput[]): string {

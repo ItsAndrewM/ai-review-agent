@@ -15,14 +15,23 @@ import { log, logError, errorText } from "./log.ts"
 import { withOutputLimit } from "./models.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
+  parseWrittenReview,
   toReviewComment,
   validateFindings,
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
+  type WrittenReview,
 } from "./review/findings.ts"
-import { chatPrompt, reviewPrompt } from "./review/prompt.ts"
-import { chooseReviewEvent, renderReviewBody, renderSummaryComment, SUMMARY_MARKER } from "./review/render.ts"
+import { chatPrompt, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import {
+  chooseReviewEvent,
+  renderReviewBody,
+  renderSummaryComment,
+  renderUnpostedNote,
+  renderUnpostedSummary,
+  SUMMARY_MARKER,
+} from "./review/render.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -69,6 +78,8 @@ interface ReviewRun {
   started: number
   staleBuild: boolean
 }
+
+type ReviewSource = "tool" | "text" | "retry"
 
 const StoredDetailText = Type.String()
 
@@ -209,7 +220,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       })
       return
     }
-    if (!incoming.full && (await this.ctx.storage.get(`posted:${pr.head.sha}`))) {
+    if (!incoming.full && (await this.isPosted(pr))) {
       log("review.skip", { reason: "already_reviewed", head: short(pr.head.sha), number: pr.number })
       return
     }
@@ -233,41 +244,116 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.harness.session().reset()
     await this.harness.session().setModel(this.reviewModel())
     const result = await this.harness.prompt(prompt, { operationId: run.operationId })
-
-    if (await this.ctx.storage.get(`posted:${pr.head.sha}`)) {
+    const source = await this.finishReview(pr, result, run)
+    if (source) {
       log("review.done", {
         number: pr.number,
         head: short(pr.head.sha),
         outcome: "posted",
+        source,
         ms: Date.now() - run.started,
       })
-    } else {
-      await this.reportUnpostedReview(pr, result, run)
     }
     await this.ctx.storage.delete("pending")
   }
 
-  private async reportUnpostedReview(pr: PullRequestInfo, result: PiPromptResponse, run: ReviewRun): Promise<void> {
-    const failure =
-      result.status === "done" ? undefined : describeFailure(result, await this.storedFailureDetail(run.operationId))
-    const ms = Date.now() - run.started
-    if (failure) {
-      logError("review.failed", {
+  private async finishReview(
+    pr: PullRequestInfo,
+    result: PiPromptResponse,
+    run: ReviewRun,
+  ): Promise<ReviewSource | undefined> {
+    if (await this.isPosted(pr)) return "tool"
+    if (result.status !== "done") {
+      await this.reportFailedReview(pr, result, run)
+      return undefined
+    }
+    const text = result.text ?? ""
+    const written = parseWrittenReview(text)
+    if (written.kind === "unfit") {
+      log("review.unfit_json", {
         number: pr.number,
         head: short(pr.head.sha),
-        reason: failure,
-        ms,
-        staleBuild: run.staleBuild,
+        problem: written.problem,
+        chars: text.length,
+        text: text.slice(0, MAX_LOGGED_TEXT_CHARS),
       })
-    } else {
-      log("review.no_submission", { number: pr.number, head: short(pr.head.sha), ms })
     }
-    const note =
-      result.status === "done"
-        ? result.text?.trim() || "_The reviewer finished without submitting a structured review._"
-        : `_The review did not complete: ${failure}._`
+    if (written.kind !== "submission") return this.askAgain(pr, written, undefined, run)
+    const refusal = await this.submitReview(written.submission).catch(errorText)
+    if (await this.isPosted(pr)) return "text"
+    log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal })
+    return this.askAgain(pr, written, refusal, run)
+  }
+
+  private async askAgain(
+    pr: PullRequestInfo,
+    written: WrittenReview,
+    refusal: string | undefined,
+    run: ReviewRun,
+  ): Promise<ReviewSource | undefined> {
+    if (await this.superseded(pr, run)) return undefined
+    const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
+    if (await this.isPosted(pr)) return "retry"
+    if (await this.superseded(pr, run)) return undefined
+    await this.reportUnpostedReview(pr, written, retry, run)
+    return undefined
+  }
+
+  private async superseded(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
+    const now = await this.freshPullRequest()
+    if (now.head.sha === pr.head.sha) return false
+    log("review.skip", {
+      reason: "superseded",
+      was: short(pr.head.sha),
+      now: short(now.head.sha),
+      number: pr.number,
+      ms: Date.now() - run.started,
+    })
+    return true
+  }
+
+  private async isPosted(pr: PullRequestInfo): Promise<boolean> {
+    return (await this.ctx.storage.get(`posted:${pr.head.sha}`)) !== undefined
+  }
+
+  private async reportFailedReview(pr: PullRequestInfo, result: PiPromptResponse, run: ReviewRun): Promise<void> {
+    const failure = describeFailure(result, await this.storedFailureDetail(run.operationId))
+    logError("review.failed", {
+      number: pr.number,
+      head: short(pr.head.sha),
+      reason: failure,
+      ms: Date.now() - run.started,
+      staleBuild: run.staleBuild,
+    })
     await this.upsertSummary(
-      `${SUMMARY_MARKER}\n## ${this.botLogin()} review\n\n**Head:** \`${short(pr.head.sha)}\`\n\n${note}`,
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note: `_The review did not complete: ${failure}._`,
+      }),
+    )
+  }
+
+  private async reportUnpostedReview(
+    pr: PullRequestInfo,
+    written: WrittenReview,
+    retry: PiPromptResponse,
+    run: ReviewRun,
+  ): Promise<void> {
+    const failure =
+      retry.status === "done" ? undefined : describeFailure(retry, await this.storedFailureDetail(retry.operationId))
+    const fields = { number: pr.number, head: short(pr.head.sha), wrote: written.kind, ms: Date.now() - run.started }
+    if (failure === undefined) {
+      log("review.no_submission", { ...fields, retryText: retry.text?.slice(0, MAX_LOGGED_TEXT_CHARS) })
+    } else {
+      logError("review.failed", { ...fields, reason: failure, retry: true, staleBuild: run.staleBuild })
+    }
+    await this.upsertSummary(
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note: renderUnpostedNote(written, failure),
+      }),
     )
   }
 
@@ -368,6 +454,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const REVIEW_MAX_OUTPUT_TOKENS = 16_000
+const MAX_LOGGED_TEXT_CHARS = 8_000
 
 function short(sha: string): string {
   return sha.slice(0, 7)

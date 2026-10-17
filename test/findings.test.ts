@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest"
 import { commentableLines } from "../src/github/diff.ts"
-import { MAX_FINDINGS, toReviewComment, validateFindings, type FindingInput } from "../src/review/findings.ts"
-import { chooseReviewEvent, renderSummaryComment, SUMMARY_MARKER } from "../src/review/render.ts"
+import {
+  MAX_FINDINGS,
+  parseWrittenReview,
+  toReviewComment,
+  validateFindings,
+  type FindingInput,
+  type ReviewSubmissionInput,
+} from "../src/review/findings.ts"
+import {
+  chooseReviewEvent,
+  renderSummaryComment,
+  renderUnpostedNote,
+  renderUnpostedSummary,
+  SUMMARY_MARKER,
+} from "../src/review/render.ts"
 
 const patch = ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " export { a, b };"].join("\n")
 const commentable = new Map([["src/x.ts", commentableLines(patch)]])
@@ -53,6 +66,41 @@ describe("validateFindings", () => {
   })
 })
 
+describe("parseWrittenReview", () => {
+  const submitted = {
+    summary: "Changes b from 2 to 3.",
+    walkthrough: [{ path: "src/x.ts", summary: "b is now 3." }],
+    findings: [finding({ severity: "suggestion", body: "Name it:\n```ts\nconst three = 3\n```" })],
+    verdict: "comment",
+  } satisfies ReviewSubmissionInput
+  const submittedJson = JSON.stringify(submitted, null, 2)
+
+  it("takes a submission written as bare JSON, as gpt-oss-120b wrote its review of #5", () => {
+    expect(parseWrittenReview(submittedJson)).toEqual({ kind: "submission", submission: submitted })
+  })
+
+  it("takes a submission inside a json code fence, with prose around it and fences in its findings", () => {
+    const text = `Here is the review.\n\n\`\`\`json\n${submittedJson}\n\`\`\`\n\nThat's all.`
+    expect(parseWrittenReview(text)).toEqual({ kind: "submission", submission: submitted })
+  })
+
+  it("keeps prose as prose, trimmed, so it can stay the summary's note", () => {
+    expect(parseWrittenReview("\n  The change looks sound.\n")).toEqual({
+      kind: "prose",
+      text: "The change looks sound.",
+    })
+  })
+
+  it("holds back JSON that doesn't fit ReviewSubmission and says where it fails", () => {
+    const written = parseWrittenReview(JSON.stringify({ ...submitted, verdict: "approved" }))
+    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("/verdict") })
+  })
+
+  it("holds back JSON the output limit cut off, rather than taking it for prose", () => {
+    expect(parseWrittenReview(`Review:\n${submittedJson.slice(0, 200)}`)).toMatchObject({ kind: "unfit" })
+  })
+})
+
 describe("toReviewComment", () => {
   it("formats severity, title, body and a suggestion block with a range", () => {
     const comment = toReviewComment(finding({ start_line: 1, line: 2, suggestion: "const b = 4;\n" }))
@@ -90,5 +138,38 @@ describe("renderSummaryComment", () => {
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
     expect(text).toContain("1 finding(s) were dropped")
+  })
+})
+
+describe("renderUnpostedSummary", () => {
+  it("starts with the marker, so the next review edits the same comment, and shows the head and the note", () => {
+    const text = renderUnpostedSummary({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      note: "_The review did not complete: model_error._",
+    })
+    expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
+    expect(text).toContain("`0123456`")
+    expect(text).toContain("_The review did not complete: model_error._")
+  })
+})
+
+describe("renderUnpostedNote", () => {
+  it("says the review couldn't be posted and keeps the model's prose as the note", () => {
+    const note = renderUnpostedNote({ kind: "prose", text: "The change looks sound." }, undefined)
+    expect(note).toContain("couldn't be posted")
+    expect(note).toContain("The change looks sound.")
+  })
+
+  it("shows nothing the model wrote unless it was prose, so its JSON stays in the log", () => {
+    const submission = { summary: "Changes b.", walkthrough: [], findings: [], verdict: "approve" as const }
+    expect(renderUnpostedNote({ kind: "submission", submission }, undefined)).not.toContain("Changes b.")
+    expect(
+      renderUnpostedNote({ kind: "unfit", problem: "/verdict: must be equal to constant" }, undefined),
+    ).not.toContain("/verdict")
+  })
+
+  it("gives the reason asking again failed", () => {
+    expect(renderUnpostedNote({ kind: "prose", text: "" }, "model_error: quota")).toContain("model_error: quota")
   })
 })

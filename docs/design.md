@@ -83,6 +83,8 @@ Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI
 
 Pi applies the harness's `defaults` only when it creates a session, so every run sets the configured model with `setModel` before it prompts. Each review starts with `session().reset()`, so earlier reviews and their large prompts don't pile up in the context or overflow it.
 
+Phase 1 takes the review through a `submit_review` tool, whose arguments host code validates and posts, but nothing holds the model to calling it: on #5, gpt-oss-120b wrote those arguments as its final message instead (#6). So when a review run ends without a posted review, the host reads that message. A `ReviewSubmission` written as JSON, bare or in a `json` code fence, goes to `submitReview`, which validates and posts it as if the tool had been called. Anything else, or a submission `submitReview` refuses, gets one more prompt in the same session to call `submit_review`, and only what that run submits through the tool is posted. If the head moves meanwhile, nothing more is asked or posted, since the review of the new head takes over. Otherwise, when nothing is posted, the summary says so and why, and keeps prose as its note. JSON never reaches the comment: text holding a JSON object counts as JSON, and what doesn't fit `ReviewSubmission` goes to the log as `review.unfit_json`. `review.done` logs `source` as `tool`, `text` or `retry`, so Workers Logs shows how often the model skips the tool, which feeds #2's choice of model.
+
 Tools offered to the model, all read only and `replay: "safe"`:
 
 | Tool | Backed by |
