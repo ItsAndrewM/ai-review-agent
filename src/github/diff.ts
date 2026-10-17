@@ -29,7 +29,7 @@ export function commentableLines(patch: string | undefined): CommentableLines {
     if (line.startsWith(NO_NEWLINE_AT_END_OF_FILE)) continue
     const marker = line[0]
     if (marker === "+") {
-      right.add(newLine++)
+      right.add(++newLine)
     } else if (marker === "-") {
       left.add(oldLine++)
     } else {
