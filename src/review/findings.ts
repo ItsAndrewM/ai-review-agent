@@ -1,7 +1,9 @@
 import { Type } from "@earendil-works/pi-ai"
 import type { Static } from "typebox"
+import { Value } from "typebox/value"
 import type { ReviewComment } from "../github/client.ts"
 import type { CommentableLines } from "../github/diff.ts"
+import { errorText } from "../log.ts"
 
 export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
 
@@ -49,6 +51,59 @@ export const ReviewSubmission = Type.Object({
 
 export type FindingInput = Static<typeof Finding>
 export type ReviewSubmissionInput = Static<typeof ReviewSubmission>
+
+export type WrittenReview =
+  | { kind: "submission"; submission: ReviewSubmissionInput }
+  | { kind: "unfit"; problem: string }
+  | { kind: "prose"; text: string }
+
+const JSON_FENCE = /```json[^\n]*\n([\s\S]*?)\n\s*```/i
+const JSON_OBJECT_START = /\{\s*"/
+
+export function parseWrittenReview(text: string): WrittenReview {
+  const json = jsonIn(text)
+  if (json === undefined) return { kind: "prose", text: text.trim() }
+  let value: unknown
+  try {
+    value = JSON.parse(json)
+  } catch (cause) {
+    return { kind: "unfit", problem: errorText(cause) }
+  }
+  if (Value.Check(ReviewSubmission, value)) return { kind: "submission", submission: value }
+  const [first] = Value.Errors(ReviewSubmission, value)
+  return { kind: "unfit", problem: `${first?.instancePath || "/"}: ${first?.message}` }
+}
+
+function jsonIn(text: string): string | undefined {
+  const fenced = JSON_FENCE.exec(text)?.[1]
+  if (fenced !== undefined) return fenced
+  const start = text.search(JSON_OBJECT_START)
+  return start === -1 ? undefined : text.slice(start, objectEnd(text, start))
+}
+
+function objectEnd(text: string, start: number): number {
+  let depth = 0
+  for (let i = start; i < text.length; i++) {
+    const char = text[i]
+    if (char === '"') {
+      i = stringEnd(text, i)
+    } else if (char === "{") {
+      depth++
+    } else if (char === "}") {
+      depth--
+      if (depth === 0) return i + 1
+    }
+  }
+  return text.length
+}
+
+function stringEnd(text: string, quote: number): number {
+  for (let i = quote + 1; i < text.length; i++) {
+    if (text[i] === "\\") i++
+    else if (text[i] === '"') return i
+  }
+  return text.length
+}
 
 export const MAX_FINDINGS = 25
 export const MAX_BODY_CHARS = 4000

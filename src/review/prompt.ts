@@ -35,6 +35,14 @@ ${body}
 ${renderPatches(files)}`
 }
 
+export function resubmitPrompt(refusal: string | undefined): string {
+  const outcome =
+    refusal === undefined
+      ? "No review was posted, because only a submit_review call posts one."
+      : `You wrote the review out as a message instead of calling submit_review. The host submitted it for you, and it was not posted:\n\n${refusal}`
+  return `${outcome}\n\nCall submit_review now with the review, and don't write it out as a message.`
+}
+
 export function chatPrompt(author: string, text: string): string {
   return `${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly. Do not call submit_review.`
 }
