@@ -2,7 +2,7 @@
 
 `andabot` is a self-hosted pull request reviewer in the shape of CodeRabbit: it reviews every PR on its own, answers when tagged, posts a summary and inline findings with suggestions, requests changes when it finds something, and approves once its findings are resolved. It runs on Cloudflare: a Worker receives GitHub webhooks and hands each PR to its own Durable Object, where Pi Durable runs the agent loop.
 
-Status: design, 17 Oct 2026. Nothing is built yet.
+Status: phase 1, the walking skeleton, is built, deployed and reviewing this repository's pull requests (#1). Next: #2 measures review quality, #3 adds CI.
 
 ## Decisions so far
 
@@ -10,7 +10,7 @@ Status: design, 17 Oct 2026. Nothing is built yet.
 | --- | --- | --- |
 | Agent harness | Pi Durable through the Agents SDK's `PiHarness` | Every turn, tool call and piece of state is committed before it is shown; idempotent submissions by request id; hooks before and after tool calls; survives eviction. Smallest loop of the three options. |
 | Approval policy | Request changes on actionable findings, approve when they are resolved | CodeRabbit's request-changes workflow, which is the feature worth keeping. |
-| Plan | Workers Paid (already in place) | Unlocks Containers for a real checkout with lint and tests, and the paid Workers AI coding models. |
+| Plan | Workers Free on the account andabot deploys to | Workers AI there refuses paid-only models: Kimi K2.7 Code failed with "not available on the Workers Free plan". Reviews run on gpt-oss-120b within the daily free allowance. Workers Paid unlocks the paid models and Containers, which the sandbox tier needs. |
 | Repos | Andrew's own repos, public and private, through one GitHub App named `andabot` | An App's approval counts toward required reviews like a person's. The default Actions token's does not without an org setting. |
 | State | One Durable Object per pull request | Memory per PR for chat follow-ups, the approval state machine and incremental review live where the PR does. |
 
@@ -30,7 +30,7 @@ GitHub ──webhook──▶ Worker (router)
             │     tools: pr, diff, read_file, tree, search, workspace grep
             │     hooks: validate findings against diff hunks before posting
             ├─ Workspace (@cloudflare/computer): shallow clone in SQLite, grep/find
-            └─ Sandbox (Containers, later): lint, typecheck, tests on the head
+            └─ Sandbox (Containers, needs Workers Paid, later): lint, typecheck, tests on the head
                       │
                       ▼
             GitHub REST: reviews, review comments, issue comments, checks
@@ -142,19 +142,22 @@ reviews:
       instructions: "Receipts must stay decodable for 24 hours after a deploy."
   path_filters: ["!pnpm-lock.yaml", "!**/*.snap"]
 model:
-  draft: "@cf/zai-org/glm-5.3-flash"
-  verify: "@cf/moonshotai/kimi-k2.7-code"
+  draft: "@cf/zai-org/glm-4.7-flash"
+  verify: "@cf/openai/gpt-oss-120b"
 ```
 
 ## Models
 
-Workers AI through the Pi AI provider, with AI Gateway for anything else. On Workers Paid the whole catalog is available, and spend above the free 10,000 neurons a day is billed per model.
+Workers AI through the Pi AI provider, with AI Gateway for anything else. On the Workers Free plan, an account gets 10,000 neurons a day and paid-only models are refused. On Workers Paid the whole catalog is available, and spend above the free allowance is billed per model.
 
-| Role | First choice | Fallback | Why |
+| Role | On Workers Free, today | On Workers Paid | Why |
 | --- | --- | --- | --- |
-| Draft findings and walkthrough | `@cf/zai-org/glm-5.3-flash` | `@cf/zai-org/glm-4.7-flash` | Cheap per token, long context, good enough for candidates |
-| Verify findings, chat replies | `@cf/moonshotai/kimi-k2.7-code` | `@cf/openai/gpt-oss-120b` | Code-tuned, stronger reasoning, called on a small input |
-| Emergency fallback | OpenRouter `:free` models via AI Gateway | | 50 requests a day without a card; models rotate, so never primary |
+| Review, one pass (phase 1) | `@cf/openai/gpt-oss-120b` | `@cf/moonshotai/kimi-k2.7-code` | gpt-oss makes reliable tool calls on Free; Kimi is code-tuned |
+| Draft findings and walkthrough (phase 2) | `@cf/zai-org/glm-4.7-flash` | `@cf/zai-org/glm-5.3-flash` | Cheap per token, long context, good enough for candidates |
+| Verify findings, chat replies (phase 2) | `@cf/openai/gpt-oss-120b` | `@cf/moonshotai/kimi-k2.7-code` | Stronger reasoning, called on a small input |
+| Emergency fallback | OpenRouter `:free` models via AI Gateway | the same | 50 requests a day without a card; models rotate, so never primary |
+
+Every request must carry an output limit. The Agents SDK's Cloudflare provider (agents 0.28.1) sends `max_tokens` only when the caller passes one, Pi Durable never does, and Workers AI then stops at 256 output tokens, before a reasoning model reaches its tool call. `src/models.ts` supplies the model's limit, as pi-ai's own adapters do.
 
 The Pi AI provider's `fallback` option gives a chain per model. Costs are tracked per conversation in Pi's `pi.usage` document, so the summary comment can print what the review cost.
 
@@ -162,7 +165,7 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 
 1. **API only.** PR files and patches, file contents at a ref, trees, code search. Enough for diff review. Phase 1.
 2. **Workspace clone, no container.** `@cloudflare/computer` keeps a filesystem in the object's SQLite and clones with isomorphic-git in the host, so `grep` and `find` across a shallow clone work without a container. Phase 2.
-3. **Sandbox.** A Container per review run, started from the PR object with the Durable Object scheduling policy, outbound HTTP intercepted so it reaches only `github.com` and the model gateway, a one-minute alarm that keeps it alive while a check runs, and a 30-minute inactivity timeout. Runs lint, typecheck and the test suite on the head and feeds the tail to the verify pass. Phase 3.
+3. **Sandbox.** Needs Workers Paid. A Container per review run, started from the PR object with the Durable Object scheduling policy, outbound HTTP intercepted so it reaches only `github.com` and the model gateway, a one-minute alarm that keeps it alive while a check runs, and a 30-minute inactivity timeout. Runs lint, typecheck and the test suite on the head and feeds the tail to the verify pass. Phase 3.
 
 ## Package pins (as of 17 Oct 2026)
 
@@ -182,12 +185,11 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 
 1. **Walking skeleton.** GitHub App, router Worker, PR object with `PiHarness`, API-only tools, full review on open, summary comment and one review with inline comments, `review` and `help` commands. Deployed and reviewing this repo's own PRs.
 2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, workspace clone with grep, verify pass, cost in the summary.
-3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
+3. **Sandbox tier.** Needs Workers Paid. Container image, lint, typecheck and tests on the head, results into the verify pass.
 4. **Extras.** Sequence diagram, docstrings, unit test generation, a check run that mirrors the review state.
 
 ## Open questions
 
-- GitHub App names are unique across GitHub. If `andabot` is taken when the App is registered, the fallback is `andabot-review`, and the mention becomes `@andabot-review`.
 - Where the config file lives when the PR head doesn't have one: default branch, then built-in defaults.
 - Whether to open a check run per review so the review state shows in the merge box, or rely on the review event alone.
 - How to mark findings as blocking versus optional in a way the model follows reliably; the verify pass is the place to decide severity, not the draft.
