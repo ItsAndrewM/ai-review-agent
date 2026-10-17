@@ -1,0 +1,27 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "andabot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "upload_source_maps": true,
+  "observability": { "enabled": true },
+  "ai": { "binding": "AI", "remote": true },
+  "vars": {
+    // The GitHub App's login, without the [bot] suffix. People tag @andabot.
+    "BOT_LOGIN": "andabot",
+    // Workers AI model for the review. Kimi K2.7 Code needs a paid billing method.
+    "REVIEW_MODEL": "@cf/moonshotai/kimi-k2.7-code",
+    // "true": request changes on blocking findings and approve clean PRs.
+    // "false": only ever comment.
+    "REQUEST_CHANGES_WORKFLOW": "true"
+  },
+  // Secrets, set with `wrangler secret put <NAME>` or in .dev.vars locally:
+  //   GITHUB_APP_ID          the App's numeric id
+  //   GITHUB_PRIVATE_KEY     the App's private key, PEM, newlines kept
+  //   GITHUB_WEBHOOK_SECRET  the App's webhook secret
+  "durable_objects": {
+    "bindings": [{ "name": "PULL_REQUEST", "class_name": "PullRequest" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PullRequest"] }]
+}
