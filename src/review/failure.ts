@@ -19,8 +19,12 @@ export function lastModelError(messages: readonly EntryRecord[]): string | undef
   return undefined;
 }
 
-export function describeFailure(result: PiOperationResult & { messages?: readonly EntryRecord[] }): string {
+/** `reason`, then the stored detail or the newest model error, whichever is known. */
+export function describeFailure(
+  result: PiOperationResult & { messages?: readonly EntryRecord[] },
+  storedDetail?: string
+): string {
   const reason = result.reason ?? "unknown reason";
-  const detail = lastModelError(result.messages ?? []);
+  const detail = storedDetail ?? lastModelError(result.messages ?? []);
   return detail ? `${reason}: ${detail}` : reason;
 }

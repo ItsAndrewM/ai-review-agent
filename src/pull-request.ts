@@ -4,9 +4,10 @@
  */
 
 import { DurableObject } from "cloudflare:workers";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness } from "@earendil-works/pi-durable";
-import { PiHarness } from "agents/harness/pi";
+import { PiHarness, ROOT_SESSION } from "agents/harness/pi";
 import { Lifecycle } from "agents/lifecycle";
 import { createAI, type WorkersAIModelId } from "agents/models/pi-ai";
 import { createAppJwt, fetchInstallationToken, type InstallationToken } from "./github/app-auth.ts";
@@ -198,20 +199,21 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`);
     const files = await this.changedFiles();
     await this.ctx.storage.put<PendingReview>("pending", { headSha: pr.head.sha, deliveryId: incoming.deliveryId });
-    console.log("andabot: review", pr.head.sha.slice(0, 7), "files", files.length, "model", this.env.REVIEW_MODEL);
+    const prompt = reviewPrompt(pr, files, incoming.full);
+    const operationId = `review:${incoming.deliveryId}`;
+    console.log("andabot: review", pr.head.sha.slice(0, 7), "files", files.length, "prompt chars", prompt.length, "model", this.env.REVIEW_MODEL);
 
     await this.harness.session().setModel(this.reviewModel());
-    const result = await this.harness.prompt(reviewPrompt(pr, files, incoming.full), {
-      operationId: `review:${incoming.deliveryId}`
-    });
+    const result = await this.harness.prompt(prompt, { operationId });
 
     if (await this.ctx.storage.get(`posted:${pr.head.sha}`)) return;
     // The run ended without submit_review posting anything. Leave a trace rather than silence.
-    if (result.status !== "done") console.error("andabot: review failed", pr.head.sha.slice(0, 7), describeFailure(result));
+    const failure = result.status === "done" ? undefined : describeFailure(result, await this.failureDetail(operationId));
+    if (failure) console.error("andabot: review failed", pr.head.sha.slice(0, 7), failure);
     const note =
       result.status === "done"
         ? (result.text?.trim() || "_The reviewer finished without submitting a structured review._")
-        : `_The review did not complete: ${describeFailure(result)}._`;
+        : `_The review did not complete: ${failure}._`;
     await this.upsertSummary(
       `${SUMMARY_MARKER}\n## ${this.botLogin()} review\n\n**Head:** \`${pr.head.sha.slice(0, 7)}\`\n\n${note}`
     );
@@ -246,13 +248,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       }
       case "chat": {
         await this.harness.session().setModel(this.reviewModel());
-        const result = await this.harness.prompt(chatPrompt(incoming.author, command.text), {
-          operationId: `chat:${incoming.deliveryId}`
-        });
+        const operationId = `chat:${incoming.deliveryId}`;
+        const result = await this.harness.prompt(chatPrompt(incoming.author, command.text), { operationId });
         const answer =
           result.status === "done" && result.text?.trim()
             ? result.text.trim()
-            : `I could not answer that: ${result.status === "done" ? "the model returned nothing" : describeFailure(result)}.`;
+            : `I could not answer that: ${
+                result.status === "done" ? "the model returned nothing" : describeFailure(result, await this.failureDetail(operationId))
+              }.`;
         await github.createIssueComment(key, key.number, `@${incoming.author} ${answer}`);
         return;
       }
@@ -260,6 +263,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   // ---- helpers -----------------------------------------------------------------
+
+  /** Pi's stored detail for an unanswered submission, which the harness result leaves out. */
+  private async failureDetail(operationId: string): Promise<string | undefined> {
+    try {
+      const storage = await this.harness.storage();
+      const conversation = await this.harness.conversation(ROOT_SESSION);
+      const record = await storage.submissionByRequest(conversation.id, operationId, BACKGROUND_CONTEXT);
+      if (record?.status !== "unanswered" || record.detail === undefined) return undefined;
+      return (typeof record.detail === "string" ? record.detail : JSON.stringify(record.detail)).slice(0, 800);
+    } catch (error) {
+      console.warn("andabot: failure detail unavailable", error);
+      return undefined;
+    }
+  }
 
   private async key(): Promise<PullRequestKey> {
     const key = await this.ctx.storage.get<PullRequestKey>("key");
