@@ -2,8 +2,8 @@
  * What the reviewer is told, and how a review request is phrased.
  */
 
-import type { PullRequestInfo } from "../github/client.ts";
-import { renderPatches, type ChangedFile } from "../github/diff.ts";
+import type { PullRequestInfo } from "../github/client.ts"
+import { renderPatches, type ChangedFile } from "../github/diff.ts"
 
 export function systemPrompt(botLogin: string): string {
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub. You review like a careful senior engineer who respects the author's time.
@@ -18,12 +18,12 @@ How you work:
 - When you have finished, call submit_review once with the summary, a one-line walkthrough per changed file, your findings, and a verdict. The host validates each finding against the diff and posts the review. If submit_review reports rejected findings, fix their anchors or drop them and call it again.
 - Your final message after submit_review succeeds is one short sentence.
 
-Answering questions: when a person asks you something about the pull request, answer from the diff and the files, in a few short paragraphs of Markdown, and do not call submit_review.`;
+Answering questions: when a person asks you something about the pull request, answer from the diff and the files, in a few short paragraphs of Markdown, and do not call submit_review.`
 }
 
 export function reviewPrompt(pr: PullRequestInfo, files: readonly ChangedFile[], full: boolean): string {
-  const body = pr.body?.trim() ? pr.body.trim() : "(no description)";
-  const labels = pr.labels.length ? pr.labels.map((l) => l.name).join(", ") : "none";
+  const body = pr.body?.trim() ? pr.body.trim() : "(no description)"
+  const labels = pr.labels.length ? pr.labels.map((l) => l.name).join(", ") : "none"
   return `Review this pull request${full ? " in full" : ""} and submit the review with submit_review.
 
 # Pull request #${pr.number}: ${pr.title}
@@ -36,9 +36,9 @@ Changed files: ${pr.changed_files}, +${pr.additions} -${pr.deletions}
 ${body}
 
 ## Diff
-${renderPatches(files)}`;
+${renderPatches(files)}`
 }
 
 export function chatPrompt(author: string, text: string): string {
-  return `${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly. Do not call submit_review.`;
+  return `${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly. Do not call submit_review.`
 }

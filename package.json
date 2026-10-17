@@ -2,13 +2,14 @@
   "name": "andabot",
   "version": "0.0.1",
   "private": true,
-  "type": "module",
   "description": "A self-hosted pull request reviewer on Cloudflare: a Worker, a Durable Object per PR, and Pi Durable as the agent loop.",
+  "type": "module",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "types": "wrangler types",
     "typecheck": "wrangler types && tsc --noEmit",
+    "format": "oxfmt --disable-nested-config .",
     "test": "vitest run",
     "check": "pnpm typecheck && pnpm test"
   },
@@ -22,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22",
+    "oxfmt": "0.73.0",
     "typescript": "^5.9.0",
     "vitest": "^4.1.0",
     "wrangler": "4.151.1"

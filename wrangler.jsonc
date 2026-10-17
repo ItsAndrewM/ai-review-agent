@@ -18,14 +18,14 @@
     "REVIEW_MODEL": "@cf/openai/gpt-oss-120b",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
-    "REQUEST_CHANGES_WORKFLOW": "true"
+    "REQUEST_CHANGES_WORKFLOW": "true",
   },
   // Secrets, set with `wrangler secret put <NAME>` or in .dev.vars locally:
   //   GITHUB_APP_ID          the App's numeric id
   //   GITHUB_PRIVATE_KEY     the App's private key, PEM, newlines kept
   //   GITHUB_WEBHOOK_SECRET  the App's webhook secret
   "durable_objects": {
-    "bindings": [{ "name": "PULL_REQUEST", "class_name": "PullRequest" }]
+    "bindings": [{ "name": "PULL_REQUEST", "class_name": "PullRequest" }],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PullRequest"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PullRequest"] }],
 }

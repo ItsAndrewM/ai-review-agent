@@ -10,8 +10,8 @@
  * tool call. This applies pi-ai's default on the way in.
  */
 
-import type { Provider } from "@earendil-works/pi-ai";
-import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options";
+import type { Provider } from "@earendil-works/pi-ai"
+import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
 
 export function withOutputLimit(provider: Provider): Provider {
   return {
@@ -19,7 +19,7 @@ export function withOutputLimit(provider: Provider): Provider {
     streamSimple: (model, context, options) =>
       provider.streamSimple(model, context, {
         ...options,
-        maxTokens: options?.maxTokens ?? clampMaxTokensToContext(model, context, model.maxTokens)
-      })
-  };
+        maxTokens: options?.maxTokens ?? clampMaxTokensToContext(model, context, model.maxTokens),
+      }),
+  }
 }
