@@ -200,15 +200,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("review.skip", { reason: "not_open", state: pr.state, number: pr.number })
       return
     }
-    if (pr.head.sha !== incoming.headSha) {
-      log("review.skip", {
-        reason: "superseded",
-        was: short(incoming.headSha),
-        now: short(pr.head.sha),
-        number: pr.number,
-      })
-      return
-    }
     if (!incoming.full && (await this.ctx.storage.get(`posted:${pr.head.sha}`))) {
       log("review.skip", { reason: "already_reviewed", head: short(pr.head.sha), number: pr.number })
       return
