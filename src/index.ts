@@ -5,6 +5,7 @@
 
 import { verifyWebhookSignature } from "./github/webhook.ts";
 import { objectName, routeWebhook } from "./route.ts";
+import { versionOf } from "./version.ts";
 
 export { PullRequest } from "./pull-request.ts";
 
@@ -39,7 +40,7 @@ export default {
       return Response.json({ ignored: routed.reason }, { status: 200 });
     }
     const stub = env.PULL_REQUEST.getByName(objectName(routed.incoming.key));
-    await stub.accept(routed.incoming);
+    await stub.accept(routed.incoming, versionOf(env.CF_VERSION_METADATA));
     return Response.json({ accepted: routed.incoming.kind, delivery: deliveryId }, { status: 202 });
   }
 } satisfies ExportedHandler<Env>;
