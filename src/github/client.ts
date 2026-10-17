@@ -30,6 +30,7 @@ export type IssueComment = Static<typeof IssueComment>
 const ChangedFiles = Type.Array(ChangedFile)
 const IssueComments = Type.Array(IssueComment)
 const CreatedReview = Type.Object({ id: Type.Integer() })
+const CheckRun = Type.Object({ id: Type.Integer() })
 const CollaboratorPermission = Type.Object({ permission: Type.String() })
 
 export type ReviewEvent = "APPROVE" | "REQUEST_CHANGES" | "COMMENT"
@@ -48,6 +49,29 @@ export interface CreateReview {
   event: ReviewEvent
   body: string
   comments: ReviewComment[]
+}
+
+export type CheckRunConclusion = "success" | "failure" | "cancelled"
+
+export interface CheckRunOutput {
+  title: string
+  summary: string
+}
+
+export interface CreateCheckRun {
+  name: string
+  head_sha: string
+  status: "in_progress"
+  external_id: string
+  started_at: string
+  output: CheckRunOutput
+}
+
+export interface UpdateCheckRun {
+  conclusion: CheckRunConclusion
+  completed_at: string
+  output: CheckRunOutput
+  details_url?: string
 }
 
 const PER_PAGE = 100
@@ -119,6 +143,22 @@ export class GitHubClient {
       method: "POST",
       body: JSON.stringify(review),
     })
+  }
+
+  async createCheckRun(ref: RepoRef, run: CreateCheckRun): Promise<{ id: number }> {
+    const { id } = await this.json(CheckRun, `/repos/${ref.owner}/${ref.repo}/check-runs`, {
+      method: "POST",
+      body: JSON.stringify(run),
+    })
+    return { id }
+  }
+
+  async updateCheckRun(ref: RepoRef, checkRunId: number, update: UpdateCheckRun): Promise<{ id: number }> {
+    const { id } = await this.json(CheckRun, `/repos/${ref.owner}/${ref.repo}/check-runs/${checkRunId}`, {
+      method: "PATCH",
+      body: JSON.stringify(update),
+    })
+    return { id }
   }
 
   async getCollaboratorPermission(ref: RepoRef, username: string): Promise<string> {
