@@ -99,6 +99,14 @@ describe("postedCheckRun", () => {
     expect(update.output.summary).toHaveLength(MAX_CHECK_SUMMARY_CHARS)
     expect(update.output.summary.endsWith("…")).toBe(true)
   })
+
+  it("drops an emoji the cut would split rather than keep half of it", () => {
+    const summary = `${"x".repeat(MAX_CHECK_SUMMARY_CHARS - 2)}😀 and more text`
+    const update = postedCheckRun("APPROVE", [], summary, "https://example.test", at)
+    expect(update.output.summary).toHaveLength(MAX_CHECK_SUMMARY_CHARS - 1)
+    expect(update.output.summary.endsWith("x…")).toBe(true)
+    expect(JSON.stringify(update.output.summary)).not.toContain("\\ud83d")
+  })
 })
 
 describe("failedCheckRun", () => {

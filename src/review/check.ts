@@ -11,6 +11,8 @@ import { VERDICT_LABEL } from "./render.ts"
 
 export const MAX_CHECK_SUMMARY_CHARS = 65_535
 
+const TRAILING_HIGH_SURROGATE = /[\ud800-\udbff]$/
+
 export interface CheckRunStart {
   name: string
   headSha: string
@@ -86,7 +88,8 @@ function completedCheckRun(
 
 function checkOutput(title: string, summary: string): CheckRunOutput {
   if (summary.length <= MAX_CHECK_SUMMARY_CHARS) return { title, summary }
-  return { title, summary: `${summary.slice(0, MAX_CHECK_SUMMARY_CHARS - 1)}…` }
+  const kept = summary.slice(0, MAX_CHECK_SUMMARY_CHARS - 1).replace(TRAILING_HIGH_SURROGATE, "")
+  return { title, summary: `${kept}…` }
 }
 
 function counted(count: number, noun: string): string {
