@@ -1,6 +1,6 @@
-# ai-review-agent: design
+# andabot: design
 
-A self-hosted pull request reviewer in the shape of CodeRabbit: it reviews every PR on its own, answers when tagged, posts a summary and inline findings with suggestions, requests changes when it finds something, and approves once its findings are resolved. It runs on Cloudflare: a Worker receives GitHub webhooks and hands each PR to its own Durable Object, where Pi Durable runs the agent loop.
+`andabot` is a self-hosted pull request reviewer in the shape of CodeRabbit: it reviews every PR on its own, answers when tagged, posts a summary and inline findings with suggestions, requests changes when it finds something, and approves once its findings are resolved. It runs on Cloudflare: a Worker receives GitHub webhooks and hands each PR to its own Durable Object, where Pi Durable runs the agent loop.
 
 Status: design, 17 Oct 2026. Nothing is built yet.
 
@@ -11,7 +11,7 @@ Status: design, 17 Oct 2026. Nothing is built yet.
 | Agent harness | Pi Durable through the Agents SDK's `PiHarness` | Every turn, tool call and piece of state is committed before it is shown; idempotent submissions by request id; hooks before and after tool calls; survives eviction. Smallest loop of the three options. |
 | Approval policy | Request changes on actionable findings, approve when they are resolved | CodeRabbit's request-changes workflow, which is the feature worth keeping. |
 | Plan | Workers Paid (already in place) | Unlocks Containers for a real checkout with lint and tests, and the paid Workers AI coding models. |
-| Repos | Andrew's own repos, public and private, through one GitHub App | An App's approval counts toward required reviews like a person's. The default Actions token's does not without an org setting. |
+| Repos | Andrew's own repos, public and private, through one GitHub App named `andabot` | An App's approval counts toward required reviews like a person's. The default Actions token's does not without an org setting. |
 | State | One Durable Object per pull request | Memory per PR for chat follow-ups, the approval state machine and incremental review live where the PR does. |
 
 Both `PiHarness` and Pi Durable are beta. APIs will move, so every package is pinned and upgrades are deliberate.
@@ -64,7 +64,7 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
 - `bot_threads`: review comment ids the bot opened, with the finding each carries and whether it is resolved.
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
-- `config`: the parsed `.ai-review.yaml` from the PR head, refreshed on each push.
+- `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
 
 Methods, each an idempotent Pi submission:
@@ -122,13 +122,13 @@ Rules copied from CodeRabbit's workflow: approve only when the latest commit has
 
 ### Commands and chat
 
-`@<bot-login> <command>` in an issue comment or review comment. Commands: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`. Anything else is a chat turn in the PR's Pi session, which already holds the review transcript, so "why is this a problem?" on a thread works without re-reading the PR. Replies to a review comment go back on that thread.
+`@andabot <command>` in an issue comment or review comment. The App's login is `andabot[bot]`; GitHub resolves the mention `@andabot` to it. Commands: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`. Anything else is a chat turn in the PR's Pi session, which already holds the review transcript, so "why is this a problem?" on a thread works without re-reading the PR. Replies to a review comment go back on that thread.
 
 Only users with write access to the repo can issue commands; the router checks the commenter's permission before forwarding.
 
 ### Configuration file
 
-`.ai-review.yaml` at the PR head, optional:
+`.andabot.yaml` at the PR head, optional:
 
 ```yaml
 reviews:
@@ -187,7 +187,7 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 
 ## Open questions
 
-- Bot identity: the App's login is what people tag, so the App name is the command prefix. Pick it before phase 1.
+- GitHub App names are unique across GitHub. If `andabot` is taken when the App is registered, the fallback is `andabot-review`, and the mention becomes `@andabot-review`.
 - Where the config file lives when the PR head doesn't have one: default branch, then built-in defaults.
 - Whether to open a check run per review so the review state shows in the merge box, or rely on the review event alone.
 - How to mark findings as blocking versus optional in a way the model follows reliably; the verify pass is the place to decide severity, not the draft.
