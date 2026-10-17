@@ -3,7 +3,7 @@ import { countBySeverity, type FindingInput, type ReviewSubmissionInput, type Wr
 
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
-const VERDICT_LABEL = {
+export const VERDICT_LABEL = {
   APPROVE: "Approved",
   REQUEST_CHANGES: "Changes requested",
   COMMENT: "Commented",
