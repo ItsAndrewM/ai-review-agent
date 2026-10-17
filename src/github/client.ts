@@ -83,7 +83,7 @@ export class GitHubClient {
       { headers: { accept: "application/vnd.github.raw+json" } },
     )
     if (response.status === 404) return undefined
-    if (!response.ok) throw await this.error(response)
+    if (!response.ok) return undefined
     return response.text()
   }
 
