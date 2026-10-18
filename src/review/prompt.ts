@@ -48,10 +48,6 @@ export function resubmitPrompt(refusal: string | undefined): string {
   return `${outcome}\n\nCall submit_review now with the review, and don't write it out as a message.`
 }
 
-export function chatPrompt(author: string, text: string): string {
-  return `${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly. Do not call submit_review.`
-}
-
 export function answerPrompt(author: string, text: string, skill: string): string {
   return `${skill}\n\n${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly, in text.`
 }
