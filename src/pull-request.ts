@@ -165,12 +165,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`
     }
     const files = await this.changedFiles()
-    const { accepted, rejected, relocated } = validateFindings(submission.findings, indexCommentableLines(files))
+    const { accepted, rejected, relocated, suggestionsDropped } = validateFindings(
+      submission.findings,
+      indexCommentableLines(files),
+    )
     log("review.findings", {
       number: pr.number,
       head: short(pr.head.sha),
       accepted: accepted.length,
       relocated,
+      suggestionsDropped,
       rejected: rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })

@@ -34,7 +34,7 @@ export const Finding = Type.Object({
   suggestion: Type.Optional(
     Type.String({
       description:
-        "Replacement for the anchored line(s) on the RIGHT side, verbatim, no fences. Only when you are sure it compiles and is complete.",
+        "The new text for the anchored lines, start_line (or line) through line, on the RIGHT side, verbatim, indented as in the file, no fences. GitHub removes those lines and puts this in their place, so keep any of them you still need: to add code beside a line, include that line. Only when you are sure it compiles and is complete.",
     }),
   ),
 })
@@ -126,9 +126,23 @@ export interface ValidatedReview {
   accepted: FindingInput[]
   rejected: Rejected[]
   relocated: number
+  suggestionsDropped: number
 }
 
-type Checked = { finding: FindingInput; relocated: boolean } | { reason: string }
+type Anchored = { finding: FindingInput; relocated: boolean } | { reason: string }
+
+type Checked = { finding: FindingInput; relocated: boolean; suggestionDropped: boolean } | { reason: string }
+
+interface Fitted {
+  finding: FindingInput
+  suggestionDropped: boolean
+}
+
+const BRACKETS = [
+  ["(", ")"],
+  ["[", "]"],
+  ["{", "}"],
+] as const
 
 export function validateFindings(
   findings: readonly FindingInput[],
@@ -138,6 +152,7 @@ export function validateFindings(
   const rejected: Rejected[] = []
   const seen = new Set<string>()
   let relocated = 0
+  let suggestionsDropped = 0
   for (const finding of findings) {
     const checked = checkFinding(finding, commentable)
     if ("reason" in checked) {
@@ -156,8 +171,9 @@ export function validateFindings(
     }
     accepted.push(checked.finding)
     if (checked.relocated) relocated++
+    if (checked.suggestionDropped) suggestionsDropped++
   }
-  return { accepted, rejected, relocated }
+  return { accepted, rejected, relocated, suggestionsDropped }
 }
 
 function checkFinding(finding: FindingInput, commentable: ReadonlyMap<string, CommentableLines>): Checked {
@@ -167,11 +183,14 @@ function checkFinding(finding: FindingInput, commentable: ReadonlyMap<string, Co
   const sideLines = side === "RIGHT" ? lines.right : lines.left
   const anchored = anchorByQuote(finding, side, sideLines)
   if ("reason" in anchored) return anchored
-  const problem = rangeProblem(anchored.finding, side, sideLines) ?? contentProblem(anchored.finding)
-  return problem === undefined ? anchored : { reason: problem }
+  const rangeIssue = rangeProblem(anchored.finding, side, sideLines)
+  if (rangeIssue !== undefined) return { reason: rangeIssue }
+  const fitted = fitSuggestion(anchored.finding, sideLines)
+  const problem = contentProblem(fitted.finding)
+  return problem === undefined ? { ...fitted, relocated: anchored.relocated } : { reason: problem }
 }
 
-function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Checked {
+function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Anchored {
   const text = lines.get(finding.line)
   if (text === undefined) return { reason: `line ${finding.line} (${side}) is not in the diff of ${finding.path}` }
   const quote = comparable(finding.quote)
@@ -192,6 +211,59 @@ function comparable(text: string): string {
 
 function moveTo({ start_line, suggestion, ...finding }: FindingInput, line: number): FindingInput {
   return start_line === undefined && suggestion !== undefined ? { ...finding, line, suggestion } : { ...finding, line }
+}
+
+function fitSuggestion(finding: FindingInput, lines: ReadonlyMap<number, string>): Fitted {
+  if (finding.suggestion === undefined || (finding.side ?? "RIGHT") !== "RIGHT")
+    return { finding, suggestionDropped: false }
+  const replaced = replacedLines(finding, lines)
+  const suggestion = reindented(finding.suggestion, replaced)
+  if (!keepsBrackets(replaced.join("\n"), suggestion))
+    return { finding: withoutSuggestion(finding), suggestionDropped: true }
+  return { finding: { ...finding, suggestion }, suggestionDropped: false }
+}
+
+function replacedLines(finding: FindingInput, lines: ReadonlyMap<number, string>): string[] {
+  const replaced: string[] = []
+  for (let line = finding.start_line ?? finding.line; line <= finding.line; line++) replaced.push(lines.get(line) ?? "")
+  return replaced
+}
+
+function reindented(suggestion: string, replaced: readonly string[]): string {
+  const lines = suggestion.split("\n")
+  const from = commonIndentation(lines)
+  const to = commonIndentation(replaced)
+  if (from === to || !to.startsWith(from)) return suggestion
+  return lines.map((line) => (line.trim() === "" ? line : `${to}${line.slice(from.length)}`)).join("\n")
+}
+
+function commonIndentation(lines: readonly string[]): string {
+  const [first, ...rest] = lines.filter((line) => line.trim() !== "").map(indentation)
+  return first === undefined ? "" : rest.reduce(sharedPrefix, first)
+}
+
+function indentation(line: string): string {
+  return /^[ \t]*/.exec(line)?.[0] ?? ""
+}
+
+function sharedPrefix(a: string, b: string): string {
+  let length = 0
+  while (length < a.length && a[length] === b[length]) length++
+  return a.slice(0, length)
+}
+
+function keepsBrackets(replaced: string, suggestion: string): boolean {
+  return BRACKETS.every(([open, close]) => netBrackets(replaced, open, close) === netBrackets(suggestion, open, close))
+}
+
+function netBrackets(text: string, open: string, close: string): number {
+  return text.split(open).length - text.split(close).length
+}
+
+function withoutSuggestion(finding: FindingInput): FindingInput {
+  const copy = { ...finding }
+  delete copy.suggestion
+  return copy
 }
 
 function rangeProblem(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): string | undefined {

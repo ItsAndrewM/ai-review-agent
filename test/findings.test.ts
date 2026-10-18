@@ -154,6 +154,95 @@ describe("quote verification", () => {
   })
 })
 
+describe("suggestions", () => {
+  const diffFile = [
+    "@@ -30,3 +30,3 @@",
+    '     if (marker === "+") {',
+    "-      right.add(newLine++)",
+    "+      right.add(++newLine)",
+    "     } else {",
+  ]
+  const reviewFile = [
+    "@@ -200,8 +200,5 @@",
+    "     }",
+    "-    if (pr.head.sha !== incoming.headSha) {",
+    "-      return",
+    "-    }",
+    "     if (!incoming.full && (await this.ctx.storage.get(`posted:${pr.head.sha}`))) {",
+    '       log("review.skip", { reason: "already_reviewed" })',
+    "       return",
+    "     }",
+  ]
+  const listFile = ["@@ -1,2 +1,2 @@", " const list = [", "-  1,", "+  2,"]
+  const files = new Map([
+    ["src/diff.ts", commentableLines(diffFile.join("\n"))],
+    ["src/review.ts", commentableLines(reviewFile.join("\n"))],
+    ["src/list.ts", commentableLines(listFile.join("\n"))],
+  ])
+  const alreadyReviewed = "if (!incoming.full && (await this.ctx.storage.get(`posted:${pr.head.sha}`))) {"
+
+  it("re-indents a suggestion written without its line's indentation, as gpt-oss wrote all five on #9", () => {
+    const result = validateFindings(
+      [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion: "right.add(newLine++)" })],
+      files,
+    )
+    expect(result.accepted[0]?.suggestion).toBe("      right.add(newLine++)")
+    expect(result.suggestionsDropped).toBe(0)
+  })
+
+  it("keeps the suggestion's own relative indentation when it re-indents several lines", () => {
+    const result = validateFindings(
+      [
+        finding({
+          path: "src/review.ts",
+          start_line: 201,
+          line: 204,
+          quote: "}",
+          suggestion: 'if (fresh) {\n  log("review.skip")\n  return\n}',
+        }),
+      ],
+      files,
+    )
+    expect(result.accepted[0]?.suggestion).toBe('    if (fresh) {\n      log("review.skip")\n      return\n    }')
+  })
+
+  it("leaves a suggestion that already carries its line's indentation, or more of it", () => {
+    for (const suggestion of ["      right.add(newLine++)", "        right.add(newLine++)"]) {
+      const result = validateFindings(
+        [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion })],
+        files,
+      )
+      expect(result.accepted[0]?.suggestion).toBe(suggestion)
+    }
+  })
+
+  it("drops a suggestion that would unbalance the brackets but keeps the finding, as with the guard written over line 203 of #9", () => {
+    const guard = [
+      "if (pr.head.sha !== incoming.headSha) {",
+      '  log("review.skip", {',
+      '    reason: "superseded",',
+      "  });",
+      "  return;",
+      "}",
+    ].join("\n")
+    const result = validateFindings(
+      [finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed, suggestion: guard })],
+      files,
+    )
+    expect(result.accepted).toEqual([finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed })])
+    expect(result.suggestionsDropped).toBe(1)
+  })
+
+  it("counts each kind of bracket on its own, so swapping [ for { still drops the suggestion", () => {
+    const result = validateFindings(
+      [finding({ path: "src/list.ts", line: 1, quote: "const list = [", suggestion: "const list = {" })],
+      files,
+    )
+    expect(result.accepted[0]?.suggestion).toBeUndefined()
+    expect(result.suggestionsDropped).toBe(1)
+  })
+})
+
 describe("parseWrittenReview", () => {
   const submitted = {
     summary: "Changes b from 2 to 3.",
