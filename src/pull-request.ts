@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
 import { createRegistry, Harness } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, type PiPromptResponse } from "agents/harness/pi"
+import { PiHarness, ROOT_SESSION, skills, type PiPromptResponse } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
+import type { SkillContent, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
@@ -13,6 +14,7 @@ import { canCommand, GitHubClient, type PullRequestInfo, type RepoRef } from "./
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { withOutputLimit } from "./models.ts"
+import { bundledSkills } from "./review/bundled-skills.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   parseWrittenReview,
@@ -21,7 +23,7 @@ import {
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
-import { chatPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import { answerPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
   renderReviewBody,
@@ -30,6 +32,7 @@ import {
   renderUnpostedSummary,
   SUMMARY_MARKER,
 } from "./review/render.ts"
+import { renderActivatedSkill } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -63,6 +66,8 @@ type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 interface PendingReview {
   headSha: string
   deliveryId: string
+  model?: string
+  fingerprint?: string
   rejectionsReturned?: boolean
 }
 
@@ -70,6 +75,13 @@ interface PostedReview {
   reviewId: number
   event: string
   at: number
+  fingerprint?: string
+  model?: string
+}
+
+interface Attribution {
+  model: string
+  fingerprint: string
 }
 
 interface ReviewRun {
@@ -86,8 +98,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
   readonly registry = createRegistry()
   readonly harness = new PiHarness({
-    harness: ({ storage, context }) => {
+    harness: async ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
+      const bundled = await bundledSkills()
+      this.registry.install(await skills([bundled.source]))
       const models = createModels()
       models.setProvider(withOutputLimit(this.ai.provider))
       return Harness.open(
@@ -181,6 +195,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
     const key = await this.key()
     const github = await this.github()
+    const attribution = attributionOf(pending)
     await this.upsertSummary(
       renderSummaryComment({
         botLogin: this.botLogin(),
@@ -189,6 +204,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         submission,
         accepted,
         droppedCount: rejected.length,
+        model: attribution?.model,
+        skillsFingerprint: attribution?.fingerprint,
       }),
     )
     const review = await github.createReview(key, key.number, {
@@ -197,7 +214,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       body: renderReviewBody(event, accepted, rejected),
       comments: accepted.map(toReviewComment),
     })
-    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, { reviewId: review.id, event, at: Date.now() })
+    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, {
+      reviewId: review.id,
+      event,
+      at: Date.now(),
+      ...attribution,
+    })
     await this.ctx.storage.delete("pending")
     const dropped =
       rejected.length > 0 ? ` ${rejected.length} finding(s) that still failed the checks were dropped.` : ""
@@ -242,15 +264,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
     const files = await this.changedFiles()
-    await this.ctx.storage.put<PendingReview>("pending", { headSha: pr.head.sha, deliveryId: incoming.deliveryId })
     const prompt = reviewPrompt(pr, files, incoming.full)
     const run = { operationId: `review:${incoming.deliveryId}`, started: Date.now(), staleBuild }
+    const skillsFingerprint = (await bundledSkills()).fingerprint
+    await this.ctx.storage.put<PendingReview>("pending", {
+      headSha: pr.head.sha,
+      deliveryId: incoming.deliveryId,
+      model: this.env.REVIEW_MODEL,
+      fingerprint: skillsFingerprint,
+    })
     log("review.start", {
       number: pr.number,
       head: short(pr.head.sha),
       files: files.length,
       promptChars: prompt.length,
       model: this.env.REVIEW_MODEL,
+      skillsFingerprint,
       full: incoming.full,
       build: own.id,
       staleBuild,
@@ -259,6 +288,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
     await this.harness.session().reset()
     await this.harness.session().setModel(this.reviewModel())
+    await this.activateReviewSkill()
     const result = await this.harness.prompt(prompt, { operationId: run.operationId })
     const source = await this.finishReview(pr, result, run)
     if (source) {
@@ -267,10 +297,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         head: short(pr.head.sha),
         outcome: "posted",
         source,
+        skills: `review@${skillsFingerprint.slice(0, 8)}`,
         ms: Date.now() - run.started,
       })
     }
     await this.ctx.storage.delete("pending")
+  }
+
+  private async activateReviewSkill(): Promise<void> {
+    const skill = await loadSkill((await bundledSkills()).source, "review")
+    const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
+    await root.configure({ instructions: renderActivatedSkill(skill) }, BACKGROUND_CONTEXT)
   }
 
   private async finishReview(
@@ -406,7 +443,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "chat": {
         await this.harness.session().setModel(this.reviewModel())
         const operationId = `chat:${incoming.deliveryId}`
-        const result = await this.harness.prompt(chatPrompt(incoming.author, command.text), { operationId })
+        const skill = await loadSkill((await bundledSkills()).source, "answer")
+        const prompt = answerPrompt(incoming.author, command.text, renderActivatedSkill(skill))
+        const result = await this.harness.prompt(prompt, { operationId })
         const answer =
           result.status === "done" && result.text?.trim()
             ? result.text.trim()
@@ -475,4 +514,15 @@ const MAX_LOGGED_TEXT_CHARS = 8_000
 
 function short(sha: string): string {
   return sha.slice(0, 7)
+}
+
+function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
+  if (model === undefined || fingerprint === undefined) return undefined
+  return { model, fingerprint }
+}
+
+async function loadSkill(source: SkillSource, name: string): Promise<SkillContent> {
+  const skill = await source.load(name)
+  if (!skill) throw new Error(`the ${name} skill is missing from the bundle`)
+  return skill
 }

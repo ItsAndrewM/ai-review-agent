@@ -1,5 +1,16 @@
 import { describe, expect, it } from "vitest"
-import { rejectionsText, resubmitPrompt } from "../src/review/prompt.ts"
+import { answerPrompt, rejectionsText, resubmitPrompt, systemPrompt } from "../src/review/prompt.ts"
+
+describe("systemPrompt", () => {
+  it("names the bot and the tools and leaves the procedure to the skills", () => {
+    const text = systemPrompt("andabot")
+    expect(text.startsWith("You are andabot")).toBe(true)
+    expect(text).toContain("read_skill_resource")
+    expect(text).not.toContain("blocking")
+    expect(text).not.toContain("nitpick")
+    expect(text.length).toBeLessThan(900)
+  })
+})
 
 describe("rejectionsText", () => {
   it("returns every rejected finding with its anchor, title and reason, not only the first few", () => {
@@ -22,5 +33,17 @@ describe("resubmitPrompt", () => {
 
   it("still asks for submit_review when the refusal doesn't, as after a GitHub error", () => {
     expect(resubmitPrompt("Error: GitHub POST /repos/o/r/pulls/5/reviews: 502")).toContain("Call submit_review")
+  })
+})
+
+describe("answerPrompt", () => {
+  it("puts the answer skill before the question", () => {
+    const text = answerPrompt(
+      "andrew",
+      "why is this a problem?",
+      '<skill_content name="answer" version="1">\nx\n</skill_content>',
+    )
+    expect(text.startsWith('<skill_content name="answer"')).toBe(true)
+    expect(text).toContain("andrew asks, in a comment on the pull request:\n\nwhy is this a problem?")
   })
 })

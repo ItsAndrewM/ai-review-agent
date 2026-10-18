@@ -75,11 +75,11 @@ Methods, each an idempotent Pi submission:
 
 The object is addressed only through the router. It has no public HTTP surface.
 
-After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build.
+After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build. When Pi resumes an interrupted review on the new build, the summary footer and the `posted:<sha>` record still take the model and skill fingerprint from `pending`, where `review()` stored those of the build that started it.
 
 ### Pi harness inside the object
 
-Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI })` as the Pi AI provider, `createRegistry()` with one extension for the system prompt and tools, `Harness.open(storage, { models, registry, settings })` in the `PiHarness` factory, `Lifecycle.install(this).use(this.harness)`.
+Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI })` as the Pi AI provider, `createRegistry()` with one extension for the system prompt and tools and a second for the skills catalog, `Harness.open(storage, { models, registry, settings })` in the `PiHarness` factory, `Lifecycle.install(this).use(this.harness)`.
 
 Pi applies the harness's `defaults` only when it creates a session, so every run sets the configured model with `setModel` before it prompts. Each review starts with `session().reset()`, so earlier reviews and their large prompts don't pile up in the context or overflow it.
 
@@ -104,6 +104,12 @@ Tools offered to the model, all read only and `replay: "safe"`:
 Posting is not a model tool. The model fills a structured findings document, defined with Pi Durable's `defineDoc`, and host code validates each finding against the diff hunks before anything reaches GitHub: the path must be in the PR, the line must be in a hunk on the right side and hold the text the finding quotes, severity must be one of the known values, and a suggestion must be a replacement for the lines it names. A finding that fails validation goes back to the model once, then is dropped and logged. This is the same shape the Agents docs recommend: the model proposes, your code decides.
 
 A `beforeTool` hook enforces budgets: a cap on files read per review, on bytes per read, and on total model tokens per review, with the review ending in a shorter summary rather than a failed run.
+
+### Skills
+
+The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. After the review extension, the harness factory installs the Agents SDK's skills catalog, which lists both skills and offers `activate_skill` and, for their references, `read_skill_resource`; before each review, after `reset()`, the host renders the review skill into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
+
+`renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, so re-check it against the SDK on every `agents` bump.
 
 ### Review pipeline
 
@@ -198,7 +204,10 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 ## Phases
 
 1. **Walking skeleton.** GitHub App, router Worker, PR object with `PiHarness`, API-only tools, full review on open, summary comment and one review with inline comments, `review` and `help` commands. Deployed and reviewing this repo's own PRs.
-2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, workspace clone with grep, verify pass, cost in the summary.
+2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, workspace clone with grep, verify pass, cost in the summary. It opens with the skills work, each step measured on #2's planted-bug pull request with gpt-oss-120b and Kimi K2.7 Code:
+   - **Baseline.** The planted-bug pull request reviewed on the phase 1 build, with the results recorded in #2.
+   - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
+   - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
 3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
 4. **Extras.** Sequence diagram, docstrings, unit test generation, a check run that mirrors the review state.
 
