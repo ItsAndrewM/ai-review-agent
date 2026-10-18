@@ -261,10 +261,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.put<PendingReview>("pending", { headSha: pr.head.sha, deliveryId: incoming.deliveryId })
     const prompt = reviewPrompt(pr, files, incoming.full)
     const run = { operationId: `review:${incoming.deliveryId}`, started: Date.now(), staleBuild }
-
-    await this.harness.session().reset()
-    await this.harness.session().setModel(this.reviewModel())
-    const skillsFingerprint = await this.activateReviewSkill()
+    const skillsFingerprint = (await bundledSkills()).fingerprint
     log("review.start", {
       number: pr.number,
       head: short(pr.head.sha),
@@ -277,6 +274,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       staleBuild,
       callerBuild: callerVersion?.id,
     })
+
+    await this.harness.session().reset()
+    await this.harness.session().setModel(this.reviewModel())
+    await this.activateReviewSkill()
     const result = await this.harness.prompt(prompt, { operationId: run.operationId })
     const source = await this.finishReview(pr, result, run)
     if (source) {
@@ -292,12 +293,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.delete("pending")
   }
 
-  private async activateReviewSkill(): Promise<string> {
-    const bundled = await bundledSkills()
-    const skill = await loadSkill(bundled.source, "review")
+  private async activateReviewSkill(): Promise<void> {
+    const skill = await loadSkill((await bundledSkills()).source, "review")
     const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
     await root.configure({ instructions: renderActivatedSkill(skill) }, BACKGROUND_CONTEXT)
-    return bundled.fingerprint
   }
 
   private async finishReview(
