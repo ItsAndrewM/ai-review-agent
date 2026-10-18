@@ -52,9 +52,11 @@ Events the App subscribes to:
 | `issue_comment` | created, on a PR | command or chat turn |
 | `pull_request_review_comment` | created | reply in thread, with file and line context |
 | `pull_request_review_thread` | resolved, unresolved | re-evaluate approval |
-| `check_suite` / `check_run` | completed | re-evaluate approval |
+| `check_run` / `check_suite` | rerequested | full review of each listed pull request |
+| `check_suite` | requested | ignored: the pull request event starts the review |
+| `check_suite` / `check_run` | completed | re-evaluate approval (skipping andabot's own suite) |
 
-App permissions: Pull requests write, Contents read, Issues write, Checks write (optional, for a "review" check run), Metadata read.
+App permissions: Pull requests write, Contents read, Issues write, Checks write (the review check run), Metadata read.
 
 ### PullRequest Durable Object
 
@@ -66,12 +68,15 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
+- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, and whether its rejected findings have gone back to the model; one per object, because reviews are single-flight.
 
 Methods, each an idempotent Pi submission:
 
 - `onPush(head, delivery)`: full review on first sight, incremental review (`compare reviewed_head...head`) after that.
 - `onCommand(comment, delivery)`: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`, else a chat turn.
 - `onThreadResolved`, `onChecksCompleted`: run the approval evaluation, no model call.
+
+Reviews are single-flight per pull request. A newer head aborts the running review and cancels its check run as superseded. A request for a head whose review is still running is skipped. A pending review the harness no longer lists is dead: its run is failed and the new review proceeds. A record whose start time is under two minutes old counts as live. The grace bounds only the host's work while none of the review's operations is listed: before its first prompt is submitted, between that prompt and the retry, and after each. So the record is written before the first prompt, and its start time restarts when each prompt returns and again before the retry. The replacer deletes the record, aborts the replaced review's operations, and only then completes its run, from the id it read before the delete, so the replaced review's exits find the record gone and touch nothing. A review replaced before its prompt never prompts, and the run it opened is cancelled as superseded, or as replaced when the newer review is of the same head. A `submit_review` call posts only from a running operation the record names, and the host posts a review the model wrote as text only while the record still names its delivery.
 
 The object is addressed only through the router. It has no public HTTP surface.
 
@@ -118,7 +123,7 @@ The review procedure, with its severity rubric and references, and the rules for
 1. Gather: changed files, patches, PR body, the repo's config file, and the instruction files the repo already keeps for agents (`CLAUDE.md`, `AGENTS.md`, `REVIEW.md`) as path-scoped guidance.
 2. Draft: one pass over the diff, in chunks sized to the model's context, producing candidate findings and a per-file walkthrough.
 3. Verify: a second pass takes each candidate with the exact lines it cites and the surrounding file, and keeps it only if the problem is real on those lines. This is what makes cheaper models usable; unverifiable findings are the noise people leave CodeRabbit over.
-4. Post: edit the summary comment in place, submit one review with the inline comments, and set the review event from the approval policy below.
+4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it.
 5. Record: `reviewed_head`, thread ids, the review id.
 
 Incremental review on `synchronize` diffs only `reviewed_head...head`, re-checks whether the bot's open threads still apply to the new head (a thread whose lines were changed is replied to and resolved), and posts a short delta to the summary.
@@ -211,12 +216,11 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
 3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
-4. **Extras.** Sequence diagram, docstrings, unit test generation, a check run that mirrors the review state.
+4. **Extras.** Sequence diagram, docstrings, unit test generation.
 
 ## Open questions
 
 - Where the config file lives when the PR head doesn't have one: default branch, then built-in defaults.
-- Whether to open a check run per review so the review state shows in the merge box, or rely on the review event alone.
 - How to mark findings as blocking versus optional in a way the model follows reliably; the verify pass is the place to decide severity, not the draft.
 - Review of very large PRs: a cap on files reviewed with an explicit "skipped" list in the summary, or chunked sub-sessions through Pi's subagents.
 

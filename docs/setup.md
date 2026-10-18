@@ -16,11 +16,11 @@ The manifest registers, and the script's arguments can change: the name `andabot
 
 | | |
 | --- | --- |
-| Repository permissions | Pull requests: Read and write · Contents: Read-only · Issues: Read and write · Checks: Read-only · Metadata: Read-only |
-| Events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite |
+| Repository permissions | Pull requests: Read and write · Contents: Read-only · Issues: Read and write · Checks: Read and write · Metadata: Read-only |
+| Events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite · Check run |
 | Where it can be installed | Only on this account |
 
-The Check suite event needs Checks: Read-only, or GitHub rejects the manifest.
+Checks: Read and write lets the App create the review check run and receive the `check_run` and `check_suite` events. To change an App that is already registered, set Checks to Read and write on its Permissions & events page, then accept the request on the installation page (Settings, Applications, Installed GitHub Apps, andabot). Until it is accepted, check calls answer 403, which the Worker logs as `check.failed` and otherwise ignores. The installation token is cached per pull request object for up to an hour, so a pull request opened before the change can lack the permission for that long, and a new pull request is unaffected.
 
 Then **install** the App on the repositories it should review, at `https://github.com/apps/andabot/installations/new`. It is installed on `ai-review-agent` only, for now.
 
@@ -62,9 +62,10 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 
 1. GitHub posts `pull_request` (opened, reopened, ready for review, synchronize) to `/webhook`.
 2. The Worker verifies the signature and hands the event to the Durable Object named `<installation>/<owner>/<repo>#<number>`.
-3. The object fetches the PR and its files, and prompts the Pi session with the diff.
-4. The model reads what it needs with `read_file`, then calls `submit_review`.
-5. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review; a clean approve verdict makes it an approval.
+3. The object opens a check run named after the bot on the head commit, titled "Review in progress".
+4. The object fetches the PR and its files, and prompts the Pi session with the diff.
+5. The model reads what it needs with `read_file`, then calls `submit_review`.
+6. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review; a clean approve verdict makes it an approval. The run completes with the verdict in its title; a review that does not complete fails the run, and a push mid-review cancels it as superseded by the new head.
 
 `@andabot review`, `@andabot full review` and `@andabot help` work in PR comments from anyone with write access. Any other text after the mention is answered as a question about the PR.
 

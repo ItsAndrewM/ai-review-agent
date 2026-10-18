@@ -25,6 +25,15 @@ describe("WebhookPayload", () => {
     }
   })
 
+  it("accepts a check run with the fields GitHub sends beyond the head and the pull requests", () => {
+    const rerun = {
+      ...base,
+      action: "rerequested",
+      check_run: { id: 1, head_sha: "abc", pull_requests: [{ number: 3, url: "x" }], app: { id: 2 } },
+    }
+    expect(Value.Check(WebhookPayload, rerun)).toBe(true)
+  })
+
   it("rejects a pull request without the head the review is pinned to", () => {
     expect(Value.Check(WebhookPayload, { ...base, pull_request: { number: 3 } })).toBe(false)
   })
@@ -40,13 +49,15 @@ describe("routeWebhook", () => {
     )
     expect(routed).toEqual({
       kind: "handle",
-      incoming: {
-        kind: "review",
-        key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
-        deliveryId: "d1",
-        headSha: "abc",
-        full: false,
-      },
+      incoming: [
+        {
+          kind: "review",
+          key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+          deliveryId: "d1",
+          headSha: "abc",
+          full: false,
+        },
+      ],
     })
   })
 
@@ -90,13 +101,15 @@ describe("routeWebhook", () => {
       ),
     ).toEqual({
       kind: "handle",
-      incoming: {
-        kind: "comment",
-        key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
-        deliveryId: "d2",
-        author: "andrew",
-        body: "@andabot review",
-      },
+      incoming: [
+        {
+          kind: "comment",
+          key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+          deliveryId: "d2",
+          author: "andrew",
+          body: "@andabot review",
+        },
+      ],
     })
     expect(
       routeWebhook("issue_comment", { ...base, action: "created", issue: { number: 3 }, comment }, "d", "andabot"),
@@ -129,5 +142,49 @@ describe("routeWebhook", () => {
 
   it("names the object by installation, repo and number", () => {
     expect(objectName({ installationId: 99, owner: "a", repo: "b", number: 7 })).toBe("99/a/b#7")
+  })
+})
+
+const checkTarget = { head_sha: "abc", pull_requests: [{ number: 3 }, { number: 4 }] }
+
+describe("routeWebhook for checks", () => {
+  it("turns a re-run into a full review of each listed pull request", () => {
+    const expected = {
+      kind: "handle",
+      incoming: [3, 4].map((number) => ({
+        kind: "review",
+        key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number },
+        deliveryId: "d2",
+        headSha: "abc",
+        full: true,
+        requestedBy: "andrew",
+      })),
+    }
+    expect(
+      routeWebhook("check_run", { ...base, action: "rerequested", check_run: checkTarget }, "d2", "andabot"),
+    ).toEqual(expected)
+    expect(
+      routeWebhook("check_suite", { ...base, action: "rerequested", check_suite: checkTarget }, "d2", "andabot"),
+    ).toEqual(expected)
+  })
+
+  it("ignores check events with no pull request, other check actions, and the suite GitHub requests on every push", () => {
+    const fork = { head_sha: "abc", pull_requests: [] }
+    expect(routeWebhook("check_run", { ...base, action: "rerequested", check_run: fork }, "d", "andabot")).toEqual({
+      kind: "ignore",
+      reason: "check with no pull request",
+    })
+    expect(routeWebhook("check_run", { ...base, action: "completed", check_run: checkTarget }, "d", "andabot")).toEqual(
+      {
+        kind: "ignore",
+        reason: "check_run completed",
+      },
+    )
+    expect(
+      routeWebhook("check_suite", { ...base, action: "requested", check_suite: checkTarget }, "d", "andabot"),
+    ).toEqual({
+      kind: "ignore",
+      reason: "check_suite requested",
+    })
   })
 })

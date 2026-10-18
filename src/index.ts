@@ -40,7 +40,12 @@ async function receiveWebhook(request: Request, env: Env): Promise<Response> {
   if (routed.kind === "ignore") {
     return Response.json({ ignored: routed.reason }, { status: 200 })
   }
-  const stub = env.PULL_REQUEST.getByName(objectName(routed.incoming.key))
-  await stub.accept(routed.incoming, versionOf(env.CF_VERSION_METADATA))
-  return Response.json({ accepted: routed.incoming.kind, delivery: deliveryId }, { status: 202 })
+  const version = versionOf(env.CF_VERSION_METADATA)
+  await Promise.all(
+    routed.incoming.map((incoming) => env.PULL_REQUEST.getByName(objectName(incoming.key)).accept(incoming, version)),
+  )
+  return Response.json(
+    { accepted: routed.incoming.map((incoming) => incoming.kind), delivery: deliveryId },
+    { status: 202 },
+  )
 }

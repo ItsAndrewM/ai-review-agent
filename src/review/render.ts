@@ -12,7 +12,7 @@ export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 const MOST_HELD_BACK_LISTED = 5
 const MOST_LISTED_CHARS = 100
 
-const VERDICT_LABEL = {
+export const VERDICT_LABEL = {
   APPROVE: "Approved",
   REQUEST_CHANGES: "Changes requested",
   COMMENT: "Commented",

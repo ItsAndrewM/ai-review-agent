@@ -23,13 +23,14 @@ const manifest = {
   hook_attributes: { url: webhookUrl, active: true },
   redirect_url: `http://localhost:${port}/callback`,
   public: false,
-  default_permissions: { pull_requests: "write", contents: "read", issues: "write", checks: "read", metadata: "read" },
+  default_permissions: { pull_requests: "write", contents: "read", issues: "write", checks: "write", metadata: "read" },
   default_events: [
     "pull_request",
     "issue_comment",
     "pull_request_review_comment",
     "pull_request_review_thread",
     "check_suite",
+    "check_run",
   ],
 }
 const escapeHtml = (s) =>
