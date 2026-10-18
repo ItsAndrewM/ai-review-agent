@@ -107,22 +107,22 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 ### F. Anchors, findings and the submit loop
 
-One pull request delivers #4 and this section together.
+#12 delivered #4's anchors; slice 2 adds the rest.
 
-From #4:
+Shipped in #12:
 
 - `renderPatches` numbers every patch line with the anchor the review API takes: new-file line and `RIGHT` for added and context lines, old-file line and `LEFT` for deleted ones. The model copies an anchor instead of counting.
 - `Finding` gains `quote`, the exact text of the anchored line. The host compares it with the patch line at that side and number; on a mismatch it moves the finding to the one line in the same file whose text matches, and rejects it when none or several match.
 - A suggestion posts only on a verified anchor range, and never over 65,536 characters.
 - Every rejection goes back to the model once, as one tool result listing every rejected finding with its reason.
+- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way.
 
-From this design:
+Left for slice 2:
 
 - `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test. Both fields flat, for small models.
 - `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
 - Every changed file not filtered as generated has a walkthrough row. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, and the run is logged as `review.incomplete`.
-- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way.
 
 Rendering: a finding's comment ends with `_Basis: …_`; the summary gets a "Merge danger" line under the verdict.
 
@@ -145,7 +145,7 @@ All of it branches from `main` after PR #5 (lint and format) merges, so every fi
 
 1. **Baseline.** Open #2's planted-bug pull request from a throwaway branch: five defects of known kind and line. Review it on the current build with gpt-oss-120b and Kimi K2.7 Code and record the results in #2. The PR stays open, unmerged, for the later runs.
 2. **Slice 1: infrastructure and the review skill.** Sections A, B, C, G, H, and a "Skills" section in `docs/design.md` pointing at this spec with the phases updated. No schema change. Andrew approves the skill texts before wiring. Then `@andabot full review` on the planted PR, both models.
-3. **Slice 2: basis, coverage, spec axis.** #12 has merged and shipped #4's anchors: numbered patch lines, the `quote` field, the suggestion rules, every rejection returned once, and approval held back while a blocking finding stands rejected. Slice 2 builds basis, merge danger, walkthrough coverage, the submit outcome and linked issues on top of them, in one PR that closes only its own issue. Then the planted PR again, both models.
+3. **Slice 2: basis, coverage, spec axis.** Section E and the remainder of F. #12 has merged and shipped #4's anchors: numbered patch lines, the `quote` field, the suggestion rules, every rejection returned once, and approval held back while a blocking finding stands rejected. Slice 2 builds basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues on top of them, in one PR that closes only its own issue. Then the planted PR again, both models.
 4. **Slice 3: repository context.** Deferred; section D holds the provisional decisions.
 
 One issue per slice. This spec is committed on slice 1's branch.

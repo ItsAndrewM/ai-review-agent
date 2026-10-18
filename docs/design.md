@@ -205,7 +205,7 @@ The Pi AI provider's `fallback` option gives a chain per model. Costs are tracke
 2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, workspace clone with grep, verify pass, cost in the summary. It opens with the skills work, each step measured on #2's planted-bug pull request with gpt-oss-120b and Kimi K2.7 Code:
    - **Baseline.** The planted-bug pull request reviewed on the phase 1 build, with the results recorded in #2.
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
-   - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit outcome and linked issues, on top of the anchors #12 shipped for #4.
+   - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
 3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
 4. **Extras.** Sequence diagram, docstrings, unit test generation, a check run that mirrors the review state.
 
