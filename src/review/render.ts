@@ -1,7 +1,16 @@
 import type { ReviewEvent } from "../github/client.ts"
-import { countBySeverity, type FindingInput, type ReviewSubmissionInput, type WrittenReview } from "./findings.ts"
+import {
+  countBySeverity,
+  type FindingInput,
+  type Rejected,
+  type ReviewSubmissionInput,
+  type WrittenReview,
+} from "./findings.ts"
 
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
+
+const MOST_HELD_BACK_LISTED = 5
+const MOST_LISTED_CHARS = 100
 
 export const VERDICT_LABEL = {
   APPROVE: "Approved",
@@ -16,6 +25,8 @@ export function renderSummaryComment(input: {
   submission: ReviewSubmissionInput
   accepted: readonly FindingInput[]
   droppedCount: number
+  model?: string | undefined
+  skillsFingerprint?: string | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
   const walkthrough =
@@ -28,7 +39,7 @@ export function renderSummaryComment(input: {
         ].join("\n")
   const dropped =
     input.droppedCount > 0
-      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they did not anchor to a line in the diff.</sub>`
+      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they couldn't be posted inline, even after a retry.</sub>`
       : ""
   return [
     SUMMARY_MARKER,
@@ -45,8 +56,14 @@ export function renderSummaryComment(input: {
     walkthrough,
     dropped,
     "",
+    ...reviewedBy(input.model, input.skillsFingerprint),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
+}
+
+function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
+  if (model === undefined || skillsFingerprint === undefined) return []
+  return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {
@@ -66,7 +83,33 @@ export function renderUnpostedNote(written: WrittenReview, retryFailure: string 
   return written.kind === "prose" && written.text !== "" ? `${reason}\n\n${written.text}` : reason
 }
 
-export function renderReviewBody(event: ReviewEvent, accepted: readonly FindingInput[]): string {
+export function renderReviewBody(
+  event: ReviewEvent,
+  accepted: readonly FindingInput[],
+  rejected: readonly Rejected[],
+): string {
+  const held = heldBack(rejected)
+  if (held === undefined) return inlineSummary(event, accepted)
+  return accepted.length === 0 ? held : `${inlineSummary(event, accepted)}\n\n${held}`
+}
+
+function heldBack(rejected: readonly Rejected[]): string | undefined {
+  const blocking = rejected.filter((r) => r.finding.severity === "blocking")
+  if (blocking.length === 0) return undefined
+  return [
+    `${blocking.length} blocking finding(s) couldn't be posted inline and hold approval back:`,
+    ...blocking
+      .slice(0, MOST_HELD_BACK_LISTED)
+      .map((r) => `- **${clipped(r.finding.title)}** in \`${clipped(r.finding.path)}\``),
+  ].join("\n")
+}
+
+function clipped(text: string): string {
+  const flat = oneLine(text)
+  return flat.length > MOST_LISTED_CHARS ? `${flat.slice(0, MOST_LISTED_CHARS)}…` : flat
+}
+
+function inlineSummary(event: ReviewEvent, accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   if (accepted.length === 0) {
     return event === "APPROVE"
@@ -83,11 +126,11 @@ export function renderReviewBody(event: ReviewEvent, accepted: readonly FindingI
 export function chooseReviewEvent(
   submission: ReviewSubmissionInput,
   accepted: readonly FindingInput[],
+  rejected: readonly Rejected[],
   requestChangesWorkflow: boolean,
 ): ReviewEvent {
-  const counts = countBySeverity(accepted)
   if (!requestChangesWorkflow) return "COMMENT"
-  if (counts.blocking > 0) return "REQUEST_CHANGES"
+  if (countBySeverity([...accepted, ...rejected.map((r) => r.finding)]).blocking > 0) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
   return "COMMENT"
 }

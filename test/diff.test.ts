@@ -20,8 +20,18 @@ const patch = [
 describe("commentableLines", () => {
   it("numbers added and context lines on the right, deleted on the left", () => {
     const lines = commentableLines(patch)
-    expect([...lines.right].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 11, 12, 13])
-    expect([...lines.left].sort((x, y) => x - y)).toEqual([2, 10])
+    expect([...lines.right.keys()].sort((x, y) => x - y)).toEqual([1, 2, 3, 4, 5, 11, 12, 13])
+    expect([...lines.left.keys()].sort((x, y) => x - y)).toEqual([2, 10])
+  })
+
+  it("keeps each line's text without its diff marker, so a quote can be checked against it", () => {
+    const lines = commentableLines(patch)
+    expect(lines.right.get(1)).toBe("import { a } from './a';")
+    expect(lines.right.get(2)).toBe("import { b, c } from './b';")
+    expect(lines.right.get(3)).toBe("")
+    expect(lines.right.get(5)).toBe("  return a + b;")
+    expect(lines.left.get(2)).toBe("import { b } from './b';")
+    expect(lines.left.get(10)).toBe("  return 1;")
   })
 
   it("has nothing for a file without a patch", () => {
@@ -44,6 +54,34 @@ describe("renderPatches", () => {
     expect(text).toContain("### a.ts (modified, +3 -2)\n```diff\n@@ -1,4 +1,5 @@")
     expect(text).toContain("### big.bin (added, +0 -0)\n(no textual diff")
     expect(text).toContain("patch truncated at 20 characters")
+  })
+
+  it("prefixes every hunk line with the anchor the review API takes, so the model copies it instead of counting", () => {
+    const text = renderPatches([{ filename: "a.ts", status: "modified", additions: 3, deletions: 2, patch }])
+    expect(text).toContain(
+      [
+        "@@ -1,4 +1,5 @@",
+        "R1      import { a } from './a';",
+        "L2     -import { b } from './b';",
+        "R2     +import { b, c } from './b';",
+        "R3     +",
+        "R4      export function f() {",
+        "R5        return a + b;",
+        "@@ -10,2 +11,3 @@ export function g() {",
+        "L10    -  return 1;",
+        "R11    +  return c;",
+        "R12    +  // added",
+        "R13     }",
+        "\\ No newline at end of file",
+      ].join("\n"),
+    )
+  })
+
+  it("cuts a long patch at a line boundary, so every line it shows can be quoted whole", () => {
+    const added = ["@@ -0,0 +1,3 @@", "+const first = 1;", "+const second = 2;", "+const third = 3;"].join("\n")
+    const text = renderPatches([{ filename: "n.ts", status: "added", additions: 3, deletions: 0, patch: added }], 50)
+    expect(text).toContain("R1     +const first = 1;\n... (patch truncated at 50 characters)")
+    expect(text).not.toContain("second")
   })
 
   it("lists a lock file without its patch", () => {

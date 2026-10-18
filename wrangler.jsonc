@@ -2,6 +2,7 @@
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "andabot",
   "main": "src/index.ts",
+  "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
   "compatibility_date": "2026-10-01",
   "compatibility_flags": ["nodejs_compat"],
   "upload_source_maps": true,

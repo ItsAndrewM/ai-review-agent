@@ -6,6 +6,9 @@ export interface PendingReview {
   operationId: string
   started: number
   checkRunId?: number
+  model?: string
+  fingerprint?: string
+  rejectionsReturned?: boolean
 }
 
 export const StoredPending = Type.Object({
@@ -14,6 +17,9 @@ export const StoredPending = Type.Object({
   operationId: Type.Optional(Type.String()),
   started: Type.Optional(Type.Integer()),
   checkRunId: Type.Optional(Type.Integer()),
+  model: Type.Optional(Type.String()),
+  fingerprint: Type.Optional(Type.String()),
+  rejectionsReturned: Type.Optional(Type.Boolean()),
 })
 
 export type StoredPending = Static<typeof StoredPending>

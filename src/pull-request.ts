@@ -1,9 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
 import { createRegistry, Harness } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, type PiPromptResponse } from "agents/harness/pi"
+import { PiHarness, ROOT_SESSION, skills, type PiPromptResponse } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
+import type { SkillContent, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
@@ -20,6 +21,7 @@ import {
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { withOutputLimit } from "./models.ts"
+import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
   postedCheckRun,
@@ -33,8 +35,6 @@ import {
   parseWrittenReview,
   toReviewComment,
   validateFindings,
-  type FindingInput,
-  type Rejected,
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
@@ -45,7 +45,7 @@ import {
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
-import { chatPrompt, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import { answerPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
   renderReviewBody,
@@ -54,6 +54,7 @@ import {
   renderUnpostedSummary,
   SUMMARY_MARKER,
 } from "./review/render.ts"
+import { renderActivatedSkill } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -90,6 +91,13 @@ interface PostedReview {
   reviewId: number
   event: ReviewEvent
   at: number
+  fingerprint?: string
+  model?: string
+}
+
+interface Attribution {
+  model: string
+  fingerprint: string
 }
 
 interface ReviewRun {
@@ -98,6 +106,7 @@ interface ReviewRun {
   started: number
   staleBuild: boolean
   callerBuild: string | undefined
+  skillsFingerprint: string
 }
 
 type ReviewSource = "tool" | "text" | "retry"
@@ -108,8 +117,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
   readonly registry = createRegistry()
   readonly harness = new PiHarness({
-    harness: ({ storage, context }) => {
+    harness: async ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
+      const bundled = await bundledSkills()
+      this.registry.install(await skills([bundled.source]))
       const models = createModels()
       models.setProvider(withOutputLimit(this.ai.provider))
       return Harness.open(
@@ -197,11 +208,27 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`
     }
     const files = await this.changedFiles()
-    const { accepted, rejected } = validateFindings(submission.findings, indexCommentableLines(files))
-    if (shouldLetModelFixAnchors(accepted, rejected)) return rejectedMessage(rejected)
-    const event = chooseReviewEvent(submission, accepted, this.env.REQUEST_CHANGES_WORKFLOW === "true")
+    const { accepted, rejected, relocated, suggestionsDropped } = validateFindings(
+      submission.findings,
+      indexCommentableLines(files),
+    )
+    log("review.findings", {
+      number: pr.number,
+      head: short(pr.head.sha),
+      accepted: accepted.length,
+      relocated,
+      suggestionsDropped,
+      rejected: rejected.length,
+      rejectionsReturned: pending.rejectionsReturned === true,
+    })
+    if (rejected.length > 0 && pending.rejectionsReturned !== true) {
+      await this.markRejectionsReturned(pending.deliveryId)
+      return rejectionsText(rejected)
+    }
+    const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
     const key = await this.key()
     const github = await this.github()
+    const attribution = attributionOf(pending)
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
@@ -209,23 +236,35 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       submission,
       accepted,
       droppedCount: rejected.length,
+      model: attribution?.model,
+      skillsFingerprint: attribution?.fingerprint,
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, accepted),
+      body: renderReviewBody(event, accepted, rejected),
       comments: accepted.map(toReviewComment),
     })
-    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, { reviewId: review.id, event, at: Date.now() })
+    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, {
+      reviewId: review.id,
+      event,
+      at: Date.now(),
+      ...attribution,
+    })
     await this.completeOwnRun(
       pending.deliveryId,
       postedCheckRun(event, accepted, summary, await this.summaryCommentUrl(), Date.now()),
     )
     await this.releasePending(pending.deliveryId)
     const dropped =
-      rejected.length > 0 ? ` ${rejected.length} finding(s) were dropped: ${rejectedMessage(rejected)}` : ""
+      rejected.length > 0 ? ` ${rejected.length} finding(s) that still failed the checks were dropped.` : ""
     return `Posted review ${review.id} (${event}) with ${accepted.length} inline comment(s).${dropped}`
+  }
+
+  private async markRejectionsReturned(deliveryId: string): Promise<void> {
+    const pending = await this.pendingFor(deliveryId)
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, rejectionsReturned: true })
   }
 
   private async handle(incoming: Incoming, callerVersion?: Version): Promise<void> {
@@ -257,6 +296,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("review.skip", { reason: "already_reviewed", head: short(pr.head.sha), number: pr.number })
       return
     }
+    const skillsFingerprint = (await bundledSkills()).fingerprint
     const flight = await this.clearFlight(pr.head.sha)
     if (flight.kind === "skip") {
       log("review.skip", { reason: "in_progress", head: short(pr.head.sha), number: pr.number })
@@ -269,12 +309,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       started: Date.now(),
       staleBuild,
       callerBuild: callerVersion?.id,
+      skillsFingerprint,
     }
     await this.ctx.storage.put<PendingReview>("pending", {
       headSha: pr.head.sha,
       deliveryId: incoming.deliveryId,
       operationId: run.operationId,
       started: run.started,
+      model: this.env.REVIEW_MODEL,
+      fingerprint: skillsFingerprint,
     })
     await this.runReview(pr, incoming, run)
   }
@@ -338,6 +381,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         files: files.length,
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
+        skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
         build: this.version().id,
         staleBuild: run.staleBuild,
@@ -347,6 +391,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (await this.replaced(pr, run)) return
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
+      await this.activateReviewSkill()
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       await this.restartGrace(run.deliveryId)
       const source = await this.finishReview(pr, result, run)
@@ -356,6 +401,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           head: short(pr.head.sha),
           outcome: "posted",
           source,
+          skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
         })
       }
@@ -365,6 +411,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.releasePending(run.deliveryId)
       throw error
     }
+  }
+
+  private async activateReviewSkill(): Promise<void> {
+    const skill = await loadSkill((await bundledSkills()).source, "review")
+    const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
+    await root.configure({ instructions: renderActivatedSkill(skill) }, BACKGROUND_CONTEXT)
   }
 
   private async finishReview(
@@ -447,6 +499,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ms: Date.now() - run.started,
       staleBuild: run.staleBuild,
     })
+    if (await this.headMoved(pr, run)) return
     const note = `_The review did not complete: ${failure}._`
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
     await this.failOwnRun(run.deliveryId, note)
@@ -503,7 +556,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "chat": {
         await this.harness.session().setModel(this.reviewModel())
         const operationId = `chat:${incoming.deliveryId}`
-        const result = await this.harness.prompt(chatPrompt(incoming.author, command.text), { operationId })
+        const skill = await loadSkill((await bundledSkills()).source, "answer")
+        const prompt = answerPrompt(incoming.author, command.text, renderActivatedSkill(skill))
+        const result = await this.harness.prompt(prompt, { operationId })
         const answer =
           result.status === "done" && result.text?.trim()
             ? result.text.trim()
@@ -691,10 +746,13 @@ function withinGrace(pending: PendingReview | undefined): boolean {
   return pending !== undefined && Date.now() - pending.started < GRACE_MS
 }
 
-function shouldLetModelFixAnchors(accepted: readonly FindingInput[], rejected: readonly Rejected[]): boolean {
-  return accepted.length === 0 && rejected.length > 0 && rejected.length <= 3
+function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
+  if (model === undefined || fingerprint === undefined) return undefined
+  return { model, fingerprint }
 }
 
-function rejectedMessage(rejected: { finding: { path: string; line: number }; reason: string }[]): string {
-  return `Rejected findings:\n${rejected.map((r) => `- ${r.finding.path}:${r.finding.line}: ${r.reason}`).join("\n")}\nFix the anchors or drop these, then call submit_review again.`
+async function loadSkill(source: SkillSource, name: string): Promise<SkillContent> {
+  const skill = await source.load(name)
+  if (!skill) throw new Error(`the ${name} skill is missing from the bundle`)
+  return skill
 }

@@ -13,7 +13,7 @@ import {
 import type { FindingInput } from "../src/review/findings.ts"
 
 function finding(severity: FindingInput["severity"]): FindingInput {
-  return { path: "src/x.ts", line: 1, severity, title: "t", body: "b" }
+  return { path: "src/x.ts", line: 1, quote: "q", severity, title: "t", body: "b" }
 }
 
 const at = Date.UTC(2026, 9, 17, 20, 36, 38, 123)

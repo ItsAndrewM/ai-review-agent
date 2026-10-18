@@ -41,6 +41,12 @@ describe("migratePending", () => {
     expect(migratePending(pending)).toEqual(pending)
   })
 
+  it("keeps the review's attribution and its returned-rejections flag, which the submit loop reads back", () => {
+    const flagged = { ...pending, model: "@cf/openai/gpt-oss-120b", fingerprint: "798ffa29", rejectionsReturned: true }
+    expect(Value.Check(StoredPending, flagged)).toBe(true)
+    expect(migratePending(flagged)).toEqual(flagged)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)
