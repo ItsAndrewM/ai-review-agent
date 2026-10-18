@@ -5,6 +5,7 @@ import {
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
   postedCheckRun,
+  replacedCheckRun,
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
@@ -126,6 +127,16 @@ describe("supersededCheckRun", () => {
       conclusion: "cancelled",
       completed_at: "2026-10-17T20:36:38Z",
       output: { title: "Superseded by def5678", summary: "A newer head, `def5678`, is being reviewed instead." },
+    })
+  })
+})
+
+describe("replacedCheckRun", () => {
+  it("completes as cancelled without naming a head, since the newer review is of the same one", () => {
+    expect(replacedCheckRun(at)).toEqual({
+      conclusion: "cancelled",
+      completed_at: "2026-10-17T20:36:38Z",
+      output: { title: "Replaced by a newer review", summary: "A newer review of this head replaced this run." },
     })
   })
 })

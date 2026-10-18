@@ -9,13 +9,21 @@ import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { helpText, parseCommand } from "./commands.ts"
 import { createAppJwt, fetchInstallationToken, type InstallationToken } from "./github/app-auth.ts"
-import { canCommand, GitHubClient, type PullRequestInfo, type RepoRef, type UpdateCheckRun } from "./github/client.ts"
+import {
+  canCommand,
+  GitHubClient,
+  type PullRequestInfo,
+  type RepoRef,
+  type ReviewEvent,
+  type UpdateCheckRun,
+} from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { withOutputLimit } from "./models.ts"
 import {
   failedCheckRun,
   postedCheckRun,
+  replacedCheckRun,
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
@@ -76,10 +84,11 @@ export type Incoming =
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 type Replacement = Extract<FlightDecision, { kind: "replace" }>
+type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
 
 interface PostedReview {
   reviewId: number
-  event: string
+  event: ReviewEvent
   at: number
 }
 
@@ -178,7 +187,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const pending = await this.pendingFor(deliveryId)
     if (!pending) return SUPERSEDED_REFUSAL
     const posted = await this.ctx.storage.get<PostedReview>(`posted:${pending.headSha}`)
-    if (posted) return `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`
+    if (posted) {
+      await this.completeAsPostedEarlier(deliveryId, posted)
+      return `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`
+    }
 
     const pr = await this.freshPullRequest()
     if (pr.head.sha !== pending.headSha) {
@@ -277,10 +289,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       previous: short(decision.previous.headSha),
       head: short(headSha),
     })
-    await this.endReplacedRun(decision, headSha)
     await this.ctx.storage.delete("pending")
-    for (const operationId of operations) await this.harness.abort({ operationId })
+    for (const operationId of operations) await this.abortOperation(operationId)
+    await this.endReplacedRun(decision, headSha)
     return decision
+  }
+
+  private async abortOperation(operationId: string): Promise<void> {
+    try {
+      await this.harness.abort({ operationId })
+    } catch (error) {
+      logError("review.abort_failed", { operation: operationId, error: errorText(error) })
+    }
   }
 
   private async operationsOf(pending: PendingReview | undefined): Promise<string[]> {
@@ -289,12 +309,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return operations.map(({ operationId }) => operationId).filter((operationId) => ownsOperation(pending, operationId))
   }
 
-  private async endReplacedRun(replacement: Replacement, headSha: string): Promise<void> {
-    if (replacement.because === "superseded") {
-      await this.completeOwnRun(replacement.previous.deliveryId, supersededCheckRun(headSha, Date.now()))
-      return
-    }
-    await this.failOwnRun(replacement.previous.deliveryId, "The object stopped before the review finished.")
+  private async endReplacedRun({ previous, because }: Replacement, headSha: string): Promise<void> {
+    if (previous.checkRunId === undefined) return
+    const update =
+      because === "superseded"
+        ? supersededCheckRun(headSha, Date.now())
+        : await this.failedRun("The object stopped before the review finished.")
+    await this.completeCheckRun(previous.checkRunId, previous, update)
   }
 
   private async openRun(pr: PullRequestInfo, run: ReviewRun): Promise<ChangedFile[]> {
@@ -302,7 +323,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const checkRunId = await this.startCheckRun(pr, files, run)
     if (checkRunId === undefined) return files
     const pending = await this.pendingFor(run.deliveryId)
-    if (pending === undefined) await this.cancelUnrecordedRun(pr, checkRunId)
+    if (pending === undefined) await this.cancelUnrecordedRun(pr, run, checkRunId)
     else await this.ctx.storage.put<PendingReview>("pending", { ...pending, checkRunId })
     return files
   }
@@ -321,6 +342,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         build: this.version().id,
         staleBuild: run.staleBuild,
         callerBuild: run.callerBuild,
+        delivery: run.deliveryId,
       })
       if (await this.replaced(pr, run)) return
       await this.harness.session().reset()
@@ -566,33 +588,51 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     const created = await this.guardedCheck("create", async () => (await this.github()).createCheckRun(key, start))
     if (created === undefined) return undefined
-    log("check.started", { id: created.id, head: short(pr.head.sha) })
+    log("check.started", { id: created.id, head: short(pr.head.sha), delivery: run.deliveryId })
     return created.id
   }
 
   private async completeOwnRun(deliveryId: string, update: UpdateCheckRun): Promise<void> {
     const pending = await this.pendingFor(deliveryId)
     if (pending?.checkRunId === undefined) return
-    await this.completeCheckRun(pending.checkRunId, pending.headSha, update)
+    await this.completeCheckRun(pending.checkRunId, pending, update)
   }
 
   private async failOwnRun(deliveryId: string, note: string): Promise<void> {
-    await this.completeOwnRun(deliveryId, failedCheckRun(note, await this.summaryCommentUrl(), Date.now()))
+    await this.completeOwnRun(deliveryId, await this.failedRun(note))
   }
 
-  private async cancelUnrecordedRun(pr: PullRequestInfo, checkRunId: number): Promise<void> {
+  private async failedRun(note: string): Promise<UpdateCheckRun> {
+    return failedCheckRun(note, await this.summaryCommentUrl(), Date.now())
+  }
+
+  private async completeAsPostedEarlier(deliveryId: string, posted: PostedReview): Promise<void> {
+    const summary = `Review ${posted.reviewId} was posted by an earlier run of this head.`
+    const update = postedCheckRun(posted.event, [], summary, await this.summaryCommentUrl(), Date.now())
+    await this.completeOwnRun(deliveryId, update)
+  }
+
+  private async cancelUnrecordedRun(pr: PullRequestInfo, run: ReviewRun, checkRunId: number): Promise<void> {
     const current = await this.readPending()
-    const update = supersededCheckRun(current?.headSha ?? pr.head.sha, Date.now())
-    await this.completeCheckRun(checkRunId, pr.head.sha, update)
+    const update =
+      current === undefined || current.headSha === pr.head.sha
+        ? replacedCheckRun(Date.now())
+        : supersededCheckRun(current.headSha, Date.now())
+    await this.completeCheckRun(checkRunId, { headSha: pr.head.sha, deliveryId: run.deliveryId }, update)
   }
 
-  private async completeCheckRun(checkRunId: number, headSha: string, update: UpdateCheckRun): Promise<void> {
+  private async completeCheckRun(checkRunId: number, owner: RunOwner, update: UpdateCheckRun): Promise<void> {
     const key = await this.key()
     const completed = await this.guardedCheck("complete", async () =>
       (await this.github()).updateCheckRun(key, checkRunId, update),
     )
     if (completed === undefined) return
-    log("check.completed", { id: completed.id, conclusion: update.conclusion, head: short(headSha) })
+    log("check.completed", {
+      id: completed.id,
+      conclusion: update.conclusion,
+      head: short(owner.headSha),
+      delivery: owner.deliveryId,
+    })
   }
 
   private async readPending(): Promise<PendingReview | undefined> {

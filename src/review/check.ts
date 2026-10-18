@@ -57,6 +57,11 @@ export function supersededCheckRun(newHeadSha: string, completedAt: number): Upd
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
+export function replacedCheckRun(completedAt: number): UpdateCheckRun {
+  const output = checkOutput("Replaced by a newer review", "A newer review of this head replaced this run.")
+  return completedCheckRun("cancelled", output, undefined, completedAt)
+}
+
 export function checkRunTitle(event: ReviewEvent, accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   const parts: string[] = []
