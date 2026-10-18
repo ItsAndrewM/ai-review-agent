@@ -81,7 +81,7 @@ Andrew reads and approves the skill texts before they are wired in. That read is
 ### B. Loading and bundling
 
 - `wrangler.jsonc` gains `rules: [{ type: "Text", globs: ["**/*.md"], fallthrough: true }]`, and a `declare module "*.md"` joins the type declarations.
-- `src/review/skills.ts` imports each `SKILL.md` and reference as a string, parses frontmatter with `parseSkillMarkdown` from `agents/skills`, lists resources explicitly, and builds a `SkillManifest` with `fromManifest`. Fingerprint: SHA-256 over every file's bytes, computed once per isolate with WebCrypto. Resources are plain text, no scripts.
+- `src/review/bundled-skills.ts` imports each `SKILL.md` and reference as a string and lists them explicitly. `src/review/skills.ts` parses the frontmatter with `yaml` and TypeBox and builds the `SkillManifest`, and its `manifestSource` builds the `SkillSource`, because the SDK's `agents/skills` module cannot load in vitest or the Worker bundle: it imports `ai`, `@cloudflare/codemode`, `just-bash` and `cloudflare:workers`. Only types come from it. Fingerprint: SHA-256 over every file's bytes, computed once per isolate with WebCrypto. Resources are plain text, no scripts.
 - A unit test asserts every skill parses, names are spec-valid, resources resolve, and the fingerprint changes when a file changes.
 
 ### C. Activation
