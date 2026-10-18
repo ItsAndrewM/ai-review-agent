@@ -1,5 +1,6 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { decideFlight, type PendingReview } from "../src/review/flight.ts"
+import { decideFlight, migratePending, StoredPending, type PendingReview } from "../src/review/flight.ts"
 
 const pending: PendingReview = {
   headSha: "aaa",
@@ -25,5 +26,23 @@ describe("decideFlight", () => {
 
   it("replaces a review of the same head that the harness no longer runs as dead", () => {
     expect(decideFlight(pending, "aaa", false)).toEqual({ kind: "replace", previous: pending, because: "dead" })
+  })
+})
+
+describe("migratePending", () => {
+  it("fills the base's two-field record with the base's operation id and a start of 0", () => {
+    const stored = { headSha: "aaa", deliveryId: "d-1" }
+    expect(Value.Check(StoredPending, stored)).toBe(true)
+    expect(migratePending(stored)).toEqual({ headSha: "aaa", deliveryId: "d-1", operationId: "review:d-1", started: 0 })
+  })
+
+  it("returns a full record unchanged", () => {
+    expect(Value.Check(StoredPending, pending)).toBe(true)
+    expect(migratePending(pending)).toEqual(pending)
+  })
+
+  it("does not accept a record without its head and delivery id", () => {
+    expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
+    expect(Value.Check(StoredPending, "d-1")).toBe(false)
   })
 })

@@ -30,7 +30,13 @@ import {
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
-import { decideFlight, type FlightDecision, type PendingReview } from "./review/flight.ts"
+import {
+  decideFlight,
+  migratePending,
+  StoredPending,
+  type FlightDecision,
+  type PendingReview,
+} from "./review/flight.ts"
 import { chatPrompt, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
@@ -162,7 +168,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async submitReview(submission: ReviewSubmissionInput): Promise<string> {
-    const pending = await this.ctx.storage.get<PendingReview>("pending")
+    const pending = await this.readPending()
     if (!pending) return "Nothing to post: no review is pending. Answer in text instead."
     if (await this.anotherOperationRunning(pending)) return SUPERSEDED_REFUSAL
     return this.postReview(submission, pending.deliveryId)
@@ -262,7 +268,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async clearFlight(headSha: string): Promise<FlightDecision> {
-    const pending = await this.ctx.storage.get<PendingReview>("pending")
+    const pending = await this.readPending()
     const operations = await this.operationsOf(pending)
     const decision = decideFlight(pending, headSha, operations.length > 0 || withinStartupGrace(pending))
     if (decision.kind !== "replace") return decision
@@ -575,7 +581,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async cancelUnrecordedRun(pr: PullRequestInfo, checkRunId: number): Promise<void> {
-    const current = await this.ctx.storage.get<PendingReview>("pending")
+    const current = await this.readPending()
     const update = supersededCheckRun(current?.headSha ?? pr.head.sha, Date.now())
     await this.completeCheckRun(checkRunId, pr.head.sha, update)
   }
@@ -589,8 +595,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     log("check.completed", { id: completed.id, conclusion: update.conclusion, head: short(headSha) })
   }
 
+  private async readPending(): Promise<PendingReview | undefined> {
+    const stored = await this.ctx.storage.get("pending")
+    return Value.Check(StoredPending, stored) ? migratePending(stored) : undefined
+  }
+
   private async pendingFor(deliveryId: string): Promise<PendingReview | undefined> {
-    const pending = await this.ctx.storage.get<PendingReview>("pending")
+    const pending = await this.readPending()
     return pending?.deliveryId === deliveryId ? pending : undefined
   }
 
