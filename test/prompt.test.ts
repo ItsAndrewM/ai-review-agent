@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest"
 import { answerPrompt, rejectionsText, resubmitPrompt, systemPrompt } from "../src/review/prompt.ts"
 
 describe("systemPrompt", () => {
-  it("names the bot and the tools and leaves the procedure to the skills", () => {
+  it("names the bot and only the three tools the model is given, and leaves the procedure to the skills", () => {
     const text = systemPrompt("andabot")
     expect(text.startsWith("You are andabot")).toBe(true)
-    expect(text).toContain("read_skill_resource")
+    expect(text).toContain("read_file")
+    expect(text).toContain("list_changed_files")
+    expect(text).toContain("submit_review")
+    expect(text).not.toContain("activate_skill")
+    expect(text).not.toContain("read_skill_resource")
     expect(text).not.toContain("blocking")
     expect(text).not.toContain("nitpick")
     expect(text.length).toBeLessThan(900)

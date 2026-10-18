@@ -1,10 +1,10 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
 import { createRegistry, Harness } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, skills, type PiPromptResponse } from "agents/harness/pi"
+import { PiHarness, ROOT_SESSION, type PiPromptResponse } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
-import type { SkillContent, SkillSource } from "agents/skills"
+import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
@@ -32,7 +32,7 @@ import {
   renderUnpostedSummary,
   SUMMARY_MARKER,
 } from "./review/render.ts"
-import { renderActivatedSkill } from "./review/skills.ts"
+import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -98,10 +98,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
   readonly registry = createRegistry()
   readonly harness = new PiHarness({
-    harness: async ({ storage, context }) => {
+    harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
-      const bundled = await bundledSkills()
-      this.registry.install(await skills([bundled.source]))
       const models = createModels()
       models.setProvider(withOutputLimit(this.ai.provider))
       return Harness.open(
@@ -309,9 +307,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async activateReviewSkill(): Promise<void> {
-    const skill = await loadSkill((await bundledSkills()).source, "review")
+    const { source } = await bundledSkills()
+    const skill = await loadSkill(source, "review")
+    const references = await loadReferences(source, skill)
     const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
-    await root.configure({ instructions: renderActivatedSkill(skill) }, BACKGROUND_CONTEXT)
+    await root.configure({ instructions: renderSkillWithResources(skill, references) }, BACKGROUND_CONTEXT)
   }
 
   private async finishReview(
@@ -529,4 +529,15 @@ async function loadSkill(source: SkillSource, name: string): Promise<SkillConten
   const skill = await source.load(name)
   if (!skill) throw new Error(`the ${name} skill is missing from the bundle`)
   return skill
+}
+
+function loadReferences(source: SkillSource, skill: SkillContent): Promise<SkillResource[]> {
+  const references = (skill.resources ?? []).filter(({ kind }) => kind === "reference")
+  return Promise.all(references.map(({ path }) => loadReference(source, skill.name, path)))
+}
+
+async function loadReference(source: SkillSource, name: string, path: string): Promise<SkillResource> {
+  const reference = await source.readResource?.(name, path)
+  if (!reference) throw new Error(`the ${name} skill's reference ${path} is missing from the bundle`)
+  return reference
 }
