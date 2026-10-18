@@ -67,3 +67,9 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 5. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review; a clean approve verdict makes it an approval.
 
 `@andabot review`, `@andabot full review` and `@andabot help` work in PR comments from anyone with write access. Any other text after the mention is answered as a question about the PR.
+
+## 5. Checks on pull requests
+
+`.github/workflows/ci.yml` runs `pnpm check` on every pull request and on every push to `main`: lint, both typechecks and the unit tests, on Node 22 with the pnpm version from `package.json`. `wrangler types` reads only `wrangler.jsonc`, so the job has no Cloudflare credentials. Merging deploys nothing; deploys stay manual, as in section 2.
+
+Making the `check` job required on `main` needs branch protection, which GitHub offers on a private repository only with GitHub Pro, or on a public one. Until then the job's result shows in the merge box without blocking the merge.

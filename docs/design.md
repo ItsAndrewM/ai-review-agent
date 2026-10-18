@@ -2,7 +2,7 @@
 
 `andabot` is a self-hosted pull request reviewer in the shape of CodeRabbit: it reviews every PR on its own, answers when tagged, posts a summary and inline findings with suggestions, requests changes when it finds something, and approves once its findings are resolved. It runs on Cloudflare: a Worker receives GitHub webhooks and hands each PR to its own Durable Object, where Pi Durable runs the agent loop.
 
-Status: phase 1, the walking skeleton, is built, deployed and reviewing this repository's pull requests (#1). Next: #2 measures review quality, #3 adds CI.
+Status: phase 1, the walking skeleton, is built, deployed and reviewing this repository's pull requests (#1), and `pnpm check` runs on every pull request in GitHub Actions (#3). Next: #2 measures review quality.
 
 ## Decisions so far
 
