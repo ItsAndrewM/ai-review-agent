@@ -1,5 +1,6 @@
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderPatches, type ChangedFile } from "../github/diff.ts"
+import type { Rejected } from "./findings.ts"
 
 export function systemPrompt(botLogin: string): string {
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub. You review like a careful senior engineer who respects the author's time.
@@ -33,6 +34,14 @@ ${body}
 
 ## Diff
 ${renderPatches(files)}`
+}
+
+export function rejectionsText(rejected: readonly Rejected[]): string {
+  return [
+    "Not posted. These findings didn't pass the host's checks:",
+    ...rejected.map((r) => `- ${r.finding.path}:${r.finding.line} "${r.finding.title}": ${r.reason}`),
+    "Call submit_review again with the whole review: keep the findings that passed, and fix or drop these, copying each anchor and quote from the numbered diff. Rejections come back only this once; findings rejected next time are dropped.",
+  ].join("\n")
 }
 
 export function resubmitPrompt(refusal: string | undefined): string {

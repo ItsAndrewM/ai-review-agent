@@ -10,6 +10,7 @@ import {
 } from "../src/review/findings.ts"
 import {
   chooseReviewEvent,
+  renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
   renderUnpostedSummary,
@@ -205,10 +206,55 @@ describe("toReviewComment", () => {
 describe("chooseReviewEvent", () => {
   const submission = { summary: "s", walkthrough: [], findings: [], verdict: "approve" as const }
   it("requests changes on a blocking finding, approves a clean approve verdict, else comments", () => {
-    expect(chooseReviewEvent(submission, [finding()], true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(submission, [finding({ severity: "nitpick" })], true)).toBe("APPROVE")
-    expect(chooseReviewEvent({ ...submission, verdict: "comment" }, [], true)).toBe("COMMENT")
-    expect(chooseReviewEvent(submission, [finding()], false)).toBe("COMMENT")
+    expect(chooseReviewEvent(submission, [finding()], [], true)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(submission, [finding({ severity: "nitpick" })], [], true)).toBe("APPROVE")
+    expect(chooseReviewEvent({ ...submission, verdict: "comment" }, [], [], true)).toBe("COMMENT")
+    expect(chooseReviewEvent(submission, [finding()], [], false)).toBe("COMMENT")
+  })
+
+  it("never approves while a blocking finding stands rejected, so a mis-anchored one still blocks", () => {
+    expect(chooseReviewEvent(submission, [], [{ finding: finding(), reason: "r" }], true)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(submission, [], [{ finding: finding({ severity: "nitpick" }), reason: "r" }], true)).toBe(
+      "APPROVE",
+    )
+  })
+})
+
+describe("renderReviewBody", () => {
+  it("names the blocking findings that couldn't be posted inline, since they hold approval back", () => {
+    const body = renderReviewBody(
+      "REQUEST_CHANGES",
+      [],
+      [
+        { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
+        { finding: finding({ severity: "nitpick", title: "Rename b" }), reason: "quote matches 2 lines" },
+      ],
+    )
+    expect(body).toBe(
+      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+    )
+  })
+
+  it("follows the inline counts with them when other findings were posted", () => {
+    const body = renderReviewBody(
+      "REQUEST_CHANGES",
+      [finding({ severity: "nitpick" })],
+      [{ finding: finding({ title: "Total is NaN" }), reason: "r" }],
+    )
+    expect(body).toBe(
+      "1 nitpick(s). Blocking findings are marked 🔴; the others are optional.\n\n1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
+    )
+  })
+
+  it("lists at most five of them, with titles cut short, so the review body stays within GitHub's limit", () => {
+    const rejected = Array.from({ length: 7 }, (_, i) => ({
+      finding: finding({ title: `${i}`.repeat(300) }),
+      reason: "r",
+    }))
+    const lines = renderReviewBody("REQUEST_CHANGES", [], rejected).split("\n")
+    expect(lines[0]).toBe("7 blocking finding(s) couldn't be posted inline and hold approval back:")
+    expect(lines[1]).toBe(`- **${"0".repeat(100)}…** in \`src/x.ts\``)
+    expect(lines).toHaveLength(6)
   })
 })
 
