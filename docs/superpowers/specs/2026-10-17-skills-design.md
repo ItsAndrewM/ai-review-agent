@@ -129,7 +129,7 @@ Rendering: a finding's comment ends with `_Basis: …_`; the summary gets a "Mer
 ### G. Attribution and logs
 
 - Summary footer: model id, `review@<fingerprint8>`, and the linked issues used.
-- `review.start` adds `skills` (name, version), `fingerprint` and `linkedIssues`. The `posted:<sha>` record stores fingerprint and model.
+- `review.start` logs `skillsFingerprint`, the full fingerprint, and `review.done` logs `skills` as `review@<fingerprint8>`; no log carries a skill's version. Slice 2 adds `linkedIssues` to `review.start`. The `posted:<sha>` record stores fingerprint and model.
 
 ### H. Prompt refactor
 
@@ -145,7 +145,7 @@ All of it branches from `main` after PR #5 (lint and format) merges, so every fi
 
 1. **Baseline.** Open #2's planted-bug pull request from a throwaway branch: five defects of known kind and line. Review it on the current build with gpt-oss-120b and Kimi K2.7 Code and record the results in #2. The PR stays open, unmerged, for the later runs.
 2. **Slice 1: infrastructure and the review skill.** Sections A, B, C, G, H, and a "Skills" section in `docs/design.md` pointing at this spec with the phases updated. No schema change. Andrew approves the skill texts before wiring. Then `@andabot full review` on the planted PR, both models.
-3. **Slice 2: anchors, basis, coverage, spec axis.** Sections E and F in one PR that says `Closes #4` and closes its own issue. Then the planted PR again, both models.
+3. **Slice 2: basis, coverage, spec axis.** #12 has merged and shipped #4's anchors: numbered patch lines, the `quote` field, the suggestion rules, every rejection returned once, and approval held back while a blocking finding stands rejected. Slice 2 builds basis, merge danger, walkthrough coverage, the submit outcome and linked issues on top of them, in one PR that closes only its own issue. Then the planted PR again, both models.
 4. **Slice 3: repository context.** Deferred; section D holds the provisional decisions.
 
 One issue per slice. This spec is committed on slice 1's branch.
