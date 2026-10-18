@@ -34,7 +34,7 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 
 ## Anti-goals
 
-- Skill text that competes with the diff. Budget: the review skill body under 120 lines; references load on demand only.
+- Skill text that competes with the diff. Budget: the review skill body stays under 120 lines. Until slice 3, the four references render inline after the skill (section C, #19), trading the on-demand budget for a tool set gpt-oss posts with.
 - A rule stated twice. Anchoring rules already live in the `submit_review` schema; the skill points at them.
 - Rules a linter could enforce. Those wait for the sandbox tier.
 - Model-chosen activation for the core procedure.
@@ -68,7 +68,7 @@ skills/
     SKILL.md             answering a question on the pull request
 ```
 
-The references are vendored from the local fork at `/Users/andamonium/Developer/experimental/skills` after a pull, trimmed to what a diff reviewer uses. Frontmatter follows the Agent Skills spec: `name` matches the directory, `description` states what and when, `metadata.version` is bumped by hand on any change. Built-in skills stay visible in the catalog: hiding them with `disable-model-invocation` would also hide their references from `read_skill_resource`, and a catalog line costs about 30 tokens.
+The references are vendored from the local fork at `/Users/andamonium/Developer/experimental/skills` after a pull, trimmed to what a diff reviewer uses. Frontmatter follows the Agent Skills spec: `name` matches the directory, `description` states what and when, `metadata.version` is bumped by hand on any change. When the catalog returns, listing the built-in review skill would offer the #19 trigger again, `read_skill_resource` for its references, so slice 3 must settle whether built-in skills are listed at all.
 
 `review/SKILL.md` is written to the `writing-for-agents` rules: ordered steps, positive phrasing, leading words (anchor, basis, blast radius, one-way door), references behind pointers, and one completion criterion:
 
@@ -88,7 +88,7 @@ Andrew reads and approves the skill texts before they are wired in. That read is
 
 - **Host-activated, for the review.** Before each review, after `reset()`, the host calls `configure({ instructions })` on the root conversation (reached with `pi()` then `root()`) with the review skill rendered the way `activate_skill` renders it: `<skill_content name version>`, the body, the resource list. A stable system section for the run. Prepending the skill to the user turn was rejected for the review: the system section is cache-stable within a run and keeps the user turn as pure input.
 - **Carried in the turn, for answers.** A question's prompt carries the answer skill in the user turn and leaves `instructions` alone. The review owns `instructions`; a question posted mid-review would otherwise swap the review's system section at its next model request, since `configure()` applies immediately while the question itself queues until the review ends. The answer skill is short, and the review transcript stays in the root session for "why is this a problem?".
-- **Catalog.** `skills([builtin])` is installed once in the harness factory, which gives the model `read_skill_resource` for the references and lists the two skills. Repo-provided skills, when they come, are added per review (section D).
+- **Catalog.** `skills([builtin])` and its two tools, `activate_skill` and `read_skill_resource`, are not installed until slice 3 brings repo-provided skills (section D). Until then the review skill's four references render inline after the skill body, each in the `<skill_resource>` wrapper `read_skill_resource` returns, and the model has only `read_file`, `list_changed_files` and `submit_review`, the tools gpt-oss-120b posted with on every run before slice 1. Offered the catalog's tools, it printed its first `read_skill_resource` call as raw Harmony text, then its whole `submit_review` call, and never posted a review of #9 (#19).
 
 ### D. Repository context (deferred, provisional)
 

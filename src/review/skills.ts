@@ -190,3 +190,19 @@ export function renderActivatedSkill(skill: SkillContent): string {
     resourceSummary(resources),
   ].join("\n")
 }
+
+const skillResourceElement = (skillName: string, resource: SkillResource): string => {
+  const opening = attributes([
+    ["name", skillName],
+    ["path", resource.path],
+    ["kind", resource.kind],
+    ["encoding", resource.encoding ?? "text"],
+    ["mimeType", resource.mimeType],
+  ])
+  return [`<skill_resource${opening}>`, resource.content.trimEnd(), "</skill_resource>"].join("\n")
+}
+
+export function renderSkillWithResources(skill: SkillContent, resources: readonly SkillResource[]): string {
+  const elements = resources.map((resource) => skillResourceElement(skill.name, resource))
+  return [renderActivatedSkill(skill), ...elements].join("\n\n")
+}

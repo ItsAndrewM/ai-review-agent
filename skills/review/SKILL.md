@@ -5,7 +5,7 @@ metadata:
   version: "1"
 ---
 
-Open a reference with `read_skill_resource`, giving the name `review` and the reference's path, such as `references/smells.md`. Open each one when its step says to.
+The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
 
 ## 1. Orient
 
@@ -16,8 +16,8 @@ Take the stated intent from the title, description and labels, and the change's 
 Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question, such as what a caller expects from a changed function. Run three checks on each hunk:
 
 - **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario: an input or state, what the line does with it, and what should happen instead.
-- **Standards**: the repository's documented standards, when the prompt supplies them, and `references/smells.md`. When a hunk adds or reshapes logic, open `references/smells.md` once and match the hunks against it.
-- **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, open `references/tests.md` once and judge the test by it.
+- **Standards**: the repository's documented standards, when the prompt supplies them, and `references/smells.md`. When a hunk adds or reshapes logic, match the hunks against `references/smells.md`, below.
+- **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below.
 
 Note the file's walkthrough row for `submit_review`, then take the next file.
 
@@ -32,10 +32,10 @@ Record a finding only where a check fails on an anchored line. Anchor as `submit
 
 ## 4. Grade severity
 
-Once you have a finding, open `references/severity.md` and grade every finding by it.
+Once you have a finding, grade every finding by `references/severity.md`, below.
 
 ## 5. Submit
 
-Open `references/merge-danger.md` and end the summary with the merge danger: the door and the blast radius. Submit with `submit_review`. When it returns rejections, resubmit the whole review with each rejected finding fixed or dropped.
+End the summary with the merge danger, the door and the blast radius, by `references/merge-danger.md`, below. Submit with `submit_review`. When it returns rejections, resubmit the whole review with each rejected finding fixed or dropped.
 
 Done when every changed file has a walkthrough row and every finding has an anchor.

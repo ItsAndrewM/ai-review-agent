@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
+import type { SkillContent } from "agents/skills"
 import { describe, expect, it } from "vitest"
 import { BUNDLED_SKILL_FILES, bundledSkills } from "../src/review/bundled-skills.ts"
 import {
@@ -7,6 +8,7 @@ import {
   fingerprintOf,
   manifestSource,
   renderActivatedSkill,
+  renderSkillWithResources,
   type SkillFile,
 } from "../src/review/skills.ts"
 
@@ -133,6 +135,35 @@ describe("renderActivatedSkill", () => {
   })
 })
 
+describe("renderSkillWithResources", () => {
+  const skill = {
+    name: "review",
+    description: "d",
+    version: "1",
+    body: "Steps.",
+    resources: [{ path: "references/severity.md", kind: "reference", encoding: "text", size: 10 }],
+  } satisfies SkillContent
+
+  it("follows the activated skill with each resource in the wrapper read_skill_resource returns", () => {
+    const text = renderSkillWithResources(skill, [
+      { path: "references/severity.md", kind: "reference", encoding: "text", size: 10, content: "Blocking.\n" },
+    ])
+    expect(text).toBe(
+      [
+        renderActivatedSkill(skill),
+        "",
+        '<skill_resource name="review" path="references/severity.md" kind="reference" encoding="text">',
+        "Blocking.",
+        "</skill_resource>",
+      ].join("\n"),
+    )
+  })
+
+  it("is the activated skill alone when there are no resources", () => {
+    expect(renderSkillWithResources(skill, [])).toBe(renderActivatedSkill(skill))
+  })
+})
+
 describe("manifestSource", () => {
   const source = manifestSource(buildSkillManifest(files, "fingerprint"))
 
@@ -176,5 +207,16 @@ describe("bundledSkills", () => {
     expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review"])
     const resource = await source.readResource?.("review", "references/severity.md")
     expect(resource?.content).toContain("blocking")
+  })
+
+  it("marks exactly the four files under references/ as the review skill's references, so its instructions carry all of them", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    const references = review?.resources?.filter(({ kind }) => kind === "reference").map(({ path }) => path)
+    expect(references?.sort()).toEqual([
+      "references/merge-danger.md",
+      "references/severity.md",
+      "references/smells.md",
+      "references/tests.md",
+    ])
   })
 })

@@ -84,7 +84,7 @@ After a deploy, Cloudflare moves the Worker and its Durable Objects to the new b
 
 ### Pi harness inside the object
 
-Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI })` as the Pi AI provider, `createRegistry()` with one extension for the system prompt and tools and a second for the skills catalog, `Harness.open(storage, { models, registry, settings })` in the `PiHarness` factory, `Lifecycle.install(this).use(this.harness)`.
+Following Cloudflare's `examples/next/harnesses/pi`: `createAI({ binding: env.AI })` as the Pi AI provider, `createRegistry()` with one extension for the system prompt and tools, `Harness.open(storage, { models, registry, settings })` in the `PiHarness` factory, `Lifecycle.install(this).use(this.harness)`.
 
 Pi applies the harness's `defaults` only when it creates a session, so every run sets the configured model with `setModel` before it prompts. Each review starts with `session().reset()`, so earlier reviews and their large prompts don't pile up in the context or overflow it.
 
@@ -114,9 +114,9 @@ A `beforeTool` hook enforces budgets: a cap on files read per review, on bytes p
 
 ### Skills
 
-The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. After the review extension, the harness factory installs the Agents SDK's skills catalog, which lists both skills and offers `activate_skill` and, for their references, `read_skill_resource`; before each review, after `reset()`, the host renders the review skill into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
+The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. Before each review, after `reset()`, the host renders the review skill and its four references into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. The Agents SDK's skills catalog, with `activate_skill` and `read_skill_resource`, waits for repo-provided skills in slice 3: offered those two tools, gpt-oss-120b printed its calls as raw text and never posted (#19), so the model keeps `read_file`, `list_changed_files` and `submit_review`. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
 
-`renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, so re-check it against the SDK on every `agents` bump.
+`renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, and `renderSkillWithResources` wraps each reference as its `read_skill_resource` does, so re-check both against the SDK on every `agents` bump.
 
 ### Review pipeline
 
