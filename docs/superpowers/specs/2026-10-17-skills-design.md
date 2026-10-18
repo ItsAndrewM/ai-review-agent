@@ -113,7 +113,7 @@ Shipped in #12:
 
 - `renderPatches` numbers every patch line with the anchor the review API takes: new-file line and `RIGHT` for added and context lines, old-file line and `LEFT` for deleted ones. The model copies an anchor instead of counting.
 - `Finding` gains `quote`, the exact text of the anchored line. The host compares it with the patch line at that side and number; on a mismatch it moves the finding to the one line in the same file whose text matches, and rejects it when none or several match.
-- A suggestion posts only on a verified anchor range, and never over 65,536 characters.
+- A suggestion posts only on a verified anchor range and is capped at 60,000 characters; a rendered comment is capped at 65,536, GitHub's limit.
 - Every rejection goes back to the model once, as one tool result listing every rejected finding with its reason.
 - Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way.
 
@@ -133,7 +133,7 @@ Rendering: a finding's comment ends with `_Basis: …_`; the summary gets a "Mer
 
 ### H. Prompt refactor
 
-`systemPrompt()` keeps identity, tool etiquette and the answer rule, about ten lines. Severity, procedure and the Standards and Spec rules move to the skill and its references. Anchoring stays in the schema only. Phrasing follows `writing-for-agents`: positive targets, no bans without a stated target, no sentence the model obeys by default.
+`systemPrompt()` keeps identity and tool etiquette, about ten lines; the answer rule lives only in the answer skill. Severity, procedure and the Standards and Spec rules move to the skill and its references. Anchoring stays in the schema only. Phrasing follows `writing-for-agents`: positive targets, no bans without a stated target, no sentence the model obeys by default.
 
 ### I. Tests
 
