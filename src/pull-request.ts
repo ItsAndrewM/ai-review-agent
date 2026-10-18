@@ -392,6 +392,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
       await this.activateReviewSkill()
+      if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       await this.restartGrace(run.deliveryId)
       const source = await this.finishReview(pr, result, run)

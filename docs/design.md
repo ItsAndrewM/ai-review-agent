@@ -68,7 +68,7 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
-- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id; one per object, because reviews are single-flight.
+- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, and whether its rejected findings have gone back to the model; one per object, because reviews are single-flight.
 
 Methods, each an idempotent Pi submission:
 
