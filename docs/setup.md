@@ -72,4 +72,15 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 
 `.github/workflows/ci.yml` runs `pnpm check` on every pull request and on every push to `main`: lint, both typechecks and the unit tests, on Node 22 with the pnpm version from `package.json`. `wrangler types` reads only `wrangler.jsonc`, so the job has no Cloudflare credentials. Merging deploys nothing; deploys stay manual, as in section 2.
 
-Branch protection on `main` requires the `check` job: a failing pull request blocks the merge, with a bypass warning for an admin. Branch protection needs a public repository on GitHub Free, or GitHub Pro for a private one.
+Require the `check` job on `main` through branch protection, so a failing pull request blocks the merge, with a bypass warning for an admin. Branch protection needs a public repository on GitHub Free, or GitHub Pro for a private one.
+
+```sh
+gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'JSON'
+{
+  "required_status_checks": { "strict": false, "checks": [{ "context": "check" }] },
+  "enforce_admins": false,
+  "required_pull_request_reviews": null,
+  "restrictions": null
+}
+JSON
+```
