@@ -66,6 +66,8 @@ type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 interface PendingReview {
   headSha: string
   deliveryId: string
+  model?: string
+  fingerprint?: string
   rejectionsReturned?: boolean
 }
 
@@ -73,8 +75,13 @@ interface PostedReview {
   reviewId: number
   event: string
   at: number
-  fingerprint: string
+  fingerprint?: string
+  model?: string
+}
+
+interface Attribution {
   model: string
+  fingerprint: string
 }
 
 interface ReviewRun {
@@ -188,7 +195,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
     const key = await this.key()
     const github = await this.github()
-    const { fingerprint } = await bundledSkills()
+    const attribution = attributionOf(pending)
     await this.upsertSummary(
       renderSummaryComment({
         botLogin: this.botLogin(),
@@ -197,8 +204,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         submission,
         accepted,
         droppedCount: rejected.length,
-        model: this.env.REVIEW_MODEL,
-        skillsFingerprint: fingerprint,
+        model: attribution?.model,
+        skillsFingerprint: attribution?.fingerprint,
       }),
     )
     const review = await github.createReview(key, key.number, {
@@ -211,8 +218,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reviewId: review.id,
       event,
       at: Date.now(),
-      fingerprint,
-      model: this.env.REVIEW_MODEL,
+      ...attribution,
     })
     await this.ctx.storage.delete("pending")
     const dropped =
@@ -258,10 +264,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
     const files = await this.changedFiles()
-    await this.ctx.storage.put<PendingReview>("pending", { headSha: pr.head.sha, deliveryId: incoming.deliveryId })
     const prompt = reviewPrompt(pr, files, incoming.full)
     const run = { operationId: `review:${incoming.deliveryId}`, started: Date.now(), staleBuild }
     const skillsFingerprint = (await bundledSkills()).fingerprint
+    await this.ctx.storage.put<PendingReview>("pending", {
+      headSha: pr.head.sha,
+      deliveryId: incoming.deliveryId,
+      model: this.env.REVIEW_MODEL,
+      fingerprint: skillsFingerprint,
+    })
     log("review.start", {
       number: pr.number,
       head: short(pr.head.sha),
@@ -503,6 +514,11 @@ const MAX_LOGGED_TEXT_CHARS = 8_000
 
 function short(sha: string): string {
   return sha.slice(0, 7)
+}
+
+function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
+  if (model === undefined || fingerprint === undefined) return undefined
+  return { model, fingerprint }
 }
 
 async function loadSkill(source: SkillSource, name: string): Promise<SkillContent> {

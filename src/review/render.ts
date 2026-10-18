@@ -25,8 +25,8 @@ export function renderSummaryComment(input: {
   submission: ReviewSubmissionInput
   accepted: readonly FindingInput[]
   droppedCount: number
-  model: string
-  skillsFingerprint: string
+  model?: string | undefined
+  skillsFingerprint?: string | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
   const walkthrough =
@@ -56,9 +56,14 @@ export function renderSummaryComment(input: {
     walkthrough,
     dropped,
     "",
-    `<sub>Reviewed by \`${input.model}\` with skills \`review@${input.skillsFingerprint.slice(0, 8)}\`.</sub>`,
+    ...reviewedBy(input.model, input.skillsFingerprint),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
+}
+
+function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
+  if (model === undefined || skillsFingerprint === undefined) return []
+  return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {

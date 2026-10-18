@@ -259,8 +259,8 @@ describe("renderReviewBody", () => {
 })
 
 describe("renderSummaryComment", () => {
-  it("starts with the marker and shows counts, summary and walkthrough", () => {
-    const text = renderSummaryComment({
+  const summaryWith = (attribution: { model?: string; skillsFingerprint?: string }) =>
+    renderSummaryComment({
       botLogin: "andabot",
       headSha: "0123456789abcdef",
       event: "REQUEST_CHANGES",
@@ -272,14 +272,22 @@ describe("renderSummaryComment", () => {
       },
       accepted: [finding()],
       droppedCount: 1,
-      model: "@cf/openai/gpt-oss-120b",
-      skillsFingerprint: "0123456789abcdef",
+      ...attribution,
     })
+
+  it("starts with the marker and shows counts, summary and walkthrough", () => {
+    const text = summaryWith({ model: "@cf/openai/gpt-oss-120b", skillsFingerprint: "89abcdef01234567" })
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
     expect(text).toContain("1 finding(s) were dropped")
-    expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@01234567`.</sub>")
+    expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@89abcdef`.</sub>")
+  })
+
+  it("leaves the skills claim out when the build that ran the review recorded no model or fingerprint", () => {
+    expect(summaryWith({})).not.toContain("Reviewed by")
+    expect(summaryWith({ model: "@cf/openai/gpt-oss-120b" })).not.toContain("Reviewed by")
+    expect(summaryWith({})).toContain("even after a retry.</sub>\n\n<sub>Commands: `@andabot review`")
   })
 })
 
