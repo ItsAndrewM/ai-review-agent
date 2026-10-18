@@ -1,6 +1,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import { describe, expect, it } from "vitest"
+import { BUNDLED_SKILL_FILES, bundledSkills } from "../src/review/bundled-skills.ts"
 import {
   buildSkillManifest,
   fingerprintOf,
@@ -161,5 +162,19 @@ describe("manifestSource", () => {
     expect(await source.load("nope")).toBeNull()
     expect(await source.readResource?.("review", "missing.md")).toBeNull()
     expect(await source.readResource?.("nope", "references/severity.md")).toBeNull()
+  })
+})
+
+describe("bundledSkills", () => {
+  it("bundles exactly the files under skills/", () => {
+    expect(BUNDLED_SKILL_FILES.map((f) => f.path).sort()).toEqual(files.map((f) => f.path).sort())
+  })
+
+  it("lists both skills and serves a reference through the source", async () => {
+    const { source, fingerprint } = await bundledSkills()
+    expect(fingerprint).toBe(await fingerprintOf(files))
+    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review"])
+    const resource = await source.readResource?.("review", "references/severity.md")
+    expect(resource?.content).toContain("blocking")
   })
 })
