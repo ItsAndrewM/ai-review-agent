@@ -18,12 +18,10 @@ import {
   parseWrittenReview,
   toReviewComment,
   validateFindings,
-  type FindingInput,
-  type Rejected,
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
-import { chatPrompt, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import { chatPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
   renderReviewBody,
@@ -65,6 +63,7 @@ type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 interface PendingReview {
   headSha: string
   deliveryId: string
+  rejectionsReturned?: boolean
 }
 
 interface PostedReview {
@@ -166,9 +165,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`
     }
     const files = await this.changedFiles()
-    const { accepted, rejected } = validateFindings(submission.findings, indexCommentableLines(files))
-    if (shouldLetModelFixAnchors(accepted, rejected)) return rejectedMessage(rejected)
-    const event = chooseReviewEvent(submission, accepted, this.env.REQUEST_CHANGES_WORKFLOW === "true")
+    const { accepted, rejected, relocated } = validateFindings(submission.findings, indexCommentableLines(files))
+    log("review.findings", {
+      number: pr.number,
+      head: short(pr.head.sha),
+      accepted: accepted.length,
+      relocated,
+      rejected: rejected.length,
+      rejectionsReturned: pending.rejectionsReturned === true,
+    })
+    if (rejected.length > 0 && pending.rejectionsReturned !== true) {
+      await this.markRejectionsReturned(pending.deliveryId)
+      return rejectionsText(rejected)
+    }
+    const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
     const key = await this.key()
     const github = await this.github()
     await this.upsertSummary(
@@ -184,14 +194,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, accepted),
+      body: renderReviewBody(event, accepted, rejected),
       comments: accepted.map(toReviewComment),
     })
     await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, { reviewId: review.id, event, at: Date.now() })
     await this.ctx.storage.delete("pending")
     const dropped =
-      rejected.length > 0 ? ` ${rejected.length} finding(s) were dropped: ${rejectedMessage(rejected)}` : ""
+      rejected.length > 0 ? ` ${rejected.length} finding(s) that still failed the checks were dropped.` : ""
     return `Posted review ${review.id} (${event}) with ${accepted.length} inline comment(s).${dropped}`
+  }
+
+  private async markRejectionsReturned(deliveryId: string): Promise<void> {
+    const pending = await this.ctx.storage.get<PendingReview>("pending")
+    if (pending?.deliveryId !== deliveryId) return
+    await this.ctx.storage.put<PendingReview>("pending", { ...pending, rejectionsReturned: true })
   }
 
   private async handle(incoming: Incoming, callerVersion?: Version): Promise<void> {
@@ -459,12 +475,4 @@ const MAX_LOGGED_TEXT_CHARS = 8_000
 
 function short(sha: string): string {
   return sha.slice(0, 7)
-}
-
-function shouldLetModelFixAnchors(accepted: readonly FindingInput[], rejected: readonly Rejected[]): boolean {
-  return accepted.length === 0 && rejected.length > 0 && rejected.length <= 3
-}
-
-function rejectedMessage(rejected: { finding: { path: string; line: number }; reason: string }[]): string {
-  return `Rejected findings:\n${rejected.map((r) => `- ${r.finding.path}:${r.finding.line}: ${r.reason}`).join("\n")}\nFix the anchors or drop these, then call submit_review again.`
 }
