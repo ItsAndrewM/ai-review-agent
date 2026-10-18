@@ -25,6 +25,8 @@ export function renderSummaryComment(input: {
   submission: ReviewSubmissionInput
   accepted: readonly FindingInput[]
   droppedCount: number
+  model: string
+  skillsFingerprint: string
 }): string {
   const counts = countBySeverity(input.accepted)
   const walkthrough =
@@ -54,6 +56,7 @@ export function renderSummaryComment(input: {
     walkthrough,
     dropped,
     "",
+    `<sub>Reviewed by \`${input.model}\` with skills \`review@${input.skillsFingerprint.slice(0, 8)}\`.</sub>`,
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
 }

@@ -13,6 +13,7 @@ import { canCommand, GitHubClient, type PullRequestInfo, type RepoRef } from "./
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { withOutputLimit } from "./models.ts"
+import { bundledSkills } from "./review/bundled-skills.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   parseWrittenReview,
@@ -189,6 +190,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         submission,
         accepted,
         droppedCount: rejected.length,
+        model: this.env.REVIEW_MODEL,
+        skillsFingerprint: (await bundledSkills()).fingerprint,
       }),
     )
     const review = await github.createReview(key, key.number, {

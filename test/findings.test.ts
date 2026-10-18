@@ -272,11 +272,14 @@ describe("renderSummaryComment", () => {
       },
       accepted: [finding()],
       droppedCount: 1,
+      model: "@cf/openai/gpt-oss-120b",
+      skillsFingerprint: "0123456789abcdef",
     })
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
     expect(text).toContain("1 finding(s) were dropped")
+    expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@01234567`.</sub>")
   })
 })
 
