@@ -179,13 +179,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   async submitReview(submission: ReviewSubmissionInput): Promise<string> {
     const pending = await this.readPending()
     if (!pending) return "Nothing to post: no review is pending. Answer in text instead."
-    if (await this.anotherOperationRunning(pending)) return SUPERSEDED_REFUSAL
+    if (!(await this.callerIsReviewInFlight(pending))) return NOT_IN_FLIGHT_REFUSAL
     return this.postReview(submission, pending.deliveryId)
   }
 
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<string> {
     const pending = await this.pendingFor(deliveryId)
-    if (!pending) return SUPERSEDED_REFUSAL
+    if (!pending) return NOT_IN_FLIGHT_REFUSAL
     const posted = await this.ctx.storage.get<PostedReview>(`posted:${pending.headSha}`)
     if (posted) {
       await this.completeAsPostedEarlier(deliveryId, posted)
@@ -282,7 +282,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async clearFlight(headSha: string): Promise<FlightDecision> {
     const pending = await this.readPending()
     const operations = await this.operationsOf(pending)
-    const decision = decideFlight(pending, headSha, operations.length > 0 || withinStartupGrace(pending))
+    const decision = decideFlight(pending, headSha, operations.length > 0 || withinGrace(pending))
     if (decision.kind !== "replace") return decision
     log("review.replaced", {
       because: decision.because,
@@ -402,13 +402,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     refusal: string | undefined,
     run: ReviewRun,
   ): Promise<ReviewSource | undefined> {
-    if (await this.superseded(pr, run)) return undefined
+    if (await this.headMoved(pr, run)) return undefined
     if (await this.replaced(pr, run)) return undefined
     await this.restartGrace(run.deliveryId)
     const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
+    await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"
     if (await this.replaced(pr, run)) return undefined
-    if (await this.superseded(pr, run)) return undefined
+    if (await this.headMoved(pr, run)) return undefined
     await this.reportUnpostedReview(pr, written, retry, run)
     return undefined
   }
@@ -419,7 +420,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return true
   }
 
-  private async superseded(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
+  private async headMoved(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
     const now = await this.freshPullRequest()
     if (now.head.sha === pr.head.sha) return false
     log("review.skip", {
@@ -658,9 +659,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, started: Date.now() })
   }
 
-  private async anotherOperationRunning(pending: PendingReview): Promise<boolean> {
+  private async callerIsReviewInFlight(pending: PendingReview): Promise<boolean> {
     const running = (await this.harness.pending()).find((op) => op.status === "running")
-    return running !== undefined && !ownsOperation(pending, running.operationId)
+    return running !== undefined && ownsOperation(pending, running.operationId)
   }
 
   private async guardedCheck<T>(step: string, call: () => Promise<T>): Promise<T | undefined> {
@@ -675,8 +676,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
 const REVIEW_MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
-const STARTUP_GRACE_MS = 30_000
-const SUPERSEDED_REFUSAL = "Not posted: this review was superseded by a newer one. Stop here."
+const GRACE_MS = 120_000
+const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
 
 function short(sha: string): string {
   return sha.slice(0, 7)
@@ -686,8 +687,8 @@ function ownsOperation(pending: PendingReview, operationId: string): boolean {
   return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
 }
 
-function withinStartupGrace(pending: PendingReview | undefined): boolean {
-  return pending !== undefined && Date.now() - pending.started < STARTUP_GRACE_MS
+function withinGrace(pending: PendingReview | undefined): boolean {
+  return pending !== undefined && Date.now() - pending.started < GRACE_MS
 }
 
 function shouldLetModelFixAnchors(accepted: readonly FindingInput[], rejected: readonly Rejected[]): boolean {
