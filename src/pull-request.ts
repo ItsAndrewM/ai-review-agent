@@ -164,9 +164,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   async submitReview(submission: ReviewSubmissionInput): Promise<string> {
     const pending = await this.ctx.storage.get<PendingReview>("pending")
     if (!pending) return "Nothing to post: no review is pending. Answer in text instead."
-    if (await this.anotherOperationRunning(pending)) {
-      return "Not posted: this review was superseded by a newer one. Stop here."
-    }
+    if (await this.anotherOperationRunning(pending)) return SUPERSEDED_REFUSAL
+    return this.postReview(submission, pending.deliveryId)
+  }
+
+  private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<string> {
+    const pending = await this.pendingFor(deliveryId)
+    if (!pending) return SUPERSEDED_REFUSAL
     const posted = await this.ctx.storage.get<PostedReview>(`posted:${pending.headSha}`)
     if (posted) return `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`
 
@@ -316,6 +320,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
+      await this.restartGrace(run.deliveryId)
       const source = await this.finishReview(pr, result, run)
       if (source) {
         log("review.done", {
@@ -357,7 +362,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       })
     }
     if (written.kind !== "submission") return this.askAgain(pr, written, undefined, run)
-    const refusal = await this.submitReview(written.submission).catch(errorText)
+    const refusal = await this.postReview(written.submission, run.deliveryId).catch(errorText)
     if (await this.isPosted(pr)) return "text"
     log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal })
     return this.askAgain(pr, written, refusal, run)
@@ -370,6 +375,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     run: ReviewRun,
   ): Promise<ReviewSource | undefined> {
     if (await this.superseded(pr, run)) return undefined
+    if (await this.replaced(pr, run)) return undefined
+    await this.restartGrace(run.deliveryId)
     const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
     if (await this.isPosted(pr)) return "retry"
     if (await this.replaced(pr, run)) return undefined
@@ -595,6 +602,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (await this.ownsPending(deliveryId)) await this.ctx.storage.delete("pending")
   }
 
+  private async restartGrace(deliveryId: string): Promise<void> {
+    const pending = await this.pendingFor(deliveryId)
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, started: Date.now() })
+  }
+
   private async anotherOperationRunning(pending: PendingReview): Promise<boolean> {
     const running = (await this.harness.pending()).find((op) => op.status === "running")
     return running !== undefined && !ownsOperation(pending, running.operationId)
@@ -613,6 +625,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 const REVIEW_MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const STARTUP_GRACE_MS = 30_000
+const SUPERSEDED_REFUSAL = "Not posted: this review was superseded by a newer one. Stop here."
 
 function short(sha: string): string {
   return sha.slice(0, 7)
