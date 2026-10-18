@@ -34,7 +34,7 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 
 ## Anti-goals
 
-- Skill text that competes with the diff. Budget: the review skill body under 120 lines; references load on demand only.
+- Skill text that competes with the diff. Budget: the review skill body stays under 120 lines. Until slice 3, the four references render inline after the skill (section C, #19), trading the on-demand budget for a tool set gpt-oss posts with.
 - A rule stated twice. Anchoring rules already live in the `submit_review` schema; the skill points at them.
 - Rules a linter could enforce. Those wait for the sandbox tier.
 - Model-chosen activation for the core procedure.
@@ -68,7 +68,7 @@ skills/
     SKILL.md             answering a question on the pull request
 ```
 
-The references are vendored from the local fork at `/Users/andamonium/Developer/experimental/skills` after a pull, trimmed to what a diff reviewer uses. Frontmatter follows the Agent Skills spec: `name` matches the directory, `description` states what and when, `metadata.version` is bumped by hand on any change. Built-in skills stay visible in the catalog: hiding them with `disable-model-invocation` would also hide their references from `read_skill_resource`, and a catalog line costs about 30 tokens.
+The references are vendored from the local fork at `/Users/andamonium/Developer/experimental/skills` after a pull, trimmed to what a diff reviewer uses. Frontmatter follows the Agent Skills spec: `name` matches the directory, `description` states what and when, `metadata.version` is bumped by hand on any change. When the catalog returns, listing the built-in review skill would offer the #19 trigger again, `read_skill_resource` for its references, so slice 3 must settle whether built-in skills are listed at all.
 
 `review/SKILL.md` is written to the `writing-for-agents` rules: ordered steps, positive phrasing, leading words (anchor, basis, blast radius, one-way door), references behind pointers, and one completion criterion:
 

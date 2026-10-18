@@ -36,6 +36,6 @@ Once you have a finding, grade every finding by `references/severity.md`, below.
 
 ## 5. Submit
 
-End the summary with the merge danger by `references/merge-danger.md`, below: the door and the blast radius. Submit with `submit_review`. When it returns rejections, resubmit the whole review with each rejected finding fixed or dropped.
+End the summary with the merge danger, the door and the blast radius, by `references/merge-danger.md`, below. Submit with `submit_review`. When it returns rejections, resubmit the whole review with each rejected finding fixed or dropped.
 
 Done when every changed file has a walkthrough row and every finding has an anchor.
