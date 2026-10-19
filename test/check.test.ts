@@ -9,8 +9,18 @@ import {
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
+  unchangedCheckRun,
 } from "../src/review/check.ts"
 import type { FindingInput } from "../src/review/findings.ts"
+
+describe("unchangedCheckRun", () => {
+  it("completes the run as success when a push changed none of the pull request's own files", () => {
+    const update = unchangedCheckRun("abc1234567", Date.UTC(2026, 9, 19, 14, 0, 0, 500))
+    expect(update.conclusion).toBe("success")
+    expect(update.completed_at).toBe("2026-10-19T14:00:00Z")
+    expect(update.output.title).toBe("No changes to review since `abc1234`")
+  })
+})
 
 function finding(severity: FindingInput["severity"]): FindingInput {
   return { path: "src/x.ts", line: 1, quote: "q", severity, title: "t", body: "b" }

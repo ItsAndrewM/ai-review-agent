@@ -1,5 +1,101 @@
 import { describe, expect, it } from "vitest"
-import { answerPrompt, rejectionsText, resubmitPrompt, systemPrompt } from "../src/review/prompt.ts"
+import type { PullRequestInfo } from "../src/github/client.ts"
+import type { OpenThread } from "../src/review/incremental.ts"
+import {
+  answerPrompt,
+  fullPrompt,
+  incrementalPrompt,
+  rejectionsText,
+  resubmitPrompt,
+  systemPrompt,
+} from "../src/review/prompt.ts"
+
+const pr: PullRequestInfo = {
+  number: 7,
+  title: "Fix the total",
+  body: "Fixes the cart total.",
+  state: "open",
+  user: { login: "andrew" },
+  base: { ref: "main", sha: "base0000000", repo: { full_name: "o/r" } },
+  head: { ref: "fix", sha: "def5678901" },
+  changed_files: 2,
+  additions: 3,
+  deletions: 1,
+  labels: [],
+}
+
+const covered = [
+  {
+    filename: "a.ts",
+    status: "modified",
+    additions: 1,
+    deletions: 1,
+    patch: ["@@ -1,2 +1,2 @@", " const a = 1;", "-const b = 2;", "+const b = 3;"].join("\n"),
+  },
+]
+const others = [
+  { filename: "b.ts", status: "modified", additions: 2, deletions: 0, patch: "@@ -1 +1,3 @@\n x\n+y\n+z" },
+]
+
+function thread(handle: string, overrides: Partial<OpenThread> = {}): OpenThread {
+  return {
+    handle,
+    threadId: `id-${handle}`,
+    firstCommentId: 1,
+    path: "a.ts",
+    line: 2,
+    side: "RIGHT",
+    outdated: false,
+    title: "Total is NaN",
+    blocking: true,
+    ...overrides,
+  }
+}
+
+const recheck = [thread("T1", { outdated: true, line: null, quote: "const b = 3;" })]
+const open = [...recheck, thread("T2", { path: "b.ts", line: 7, title: "Rename y", blocking: false })]
+
+describe("incrementalPrompt", () => {
+  const text = incrementalPrompt(pr, {
+    from: "abc1234567",
+    covered,
+    marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
+    others,
+    recheck,
+    open,
+    leftOut: 2,
+  })
+
+  it("names the commit range and marks the lines changed since the last review", () => {
+    expect(text).toContain("`abc1234..def5678`")
+    expect(text).toContain(
+      "A `*` after an anchor marks a line changed since your last review. Comment only on marked lines, except for a blocking bug the new changes cause elsewhere in the diff.",
+    )
+    expect(text).toContain("L2*    -const b = 2;")
+    expect(text).toContain("R2*    +const b = 3;")
+  })
+
+  it("lists the files the new commits didn't touch by name only", () => {
+    expect(text).toContain("- `b.ts`: unchanged since the last review; read_file if needed")
+    expect(text).not.toContain("+y")
+  })
+
+  it("lists the threads to re-check apart from the other open ones, and says how many were left out", () => {
+    expect(text).toContain("## Threads to re-check\nT1 a.ts (outdated) — Total is NaN — code: `const b = 3;`")
+    expect(text).toContain("## Other open threads\nT2 b.ts:7 — Rename y")
+    expect(text).toContain("2 more open threads aren't listed.")
+  })
+})
+
+describe("fullPrompt", () => {
+  it("keeps today's whole diff and adds the thread lists", () => {
+    const text = fullPrompt(pr, [...covered, ...others], { recheck, open, leftOut: 0 })
+    expect(text).toContain("## Diff")
+    expect(text).toContain("+y")
+    expect(text).toContain("## Threads to re-check\nT1 a.ts (outdated)")
+    expect(text).not.toContain("more open threads")
+  })
+})
 
 describe("systemPrompt", () => {
   it("names the bot and only the three tools the model is given, and leaves the procedure to the skills", () => {

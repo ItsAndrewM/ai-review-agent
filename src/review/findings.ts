@@ -64,6 +64,7 @@ export const ReviewSubmission = Type.Object({
 })
 
 export type FindingInput = Static<typeof Finding>
+export type WalkthroughInput = Static<typeof Walkthrough>
 export type ReviewSubmissionInput = Static<typeof ReviewSubmission>
 
 export type WrittenReview =

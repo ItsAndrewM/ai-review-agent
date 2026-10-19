@@ -10,6 +10,7 @@ import {
 } from "../src/review/findings.ts"
 import {
   chooseReviewEvent,
+  mergeWalkthrough,
   renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
@@ -365,7 +366,68 @@ describe("renderReviewBody", () => {
   })
 })
 
+describe("renderReviewBody coverage", () => {
+  it("says which commits and files an incremental review covered and how many threads it resolved", () => {
+    const coverage = { mode: "incremental" as const, from: "abc1234567", to: "def5678901", files: 3, resolved: 2 }
+    expect(renderReviewBody("COMMENT", [], [], coverage)).toBe(
+      "No findings to anchor to the diff. See the summary comment.\n\n<sub>Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved.</sub>",
+    )
+    expect(renderReviewBody("COMMENT", [], [], { ...coverage, files: 1, resolved: 1 })).toContain(
+      "`abc1234..def5678`: 1 file; 1 thread resolved.",
+    )
+  })
+
+  it("says a full review covered everything, and says nothing without a coverage", () => {
+    expect(renderReviewBody("COMMENT", [], [], { mode: "full", to: "def5678901", files: 9, resolved: 0 })).toContain(
+      "\n\n<sub>Full review.</sub>",
+    )
+    expect(renderReviewBody("COMMENT", [], [])).not.toContain("<sub>")
+  })
+})
+
+describe("mergeWalkthrough", () => {
+  it("replaces the rows of re-reviewed files, keeps the rest, and ignores rows for files it didn't cover", () => {
+    const merged = mergeWalkthrough(
+      [
+        { path: "a.ts", summary: "old a" },
+        { path: "b.ts", summary: "old b" },
+      ],
+      [
+        { path: "a.ts", summary: "new a" },
+        { path: "b.ts", summary: "not covered" },
+        { path: "c.ts", summary: "new c" },
+      ],
+      new Set(["a.ts", "c.ts"]),
+    )
+    expect(merged).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+      { path: "c.ts", summary: "new c" },
+    ])
+  })
+})
+
 describe("renderSummaryComment", () => {
+  it("adds a section for what changed since the last full review", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "COMMENT",
+      submission: { summary: "The whole PR.", walkthrough: [], findings: [], verdict: "comment" },
+      accepted: [],
+      droppedCount: 0,
+      since: {
+        from: "abc1234567",
+        to: "def5678901",
+        summary: "Fixed the total.",
+        files: ["a.ts", "b.ts"],
+        resolved: 1,
+      },
+    })
+    expect(text).toContain("### Summary\n\nThe whole PR.")
+    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread(s).")
+  })
+
   const summaryWith = (attribution: { model?: string; skillsFingerprint?: string }) =>
     renderSummaryComment({
       botLogin: "andabot",
