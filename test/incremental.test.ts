@@ -13,6 +13,8 @@ import {
   nextReviewed,
   openBlockingAfter,
   openBotThreads,
+  planThreads,
+  threadLists,
   threadsToRecheck,
   type OpenThread,
   type ReviewedRecord,
@@ -120,7 +122,7 @@ describe("coveredFiles", () => {
 
 describe("openBotThreads", () => {
   it("keeps only the bot's unresolved threads and ignores a person's and CodeRabbit's", () => {
-    const { open: threads, leftOut } = openBotThreads(
+    const threads = openBotThreads(
       [
         botThread("mine"),
         botThread("person", { authorLogin: "andrew", authorIsBot: false }),
@@ -132,26 +134,21 @@ describe("openBotThreads", () => {
       "andabot",
     )
     expect(threads.map((t) => [t.handle, t.threadId])).toEqual([["T1", "mine"]])
-    expect(leftOut).toBe(0)
   })
 
-  it("caps the list at 30 and counts the rest", () => {
+  it("keeps every open thread, newest first", () => {
     const many = Array.from({ length: 32 }, (_, i) => botThread(`t${i}`, { firstCommentId: i }))
-    const { open: threads, leftOut } = openBotThreads(many, new Map(), "andabot")
-    expect(threads).toHaveLength(30)
-    expect(threads.at(-1)?.handle).toBe("T30")
-    expect(leftOut).toBe(2)
-  })
-
-  it("counts every open blocking thread, including those past the cap, so approval can't skip them", () => {
-    const blockers = Array.from({ length: 31 }, (_, i) => botThread(`b${i}`, { firstCommentId: i }))
-    const nit = botThread("nit", { firstCommentId: 99, firstCommentBody: "**⚪ Nitpick: Spacing**" })
-    expect(openBotThreads([...blockers, nit], new Map(), "andabot").blocking).toBe(31)
+    const threads = openBotThreads(many, new Map(), "andabot")
+    expect(threads).toHaveLength(32)
+    expect(threads.slice(0, 2).map((t) => [t.handle, t.threadId])).toEqual([
+      ["T1", "t31"],
+      ["T2", "t30"],
+    ])
   })
 
   it("reads severity from the stored finding, else from the comment's label", () => {
     const stored: StoredFinding = { severity: "nitpick", title: "Stored title", quote: "const b = 3;", path: "a.ts" }
-    const { open: threads } = openBotThreads(
+    const threads = openBotThreads(
       [
         botThread("stored", { firstCommentId: 1 }),
         botThread("labelled", { firstCommentId: 2 }),
@@ -162,11 +159,39 @@ describe("openBotThreads", () => {
       "andabot",
     )
     expect(threads.map((t) => [t.title, t.blocking, t.quote])).toEqual([
-      ["Stored title", false, "const b = 3;"],
-      ["Total is NaN", true, undefined],
-      ["Rename it", false, undefined],
       ["Something else entirely", false, undefined],
+      ["Rename it", false, undefined],
+      ["Total is NaN", true, undefined],
+      ["Stored title", false, "const b = 3;"],
     ])
+  })
+})
+
+describe("planThreads", () => {
+  it("re-checks and dedupes against every open thread, not only the 30 the prompt lists", () => {
+    const threads = Array.from({ length: 42 }, (_, i) =>
+      botThread(`t${i + 1}`, { firstCommentId: i + 1, line: i === 41 ? null : i + 1, outdated: i === 41 }),
+    )
+    const plan = planThreads({ threads, findings: new Map(), botLogin: "andabot", mode: "full", covered: new Map() })
+    expect(plan.open).toHaveLength(42)
+    expect(plan.recheck.map((t) => t.threadId)).toEqual(["t42"])
+    const onTheOldestThread = found({ line: 1, severity: "blocking" })
+    const scoped = applyDeltaPolicy(validated([onTheOldestThread]), {
+      mode: "full",
+      covered: new Map(),
+      open: plan.open,
+    })
+    expect(scoped.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T42"])
+  })
+})
+
+describe("threadLists", () => {
+  it("lists the threads to re-check first and caps both lists at 30 together, counting the rest", () => {
+    const all = Array.from({ length: 42 }, (_, i) => open(`T${i + 1}`))
+    const lists = threadLists(all, all.slice(40))
+    expect(lists.recheck.map((t) => t.handle)).toEqual(["T41", "T42"])
+    expect(lists.otherThreads.map((t) => t.handle)).toEqual(all.slice(0, 28).map((t) => t.handle))
+    expect(lists.leftOut).toBe(12)
   })
 })
 
@@ -284,17 +309,32 @@ describe("addressedThreads", () => {
 
 describe("the review scope", () => {
   const covered = new Map([["a.ts", { right: new Set([3, 4]), left: new Set([2]) }]])
-  const listed = { open: [open("T1", { blocking: true }), open("T2")], leftOut: 1, blocking: 3 }
-  const threads = { listed, recheck: [listed.open[0] ?? open("T1")] }
+  const blocker = open("T1", { blocking: true })
+  const threads = {
+    open: [blocker, open("T2"), open("T3", { blocking: true }), open("T4", { blocking: true })],
+    recheck: [blocker],
+  }
 
   it("keeps the range only for an incremental review and records whether threads were read", () => {
     const incremental = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
     expect(incremental).toMatchObject({ deliveryId: "d-1", mode: "incremental", from: "aaa", threadsKnown: true })
-    expect(incremental).toMatchObject({ leftOut: 1, blockingOpen: 3 })
+    expect(incremental.open.map((t) => t.handle)).toEqual(["T1", "T2", "T3", "T4"])
     expect(incremental.recheck.map((t) => t.handle)).toEqual(["T1"])
     const full = buildScope({ deliveryId: "d-1", mode: "full", from: "aaa", covered: new Map(), threads: undefined })
     expect(full.from).toBeUndefined()
-    expect(full).toMatchObject({ threadsKnown: false, open: [], recheck: [], blockingOpen: 0 })
+    expect(full).toMatchObject({ threadsKnown: false, open: [], recheck: [] })
+  })
+
+  it("counts every open blocking thread, including those the prompt's lists leave out", () => {
+    const blockers = Array.from({ length: 31 }, (_, i) => open(`T${i + 1}`, { blocking: true }))
+    const scope = buildScope({
+      deliveryId: "d-1",
+      mode: "full",
+      from: undefined,
+      covered: new Map(),
+      threads: { open: [...blockers, open("T32")], recheck: [] },
+    })
+    expect(openBlockingAfter(scope, [])).toBe(31)
   })
 
   it("round-trips its covered lines through the stored record", () => {

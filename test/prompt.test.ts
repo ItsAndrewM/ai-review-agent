@@ -53,7 +53,7 @@ function thread(handle: string, overrides: Partial<OpenThread> = {}): OpenThread
 }
 
 const recheck = [thread("T1", { outdated: true, line: null, quote: "const b = 3;" })]
-const open = [...recheck, thread("T2", { path: "b.ts", line: 7, title: "Rename y", blocking: false })]
+const otherThreads = [thread("T2", { path: "b.ts", line: 7, title: "Rename y", blocking: false })]
 
 describe("incrementalPrompt", () => {
   const text = incrementalPrompt(pr, {
@@ -62,7 +62,7 @@ describe("incrementalPrompt", () => {
     marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
     others,
     recheck,
-    open,
+    otherThreads,
     leftOut: 2,
   })
 
@@ -89,7 +89,7 @@ describe("incrementalPrompt", () => {
 
 describe("fullPrompt", () => {
   it("keeps today's whole diff and adds the thread lists", () => {
-    const text = fullPrompt(pr, [...covered, ...others], { recheck, open, leftOut: 0 })
+    const text = fullPrompt(pr, [...covered, ...others], { recheck, otherThreads, leftOut: 0 })
     expect(text).toContain("## Diff")
     expect(text).toContain("+y")
     expect(text).toContain("## Threads to re-check\nT1 a.ts (outdated)")

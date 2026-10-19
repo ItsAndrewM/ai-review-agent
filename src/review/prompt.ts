@@ -1,13 +1,7 @@
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
 import type { Rejected } from "./findings.ts"
-import type { OpenThread } from "./incremental.ts"
-
-export interface ThreadLists {
-  recheck: readonly OpenThread[]
-  open: readonly OpenThread[]
-  leftOut: number
-}
+import type { OpenThread, ThreadLists } from "./incremental.ts"
 
 export interface IncrementalPromptInput extends ThreadLists {
   from: string
@@ -85,10 +79,8 @@ function otherFiles(files: readonly ChangedFile[]): string {
   return files.map((file) => `- \`${file.filename}\`: unchanged since the last review; read_file if needed`).join("\n")
 }
 
-function renderThreadLists({ recheck, open, leftOut }: ThreadLists): string {
-  const rechecked = new Set(recheck.map((thread) => thread.handle))
-  const others = open.filter((thread) => !rechecked.has(thread.handle))
-  const lines = ["## Threads to re-check", threadList(recheck), "", "## Other open threads", threadList(others)]
+function renderThreadLists({ recheck, otherThreads, leftOut }: ThreadLists): string {
+  const lines = ["## Threads to re-check", threadList(recheck), "", "## Other open threads", threadList(otherThreads)]
   if (leftOut > 0) lines.push("", `${leftOut} more open threads aren't listed.`)
   lines.push("", THREADS_NOTE)
   return lines.join("\n")

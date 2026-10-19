@@ -60,11 +60,11 @@ import {
   freshScope,
   nextReviewed,
   openBlockingAfter,
-  openBotThreads,
+  planThreads,
   ReviewedRecord,
   ReviewScope,
   StoredFinding,
-  threadsToRecheck,
+  threadLists,
   type OpenThread,
   type ReviewMode,
   type ScopedReview,
@@ -560,8 +560,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       const threads = await (await this.github()).listReviewThreads(key, key.number)
       const findings = await this.storedFindings(threads.map((thread) => thread.firstCommentId))
-      const listed = openBotThreads(threads, findings, this.botLogin())
-      return { listed, recheck: threadsToRecheck(listed.open, mode, covered) }
+      return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered })
     } catch (error) {
       logError("review.threads_failed", { number: pr.number, error: errorText(error) })
       return undefined
@@ -916,16 +915,15 @@ const MOST_KEYS_PER_GET = 128
 
 function promptFor(pr: PullRequestInfo, files: readonly ChangedFile[], scope: ReviewScope): string {
   if (scope.mode === "fresh") return reviewPrompt(pr, files, true)
-  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, scope)
+  const lists = threadLists(scope.open, scope.recheck)
+  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists)
   const marked = coveredMap(scope)
   return incrementalPrompt(pr, {
     from: scope.from,
     covered: files.filter((file) => marked.has(file.filename)),
     marked,
     others: files.filter((file) => !marked.has(file.filename)),
-    recheck: scope.recheck,
-    open: scope.open,
-    leftOut: scope.leftOut,
+    ...lists,
   })
 }
 

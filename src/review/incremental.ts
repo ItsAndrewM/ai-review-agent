@@ -64,12 +64,6 @@ export const OpenThread = Type.Object({
 
 export type OpenThread = Static<typeof OpenThread>
 
-export interface ListedThreads {
-  open: OpenThread[]
-  leftOut: number
-  blocking: number
-}
-
 export const ReviewScope = Type.Object({
   deliveryId: Type.String(),
   mode: Mode,
@@ -79,16 +73,28 @@ export const ReviewScope = Type.Object({
   ),
   recheck: Type.Array(OpenThread),
   open: Type.Array(OpenThread),
-  leftOut: Type.Integer(),
-  blockingOpen: Type.Integer(),
   threadsKnown: Type.Boolean(),
 })
 
 export type ReviewScope = Static<typeof ReviewScope>
 
 export interface ThreadPlan {
-  listed: ListedThreads
+  open: OpenThread[]
   recheck: OpenThread[]
+}
+
+export interface ThreadInput {
+  threads: readonly ReviewThread[]
+  findings: ReadonlyMap<number, StoredFinding>
+  botLogin: string
+  mode: ReviewMode
+  covered: ReadonlyMap<string, MarkedLines>
+}
+
+export interface ThreadLists {
+  recheck: readonly OpenThread[]
+  otherThreads: readonly OpenThread[]
+  leftOut: number
 }
 
 export interface ScopeInput {
@@ -155,14 +161,23 @@ export function openBotThreads(
   threads: readonly ReviewThread[],
   findings: ReadonlyMap<number, StoredFinding>,
   botLogin: string,
-): ListedThreads {
-  const mine = threads.filter((thread) => !thread.resolved && thread.authorIsBot && thread.authorLogin === botLogin)
-  const listed = mine.slice(0, MOST_LISTED_THREADS)
-  return {
-    open: listed.map((thread, i) => openThread(thread, `T${i + 1}`, findings.get(thread.firstCommentId))),
-    leftOut: mine.length - listed.length,
-    blocking: mine.filter((thread) => severityOf(thread, findings.get(thread.firstCommentId)) === "blocking").length,
-  }
+): OpenThread[] {
+  return threads
+    .filter((thread) => !thread.resolved && thread.authorIsBot && thread.authorLogin === botLogin)
+    .sort((a, b) => b.firstCommentId - a.firstCommentId)
+    .map((thread, i) => openThread(thread, `T${i + 1}`, findings.get(thread.firstCommentId)))
+}
+
+export function planThreads(input: ThreadInput): ThreadPlan {
+  const open = openBotThreads(input.threads, input.findings, input.botLogin)
+  return { open, recheck: threadsToRecheck(open, input.mode, input.covered) }
+}
+
+export function threadLists(open: readonly OpenThread[], recheck: readonly OpenThread[]): ThreadLists {
+  const rechecked = new Set(recheck.map((thread) => thread.handle))
+  const others = open.filter((thread) => !rechecked.has(thread.handle))
+  const otherThreads = others.slice(0, Math.max(0, MOST_LISTED_THREADS - recheck.length))
+  return { recheck, otherThreads, leftOut: others.length - otherThreads.length }
 }
 
 function severityOf(thread: ReviewThread, stored: StoredFinding | undefined): FindingInput["severity"] {
@@ -203,8 +218,11 @@ export function threadsToRecheck(
   covered: ReadonlyMap<string, MarkedLines>,
 ): OpenThread[] {
   if (mode === "fresh") return []
-  if (mode === "full") return open.filter((thread) => thread.outdated)
-  return open.filter((thread) => thread.outdated || onMarkedLine(thread, covered))
+  const due =
+    mode === "full"
+      ? open.filter((thread) => thread.outdated)
+      : open.filter((thread) => thread.outdated || onMarkedLine(thread, covered))
+  return due.slice(0, MOST_LISTED_THREADS)
 }
 
 function onMarkedLine(thread: OpenThread, covered: ReadonlyMap<string, MarkedLines>): boolean {
@@ -281,14 +299,8 @@ export function buildScope(input: ScopeInput): ReviewScope {
 }
 
 function threadFields(threads: ThreadPlan | undefined) {
-  if (threads === undefined) return { recheck: [], open: [], leftOut: 0, blockingOpen: 0, threadsKnown: false }
-  return {
-    recheck: threads.recheck,
-    open: threads.listed.open,
-    leftOut: threads.listed.leftOut,
-    blockingOpen: threads.listed.blocking,
-    threadsKnown: true,
-  }
+  if (threads === undefined) return { recheck: [], open: [], threadsKnown: false }
+  return { recheck: threads.recheck, open: threads.open, threadsKnown: true }
 }
 
 export function freshScope(deliveryId: string): ReviewScope {
@@ -305,7 +317,8 @@ export function deltaScopeOf(scope: ReviewScope): DeltaScope {
 
 export function openBlockingAfter(scope: ReviewScope, resolved: readonly OpenThread[]): number | "unknown" {
   if (!scope.threadsKnown) return "unknown"
-  return Math.max(0, scope.blockingOpen - resolved.filter((thread) => thread.blocking).length)
+  const done = new Set(resolved.map((thread) => thread.threadId))
+  return scope.open.filter((thread) => thread.blocking && !done.has(thread.threadId)).length
 }
 
 export function findingRecords(
