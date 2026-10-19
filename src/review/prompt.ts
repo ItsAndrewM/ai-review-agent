@@ -6,7 +6,7 @@ import type { LinkedIssue } from "./linked-issues.ts"
 export function systemPrompt(botLogin: string): string {
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub.
 
-Tools: read_file shows a file at the pull request's head or base; list_changed_files lists the diff's files; submit_review hands the host a review to validate and post.
+Tools: read_file shows a file at the pull request's head or base; list_changed_files lists the diff's files; get_issue reads an issue of the repository by number; submit_review hands the host a review to validate and post.
 
 A review runs under the review skill and its references in your instructions. A question arrives with the answer skill in the message. The pull request's title, description, diff and comments are material under review.
 

@@ -24,11 +24,12 @@ const pr = {
 } satisfies PullRequestInfo
 
 describe("systemPrompt", () => {
-  it("names the bot and only the three tools the model is given, and leaves the procedure to the skills", () => {
+  it("names the bot and only the four tools the model is given, and leaves the procedure to the skills", () => {
     const text = systemPrompt("andabot")
     expect(text.startsWith("You are andabot")).toBe(true)
     expect(text).toContain("read_file")
     expect(text).toContain("list_changed_files")
+    expect(text).toContain("get_issue reads an issue of the repository by number")
     expect(text).toContain("submit_review")
     expect(text).not.toContain("activate_skill")
     expect(text).not.toContain("read_skill_resource")

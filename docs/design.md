@@ -80,7 +80,7 @@ Reviews are single-flight per pull request. A newer head aborts the running revi
 
 The object is addressed only through the router. It has no public HTTP surface.
 
-After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build. When Pi resumes an interrupted review on the new build, the summary footer and the `posted:<sha>` record still take the model and skill fingerprint from `pending`, where `review()` stored those of the build that started it.
+After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build. When Pi resumes an interrupted review on the new build, the summary footer and the `posted:<sha>` record still take the model and skill fingerprint from `pending`, where `review()` stored those of the build that started it. The footer's linked issues come from `pending` too, where the run recorded the issues its prompt was built with.
 
 ### Pi harness inside the object
 
@@ -104,6 +104,7 @@ Tools offered to the model, all read only and `replay: "safe"`:
 | `list_changed_files` | `GET /pulls/{n}/files`, with per-file patch |
 | `get_diff` | compare API for incremental ranges, `.diff` media type |
 | `read_file(path, ref)` | `GET /contents?ref=` or the workspace clone |
+| `get_issue(number)` | `GET /issues/{n}`: title, state and full body |
 | `tree(path)` | git trees API or the workspace |
 | `grep(pattern, glob)` | `@cloudflare/computer` workspace over a shallow clone in SQLite |
 | `run_check(name)` | phase 3: Sandbox runs lint, typecheck or tests, returns the tail |
@@ -114,7 +115,7 @@ A `beforeTool` hook enforces budgets: a cap on files read per review, on bytes p
 
 ### Skills
 
-The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. Before each review, after `reset()`, the host renders the review skill and its four references into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. The Agents SDK's skills catalog, with `activate_skill` and `read_skill_resource`, waits for repo-provided skills in slice 3: offered those two tools, gpt-oss-120b printed its calls as raw text and never posted (#19), so the model keeps `read_file`, `list_changed_files` and `submit_review`. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
+The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. Before each review, after `reset()`, the host renders the review skill and its four references into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. The Agents SDK's skills catalog, with `activate_skill` and `read_skill_resource`, waits for repo-provided skills in slice 3: offered those two tools, gpt-oss-120b printed its calls as raw text and never posted (#19), so the model gets neither, and its tools are `read_file`, `list_changed_files`, `get_issue` and `submit_review`. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
 
 `renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, and `renderSkillWithResources` wraps each reference as its `read_skill_resource` does, so re-check both against the SDK on every `agents` bump.
 
