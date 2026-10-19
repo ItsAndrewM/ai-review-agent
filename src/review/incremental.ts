@@ -1,13 +1,6 @@
 import { Type, type Static } from "typebox"
 import type { CompareStatus, PostedComment, ReviewThread } from "../github/client.ts"
-import {
-  commentableLines,
-  comparableText,
-  deltaLines,
-  markedLines,
-  type ChangedFile,
-  type MarkedLines,
-} from "../github/diff.ts"
+import { comparableText, markedLines, type ChangedFile, type MarkedLines } from "../github/diff.ts"
 import {
   SEVERITY_LABEL,
   Severity,
@@ -152,7 +145,7 @@ export function coveredFiles(prFiles: readonly ChangedFile[], delta: readonly Ch
   for (const file of prFiles) {
     const since = deltaByPath.get(file.filename)
     if (!since) continue
-    const marked = markedLines(commentableLines(file.patch), deltaLines(since.patch))
+    const marked = markedLines(file.patch, since.patch)
     if (marked.right.size + marked.left.size > 0) covered.set(file.filename, marked)
   }
   return covered

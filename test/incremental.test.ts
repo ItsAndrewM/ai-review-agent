@@ -102,6 +102,20 @@ describe("coveredFiles", () => {
     expect([...covered.keys()]).toEqual(["a.ts"])
     expect([...(covered.get("a.ts")?.right ?? [])]).toEqual([3])
   })
+
+  it("leaves a merge from the base unmarked when it only changed context lines of the pull request's hunk", () => {
+    const mergedOnly = coveredFiles(
+      [changed("a.ts", ["@@ -1,5 +1,5 @@", " a", " b", "-c", "+C", " d", " E"].join("\n"))],
+      [changed("a.ts", ["@@ -3,3 +3,3 @@", " C", " d", "-e", "+E"].join("\n"))],
+    )
+    expect(mergedOnly.size).toBe(0)
+
+    const both = coveredFiles(
+      [changed("a.ts", ["@@ -1,5 +1,5 @@", " a", " b", "-c", "+CC", " d", " E"].join("\n"))],
+      [changed("a.ts", ["@@ -3,3 +3,3 @@", "-C", "+CC", " d", "-e", "+E"].join("\n"))],
+    )
+    expect([...(both.get("a.ts")?.right ?? [])]).toEqual([3])
+  })
 })
 
 describe("openBotThreads", () => {

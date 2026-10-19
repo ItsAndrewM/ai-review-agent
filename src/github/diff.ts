@@ -80,10 +80,13 @@ export function deltaLines(patch: string | undefined): DeltaLines {
   return { added, deletedTexts }
 }
 
-export function markedLines(pr: CommentableLines, delta: DeltaLines): MarkedLines {
-  const right = new Set([...pr.right.keys()].filter((line) => delta.added.has(line)))
+export function markedLines(prPatch: string | undefined, sincePatch: string | undefined): MarkedLines {
+  const since = deltaLines(sincePatch)
+  const right = new Set([...deltaLines(prPatch).added].filter((line) => since.added.has(line)))
   const left = new Set(
-    [...pr.left].filter(([, text]) => delta.deletedTexts.has(comparableText(text))).map(([line]) => line),
+    [...commentableLines(prPatch).left]
+      .filter(([, text]) => since.deletedTexts.has(comparableText(text)))
+      .map(([line]) => line),
   )
   return { right, left }
 }

@@ -117,21 +117,23 @@ describe("deltaLines and markedLines", () => {
 
   it("markedLines marks the PR's lines the delta added, and its deleted lines by text", () => {
     const addedSince = ["@@ -1,3 +1,4 @@", " const a = 1;", " const b = 3;", "+const c = 4;", " export { a, b };"]
-    const onlyC = markedLines(commentableLines(prPatch), deltaLines(addedSince.join("\n")))
+    const onlyC = markedLines(prPatch, addedSince.join("\n"))
     expect([...onlyC.right]).toEqual([3])
     expect([...onlyC.left]).toEqual([])
 
     const changedSince = ["@@ -1,3 +1,4 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " const c = 4;"]
-    const bothSides = markedLines(commentableLines(prPatch), deltaLines(changedSince.join("\n")))
+    const bothSides = markedLines(prPatch, changedSince.join("\n"))
     expect([...bothSides.right]).toEqual([2])
     expect([...bothSides.left]).toEqual([2])
 
     const newFile = ["@@ -0,0 +1,3 @@", "+x", "+y", "+z"].join("\n")
-    const lastLineOnly = markedLines(
-      commentableLines(newFile),
-      deltaLines(["@@ -1,2 +1,3 @@", " x", " y", "+z"].join("\n")),
-    )
+    const lastLineOnly = markedLines(newFile, ["@@ -1,2 +1,3 @@", " x", " y", "+z"].join("\n"))
     expect([...lastLineOnly.right]).toEqual([3])
+  })
+
+  it("markedLines leaves the PR's context lines unmarked, even when the delta added them", () => {
+    const fromMain = ["@@ -3,2 +3,2 @@", " const c = 4;", "-export { a };", "+export { a, b };"].join("\n")
+    expect([...markedLines(prPatch, fromMain).right]).toEqual([])
   })
 
   it("renderPatches stars marked anchors and leaves the others alone", () => {
