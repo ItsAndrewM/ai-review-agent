@@ -1,6 +1,6 @@
 import { fauxAssistantMessage, fauxProvider, normalizeContext, type SimpleStreamOptions } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
-import { withOutputLimit } from "../src/models.ts"
+import { outputLimitOf, withOutputLimit } from "../src/models.ts"
 
 const LIMIT = 16_000
 const GPT_OSS = { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000, maxTokens: 16_384 }
@@ -52,5 +52,15 @@ describe("withOutputLimit", () => {
     expect(wrapped.id).toBe(faux.provider.id)
     expect(wrapped.name).toBe(faux.provider.name)
     expect(wrapped.getModels()).toEqual(faux.provider.getModels())
+  })
+})
+
+describe("outputLimitOf", () => {
+  it("reads the limit from the MAX_OUTPUT_TOKENS var", () => {
+    expect(outputLimitOf("32000")).toBe(32_000)
+  })
+
+  it("falls back to 16,000 when the var isn't a positive whole number", () => {
+    for (const value of ["", "32k", "16,000", "0", "-1", "1.5"]) expect(outputLimitOf(value)).toBe(16_000)
   })
 })

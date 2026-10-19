@@ -20,7 +20,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { withOutputLimit } from "./models.ts"
+import { outputLimitOf, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -120,7 +120,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withOutputLimit(this.ai.provider, MAX_OUTPUT_TOKENS))
+      models.setProvider(withOutputLimit(this.ai.provider, this.outputLimit()))
       return Harness.open(
         storage,
         {
@@ -141,6 +141,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
+  }
+
+  private outputLimit(): number {
+    return outputLimitOf(this.env.MAX_OUTPUT_TOKENS)
   }
 
   private version(): Version {
@@ -379,6 +383,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         files: files.length,
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
+        maxOutputTokens: this.outputLimit(),
         skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
         build: this.version().id,
@@ -730,7 +735,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 }
 
-const MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
