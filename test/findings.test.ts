@@ -256,6 +256,13 @@ describe("parseWrittenReview", () => {
     expect(parseWrittenReview(submittedJson)).toEqual({ kind: "submission", submission: submitted })
   })
 
+  it("accepts the threads a submission says the new changes fixed, and holds back a malformed list", () => {
+    const withThreads = { ...submitted, addressed_threads: ["T1", "T3"] }
+    expect(parseWrittenReview(JSON.stringify(withThreads))).toEqual({ kind: "submission", submission: withThreads })
+    const malformed = parseWrittenReview(JSON.stringify({ ...submitted, addressed_threads: "T1" }))
+    expect(malformed).toEqual({ kind: "unfit", problem: expect.stringContaining("/addressed_threads") })
+  })
+
   it("takes a submission inside a json code fence, with prose around it and fences in its findings", () => {
     const text = `Here is the review.\n\n\`\`\`json\n${submittedJson}\n\`\`\`\n\nThat's all.`
     expect(parseWrittenReview(text)).toEqual({ kind: "submission", submission: submitted })
@@ -306,6 +313,17 @@ describe("chooseReviewEvent", () => {
     expect(chooseReviewEvent(submission, [], [{ finding: finding({ severity: "nitpick" }), reason: "r" }], true)).toBe(
       "APPROVE",
     )
+  })
+
+  it("requests changes while one of its blocking threads stays open, and approves once none does", () => {
+    expect(chooseReviewEvent(submission, [], [], true, 2)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(submission, [], [], true, 0)).toBe("APPROVE")
+    expect(chooseReviewEvent(submission, [], [], false, 2)).toBe("COMMENT")
+  })
+
+  it("never approves when its open threads couldn't be read", () => {
+    expect(chooseReviewEvent(submission, [], [], true, "unknown")).toBe("COMMENT")
+    expect(chooseReviewEvent(submission, [finding()], [], true, "unknown")).toBe("REQUEST_CHANGES")
   })
 })
 

@@ -1,7 +1,21 @@
 import { Type, type Static } from "typebox"
 import type { CompareStatus, ReviewThread } from "../github/client.ts"
-import { commentableLines, deltaLines, markedLines, type ChangedFile, type MarkedLines } from "../github/diff.ts"
-import { SEVERITY_LABEL, Severity, Walkthrough, type FindingInput } from "./findings.ts"
+import {
+  commentableLines,
+  comparableText,
+  deltaLines,
+  markedLines,
+  type ChangedFile,
+  type MarkedLines,
+} from "../github/diff.ts"
+import {
+  SEVERITY_LABEL,
+  Severity,
+  Walkthrough,
+  type FindingInput,
+  type Rejected,
+  type ValidatedReview,
+} from "./findings.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
 
@@ -58,6 +72,23 @@ export type OpenThread = Static<typeof OpenThread>
 export interface ListedThreads {
   open: OpenThread[]
   leftOut: number
+}
+
+export interface DeltaScope {
+  mode: ReviewMode
+  covered: ReadonlyMap<string, MarkedLines>
+  open: readonly OpenThread[]
+}
+
+export interface ScopedReview {
+  accepted: FindingInput[]
+  rejected: Rejected[]
+  duplicates: Rejected[]
+}
+
+export interface AddressedThreads {
+  resolve: OpenThread[]
+  unknown: string[]
 }
 
 const COMMENT_LABEL = /^\*\*(.+?): (.+?)\*\*/
@@ -140,4 +171,55 @@ function onMarkedLine(thread: OpenThread, covered: ReadonlyMap<string, MarkedLin
   const marked = covered.get(thread.path)
   if (!marked || thread.line === null) return false
   return (thread.side === "RIGHT" ? marked.right : marked.left).has(thread.line)
+}
+
+export function applyDeltaPolicy(validated: ValidatedReview, scope: DeltaScope): ScopedReview {
+  if (scope.mode === "fresh") return { accepted: validated.accepted, rejected: validated.rejected, duplicates: [] }
+  const accepted: FindingInput[] = []
+  const rejected: Rejected[] = [...validated.rejected]
+  const duplicates: Rejected[] = []
+  for (const finding of validated.accepted) {
+    const duplicate = duplicatedThread(finding, scope.open)
+    if (duplicate) duplicates.push({ finding, reason: `duplicates open thread ${duplicate.handle}` })
+    else if (scope.mode === "incremental" && outsideTheDelta(finding, scope.covered)) {
+      rejected.push({
+        finding,
+        reason: `line ${finding.line} was not changed since the last review; only a blocking finding may go elsewhere`,
+      })
+    } else accepted.push(finding)
+  }
+  return { accepted, rejected, duplicates }
+}
+
+function duplicatedThread(finding: FindingInput, open: readonly OpenThread[]): OpenThread | undefined {
+  const side = finding.side ?? "RIGHT"
+  const quote = comparableText(finding.quote)
+  return open.find(
+    (thread) =>
+      thread.path === finding.path &&
+      ((thread.side === side && thread.line === finding.line) ||
+        (thread.quote !== undefined && comparableText(thread.quote) === quote)),
+  )
+}
+
+function outsideTheDelta(finding: FindingInput, covered: ReadonlyMap<string, MarkedLines>): boolean {
+  if (finding.severity === "blocking") return false
+  const marked = covered.get(finding.path)
+  if (!marked) return true
+  return !((finding.side ?? "RIGHT") === "RIGHT" ? marked.right : marked.left).has(finding.line)
+}
+
+export function addressedThreads(
+  handles: readonly string[] | undefined,
+  recheck: readonly OpenThread[],
+): AddressedThreads {
+  const byHandle = new Map(recheck.map((thread) => [thread.handle, thread]))
+  const resolve: OpenThread[] = []
+  const unknown: string[] = []
+  for (const handle of new Set(handles ?? [])) {
+    const thread = byHandle.get(handle)
+    if (thread) resolve.push(thread)
+    else unknown.push(handle)
+  }
+  return { resolve, unknown }
 }

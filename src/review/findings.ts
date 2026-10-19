@@ -54,6 +54,13 @@ export const ReviewSubmission = Type.Object({
     description:
       "approve when nothing blocking remains and the change is sound; request_changes when any finding is blocking; comment otherwise.",
   }),
+  addressed_threads: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "A handle from the threads to re-check, such as T2, whose problem the new changes fix.",
+      }),
+    ),
+  ),
 })
 
 export type FindingInput = Static<typeof Finding>

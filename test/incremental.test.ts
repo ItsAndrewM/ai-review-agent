@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
 import type { ChangedFile } from "../src/github/diff.ts"
+import type { FindingInput, ValidatedReview } from "../src/review/findings.ts"
 import {
+  addressedThreads,
+  applyDeltaPolicy,
   chooseMode,
   coveredFiles,
   openBotThreads,
@@ -154,5 +157,67 @@ describe("threadsToRecheck", () => {
   it("takes only outdated threads in a full review, and none when starting over", () => {
     expect(threadsToRecheck(threads, "full", covered).map((t) => t.handle)).toEqual(["T1"])
     expect(threadsToRecheck(threads, "fresh", covered)).toEqual([])
+  })
+})
+
+function found(overrides: Partial<FindingInput> = {}): FindingInput {
+  return { path: "a.ts", line: 3, quote: "three", severity: "suggestion", title: "t", body: "b", ...overrides }
+}
+
+function validated(accepted: FindingInput[]): ValidatedReview {
+  return { accepted, rejected: [], relocated: 0, suggestionsDropped: 0 }
+}
+
+describe("applyDeltaPolicy", () => {
+  const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("rejects a non-blocking finding off the marked lines and keeps a blocking one", () => {
+    const onMarked = found({ line: 3 })
+    const offMarked = found({ line: 5 })
+    const blockingOff = found({ line: 6, severity: "blocking" })
+    const uncoveredFile = found({ path: "b.ts", line: 2 })
+    const result = applyDeltaPolicy(validated([onMarked, offMarked, blockingOff, uncoveredFile]), {
+      mode: "incremental",
+      covered,
+      open: [],
+    })
+    expect(result.accepted).toEqual([onMarked, blockingOff])
+    expect(result.rejected.map((r) => [r.finding.line, r.reason])).toEqual([
+      [5, "line 5 was not changed since the last review; only a blocking finding may go elsewhere"],
+      [2, "line 2 was not changed since the last review; only a blocking finding may go elsewhere"],
+    ])
+    expect(result.duplicates).toEqual([])
+  })
+
+  it("sets aside a duplicate of an open thread by line or by quote", () => {
+    const threads = [open("T1", { line: 3, quote: "three" }), open("T2", { line: 9, quote: "const nine = 9;" })]
+    const sameLine = found({ line: 3, quote: "something else" })
+    const sameQuote = found({ line: 4, quote: "  const  nine = 9; " })
+    const unique = found({ line: 7, quote: "seven" })
+    const result = applyDeltaPolicy(validated([sameLine, sameQuote, unique]), { mode: "full", covered, open: threads })
+    expect(result.accepted).toEqual([unique])
+    expect(result.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T1", "duplicates open thread T2"])
+    expect(result.rejected).toEqual([])
+  })
+
+  it("passes a fresh review through untouched, keeping what validation rejected", () => {
+    const earlier = { finding: found({ line: 40 }), reason: "line 40 (RIGHT) is not in the diff of a.ts" }
+    const input = { ...validated([found({ line: 5 })]), rejected: [earlier] }
+    const result = applyDeltaPolicy(input, { mode: "fresh", covered, open: [open("T1", { line: 5 })] })
+    expect(result).toEqual({ accepted: input.accepted, rejected: [earlier], duplicates: [] })
+  })
+})
+
+describe("addressedThreads", () => {
+  const recheck = [open("T1"), open("T3")]
+
+  it("resolves only handles from the re-check list, once each", () => {
+    const { resolve, unknown } = addressedThreads(["T1", "T2", "T3", "T1"], recheck)
+    expect(resolve.map((t) => t.handle)).toEqual(["T1", "T3"])
+    expect(unknown).toEqual(["T2"])
+  })
+
+  it("resolves nothing when the model listed no threads", () => {
+    expect(addressedThreads(undefined, recheck)).toEqual({ resolve: [], unknown: [] })
   })
 })

@@ -128,9 +128,12 @@ export function chooseReviewEvent(
   accepted: readonly FindingInput[],
   rejected: readonly Rejected[],
   requestChangesWorkflow: boolean,
+  openBlocking?: number | "unknown",
 ): ReviewEvent {
   if (!requestChangesWorkflow) return "COMMENT"
   if (countBySeverity([...accepted, ...rejected.map((r) => r.finding)]).blocking > 0) return "REQUEST_CHANGES"
+  if (openBlocking === "unknown") return "COMMENT"
+  if ((openBlocking ?? 0) > 0) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
   return "COMMENT"
 }
