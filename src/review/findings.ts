@@ -291,7 +291,7 @@ function commentSizeProblem(finding: FindingInput): string | undefined {
   return `comment longer than ${MAX_COMMENT_CHARS} characters, GitHub's limit`
 }
 
-const SEVERITY_LABEL = {
+export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
   suggestion: "🟡 Suggestion",
   nitpick: "⚪ Nitpick",
