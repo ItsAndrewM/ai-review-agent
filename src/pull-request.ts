@@ -20,7 +20,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { withForcedResubmission, withOutputLimit } from "./models.ts"
+import { reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -57,6 +57,7 @@ import {
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
+import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
 export interface PullRequestKey {
@@ -133,7 +134,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         context,
       )
     },
-    defaults: { model: this.reviewModel(), thinkingLevel: "low" },
+    defaults: { model: this.reviewModel(), thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL) },
   })
   readonly lifecycle = Lifecycle.install(this).use(this.harness)
 
@@ -380,6 +381,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         files: files.length,
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
+        thinkingLevel: this.env.REVIEW_THINKING_LEVEL,
         skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
         build: this.version().id,
@@ -390,9 +392,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (await this.replaced(pr, run)) return
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
-      await this.activateReviewSkill()
+      await this.configureReview()
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
+      logTranscript(pr, "review", result)
       await this.restartGrace(run.deliveryId)
       const source = await this.finishReview(pr, result, run)
       if (source) {
@@ -413,12 +416,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async activateReviewSkill(): Promise<void> {
+  private async configureReview(): Promise<void> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "review")
     const references = await loadReferences(source, skill)
     const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
-    await root.configure({ instructions: renderSkillWithResources(skill, references) }, BACKGROUND_CONTEXT)
+    await root.configure(
+      {
+        instructions: renderSkillWithResources(skill, references),
+        thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
+      },
+      BACKGROUND_CONTEXT,
+    )
   }
 
   private async finishReview(
@@ -460,6 +469,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (await this.replaced(pr, run)) return undefined
     await this.restartGrace(run.deliveryId)
     const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
+    logTranscript(pr, "retry", retry)
     await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"
     const retryRefusal = await this.postRetryText(retry, run)
@@ -749,6 +759,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 const REVIEW_MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
+function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
+  log("review.transcript", {
+    number: pr.number,
+    head: short(pr.head.sha),
+    after,
+    status: result.status,
+    ...transcriptFields(summarizeTranscript(result.messages)),
+  })
+}
+
 function retryOutcome(failure: string | undefined, refusal: string | undefined): RetryOutcome {
   if (failure !== undefined) return { kind: "failed", reason: failure }
   if (refusal !== undefined) return { kind: "refused", refusal }

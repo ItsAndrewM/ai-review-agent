@@ -17,6 +17,9 @@
     // Workers AI model for the review. Kimi K2.7 Code, GLM 5.x and DeepSeek V4
     // need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash run on Free.
     "REVIEW_MODEL": "@cf/openai/gpt-oss-120b",
+    // How hard the review model thinks: off, minimal, low, medium, high, xhigh
+    // or max. Measured against #23 at d1bd6f7 in #34.
+    "REVIEW_THINKING_LEVEL": "low",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",

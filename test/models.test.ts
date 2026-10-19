@@ -8,7 +8,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
-import { withForcedResubmission, withOutputLimit } from "../src/models.ts"
+import { reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "../src/models.ts"
 import { ReviewSubmission } from "../src/review/findings.ts"
 import { answerPrompt, resubmitPrompt } from "../src/review/prompt.ts"
 
@@ -113,5 +113,15 @@ describe("withForcedResubmission", () => {
       posted,
     ])
     expect(options?.samplingParams).toBeUndefined()
+  })
+})
+
+describe("reviewThinkingLevel", () => {
+  it("takes a level pi knows from the REVIEW_THINKING_LEVEL setting", () => {
+    expect(reviewThinkingLevel("medium")).toBe("medium")
+  })
+
+  it("refuses a level pi doesn't know, rather than reviewing at a level nobody chose", () => {
+    expect(() => reviewThinkingLevel("mid")).toThrow('REVIEW_THINKING_LEVEL is "mid"')
   })
 })

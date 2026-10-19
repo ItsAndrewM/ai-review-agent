@@ -1,5 +1,7 @@
-import type { Message, Provider, TranscriptContext } from "@earendil-works/pi-ai"
+import type { Message, ModelThinkingLevel, Provider, TranscriptContext } from "@earendil-works/pi-ai"
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
+import { Type } from "typebox"
+import { Value } from "typebox/value"
 import { ReviewSubmission } from "./review/findings.ts"
 import { isResubmitPrompt } from "./review/prompt.ts"
 
@@ -38,4 +40,21 @@ function awaitsResubmission(context: TranscriptContext): boolean {
 function userText(message: Extract<Message, { role: "user" }>): string {
   if (!Array.isArray(message.content)) return message.content
   return message.content.map((part) => (part.type === "text" ? part.text : "")).join("")
+}
+
+const ThinkingLevelSetting = Type.Union([
+  Type.Literal("off"),
+  Type.Literal("minimal"),
+  Type.Literal("low"),
+  Type.Literal("medium"),
+  Type.Literal("high"),
+  Type.Literal("xhigh"),
+  Type.Literal("max"),
+])
+
+export function reviewThinkingLevel(setting: string): ModelThinkingLevel {
+  if (Value.Check(ThinkingLevelSetting, setting)) return setting
+  throw new Error(
+    `REVIEW_THINKING_LEVEL is "${setting}"; it must be one of off, minimal, low, medium, high, xhigh or max.`,
+  )
 }
