@@ -403,20 +403,37 @@ describe("renderUnpostedSummary", () => {
 
 describe("renderUnpostedNote", () => {
   it("says the review couldn't be posted and keeps the model's prose as the note", () => {
-    const note = renderUnpostedNote({ kind: "prose", text: "The change looks sound." }, undefined)
+    const note = renderUnpostedNote({ kind: "prose", text: "The change looks sound." }, { kind: "unanswered" })
     expect(note).toContain("couldn't be posted")
     expect(note).toContain("The change looks sound.")
   })
 
   it("shows nothing the model wrote unless it was prose, so its JSON stays in the log", () => {
     const submission = { summary: "Changes b.", walkthrough: [], findings: [], verdict: "approve" as const }
-    expect(renderUnpostedNote({ kind: "submission", submission }, undefined)).not.toContain("Changes b.")
+    expect(renderUnpostedNote({ kind: "submission", submission }, { kind: "unanswered" })).not.toContain("Changes b.")
     expect(
-      renderUnpostedNote({ kind: "unfit", problem: "/verdict: must be equal to constant" }, undefined),
+      renderUnpostedNote({ kind: "unfit", problem: "/verdict: must be equal to constant" }, { kind: "unanswered" }),
     ).not.toContain("/verdict")
   })
 
   it("gives the reason asking again failed", () => {
-    expect(renderUnpostedNote({ kind: "prose", text: "" }, "model_error: quota")).toContain("model_error: quota")
+    const note = renderUnpostedNote({ kind: "prose", text: "" }, { kind: "failed", reason: "model_error: quota" })
+    expect(note).toContain("model_error: quota")
+  })
+
+  it("gives the reason the host refused the review the model submitted when asked again", () => {
+    const refusal = "Error: GitHub POST /repos/o/r/pulls/5/reviews: 502"
+    const note = renderUnpostedNote({ kind: "prose", text: "Looks risky." }, { kind: "refused", refusal })
+    expect(note).toContain(`refused the review it submitted when asked again: ${refusal}`)
+  })
+
+  it("keeps a refusal that runs over several lines inside the note's one italic line", () => {
+    const note = renderUnpostedNote(
+      { kind: "prose", text: "" },
+      { kind: "refused", refusal: "Not posted:\n the head moved." },
+    )
+    expect(note).toBe(
+      "_The review couldn't be posted: the model didn't submit one that could be, and the host refused the review it submitted when asked again: Not posted: the head moved._",
+    )
   })
 })
