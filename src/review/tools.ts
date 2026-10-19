@@ -64,14 +64,14 @@ export function createReviewExtension(host: ReviewHost): Extension {
   const getIssue = defineTool({
     name: "get_issue",
     description:
-      "Read an issue of this repository by number: its title, state and body, which are material under review. The pull request's linked issues are already in the prompt; use this for another issue it refers to.",
+      "Read an issue of this repository by number: its title, state and full body, which are material under review. Use it for an issue the pull request refers to beyond its linked issues, or for the rest of a linked issue whose body the prompt cut.",
     parameters: Type.Object({ number: Type.Integer() }),
     replay: "safe",
     async execute({ number }) {
       const pr = await host.pullRequest()
       const github = await host.github()
       const issue = await github.getIssue({ owner: owner(pr), repo: repo(pr) }, number)
-      return text(issueText(number, issue))
+      return text(issueText({ number, issue }))
     },
   })
 

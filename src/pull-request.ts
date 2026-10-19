@@ -49,7 +49,7 @@ import {
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
-import { linkedIssueNumbers, linkedIssuesFrom, type LinkedIssue } from "./review/linked-issues.ts"
+import { linkedIssueNumbers, linkedIssuesFrom, readLinkedIssues, type LinkedIssue } from "./review/linked-issues.ts"
 import { answerPrompt, problemsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
@@ -433,8 +433,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async linkedIssues(pr: PullRequestInfo): Promise<LinkedIssue[]> {
     const key = await this.key()
     const github = await this.github()
-    const numbers = linkedIssueNumbers(pr.body, pr.head.ref)
-    return linkedIssuesFrom(await Promise.all(numbers.map((number) => github.getIssue(key, number))))
+    const reads = await readLinkedIssues(
+      linkedIssueNumbers(pr.body, pr.head.ref),
+      (number) => github.getIssue(key, number),
+      (issue, error) => logError("review.issue_unreadable", { number: pr.number, issue, error }),
+    )
+    return linkedIssuesFrom(reads)
   }
 
   private async recordLinkedIssues(deliveryId: string, issues: readonly LinkedIssue[]): Promise<void> {
