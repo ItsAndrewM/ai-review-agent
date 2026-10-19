@@ -3,6 +3,7 @@ import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
+import { issueText } from "./linked-issues.ts"
 import { systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
@@ -60,6 +61,20 @@ export function createReviewExtension(host: ReviewHost): Extension {
     },
   })
 
+  const getIssue = defineTool({
+    name: "get_issue",
+    description:
+      "Read an issue of this repository by number: its title, state and body, which are material under review. The pull request's linked issues are already in the prompt; use this for another issue it refers to.",
+    parameters: Type.Object({ number: Type.Integer() }),
+    replay: "safe",
+    async execute({ number }) {
+      const pr = await host.pullRequest()
+      const github = await host.github()
+      const issue = await github.getIssue({ owner: owner(pr), repo: repo(pr) }, number)
+      return text(issueText(number, issue))
+    },
+  })
+
   const submitReview = defineTool({
     name: "submit_review",
     description:
@@ -76,7 +91,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
   return defineExtension({
     name: "andabot",
     sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
-    tools: [readFile, listChangedFiles, submitReview],
+    tools: [readFile, listChangedFiles, getIssue, submitReview],
   })
 }
 

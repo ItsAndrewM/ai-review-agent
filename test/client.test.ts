@@ -88,3 +88,44 @@ describe("GitHubClient check runs", () => {
     )
   })
 })
+
+const respond = (status: number, body: string) => async () => new Response(body, { status })
+
+describe("getIssue", () => {
+  it("parses an issue, returns undefined for a missing one, and keeps a pull request's marker", async () => {
+    const found = new GitHubClient(
+      "t",
+      "https://api",
+      respond(200, JSON.stringify({ number: 4, title: "T", body: null, state: "open" })),
+    )
+    expect(await found.getIssue({ owner: "o", repo: "r" }, 4)).toEqual({
+      number: 4,
+      title: "T",
+      body: null,
+      state: "open",
+    })
+    const missing = new GitHubClient("t", "https://api", respond(404, "{}"))
+    expect(await missing.getIssue({ owner: "o", repo: "r" }, 4)).toBeUndefined()
+    const pr = new GitHubClient(
+      "t",
+      "https://api",
+      respond(200, JSON.stringify({ number: 5, title: "P", body: "", state: "open", pull_request: {} })),
+    )
+    expect((await pr.getIssue({ owner: "o", repo: "r" }, 5))?.pull_request).toEqual({})
+  })
+
+  it("throws on any other refusal, as the other calls do", async () => {
+    const failing = new GitHubClient("t", "https://api", respond(500, "boom"))
+    await expect(failing.getIssue({ owner: "o", repo: "r" }, 4)).rejects.toThrow(/GitHub 500 .*boom/)
+  })
+
+  it("calls fetch with no receiver, since workerd's global fetch refuses the client as its this", async () => {
+    function workerdFetch(this: void): Promise<Response> {
+      if (this !== undefined) throw new TypeError("Illegal invocation")
+      return Promise.resolve(new Response("{}", { status: 404 }))
+    }
+    expect(
+      await new GitHubClient("t", "https://api", workerdFetch).getIssue({ owner: "o", repo: "r" }, 4),
+    ).toBeUndefined()
+  })
+})

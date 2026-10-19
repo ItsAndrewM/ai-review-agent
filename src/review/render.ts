@@ -27,6 +27,7 @@ export function renderSummaryComment(input: {
   droppedCount: number
   model?: string | undefined
   skillsFingerprint?: string | undefined
+  linkedIssues: readonly number[]
 }): string {
   const counts = countBySeverity(input.accepted)
   const { door, blast_radius } = input.submission.merge_danger
@@ -60,6 +61,7 @@ export function renderSummaryComment(input: {
     dropped,
     "",
     ...reviewedBy(input.model, input.skillsFingerprint),
+    linkedIssuesLine(input.linkedIssues),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
 }
@@ -67,6 +69,11 @@ export function renderSummaryComment(input: {
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+}
+
+function linkedIssuesLine(numbers: readonly number[]): string {
+  const listed = numbers.length === 0 ? "none" : numbers.map((number) => `#${number}`).join(", ")
+  return `<sub>Linked issues: ${listed}</sub>`
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {

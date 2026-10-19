@@ -9,6 +9,7 @@ export interface PendingReview {
   model?: string
   fingerprint?: string
   rejectionsReturned?: boolean
+  linkedIssues?: number[]
 }
 
 export const StoredPending = Type.Object({
@@ -20,6 +21,7 @@ export const StoredPending = Type.Object({
   model: Type.Optional(Type.String()),
   fingerprint: Type.Optional(Type.String()),
   rejectionsReturned: Type.Optional(Type.Boolean()),
+  linkedIssues: Type.Optional(Type.Array(Type.Integer())),
 })
 
 export type StoredPending = Static<typeof StoredPending>

@@ -49,6 +49,7 @@ import {
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
+import { linkedIssueNumbers, linkedIssuesFrom, type LinkedIssue } from "./review/linked-issues.ts"
 import { answerPrompt, problemsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
@@ -292,6 +293,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       droppedCount: rejected.length,
       model: attribution?.model,
       skillsFingerprint: attribution?.fingerprint,
+      linkedIssues: pending.linkedIssues ?? [],
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
@@ -428,14 +430,30 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return files
   }
 
+  private async linkedIssues(pr: PullRequestInfo): Promise<LinkedIssue[]> {
+    const key = await this.key()
+    const github = await this.github()
+    const numbers = linkedIssueNumbers(pr.body, pr.head.ref)
+    return linkedIssuesFrom(await Promise.all(numbers.map((number) => github.getIssue(key, number))))
+  }
+
+  private async recordLinkedIssues(deliveryId: string, issues: readonly LinkedIssue[]): Promise<void> {
+    const pending = await this.pendingFor(deliveryId)
+    const linkedIssues = issues.map(({ number }) => number)
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, linkedIssues })
+  }
+
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     try {
       const files = await this.openRun(pr, run)
-      const prompt = reviewPrompt(pr, files, incoming.full)
+      const issues = await this.linkedIssues(pr)
+      await this.recordLinkedIssues(run.deliveryId, issues)
+      const prompt = reviewPrompt(pr, files, incoming.full, issues)
       log("review.start", {
         number: pr.number,
         head: short(pr.head.sha),
         files: files.length,
+        linkedIssues: issues.length,
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
         thinkingLevel: this.env.REVIEW_THINKING_LEVEL,

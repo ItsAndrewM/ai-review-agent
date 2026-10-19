@@ -27,6 +27,16 @@ export const IssueComment = Type.Object({ id: Type.Integer(), body: Type.Optiona
 
 export type IssueComment = Static<typeof IssueComment>
 
+export const Issue = Type.Object({
+  number: Type.Integer(),
+  title: Type.String(),
+  body: Type.Union([Type.String(), Type.Null()]),
+  state: Type.String(),
+  pull_request: Type.Optional(Type.Object({})),
+})
+
+export type Issue = Static<typeof Issue>
+
 const ChangedFiles = Type.Array(ChangedFile)
 const IssueComments = Type.Array(IssueComment)
 const CreatedReview = Type.Object({ id: Type.Integer() })
@@ -82,6 +92,7 @@ export class GitHubClient {
   constructor(
     private readonly token: string,
     private readonly apiBase = "https://api.github.com",
+    private readonly fetchImpl: typeof fetch = fetch,
   ) {}
 
   async getPullRequest(ref: RepoRef, number: number): Promise<PullRequestInfo> {
@@ -109,6 +120,13 @@ export class GitHubClient {
     if (response.status === 404) return undefined
     if (!response.ok) throw await this.error(response)
     return response.text()
+  }
+
+  async getIssue(ref: RepoRef, number: number): Promise<Issue | undefined> {
+    const path = `/repos/${ref.owner}/${ref.repo}/issues/${number}`
+    const response = await this.request(path)
+    if (response.status === 404) return undefined
+    return this.parse(Issue, path, response)
   }
 
   async listIssueComments(ref: RepoRef, number: number): Promise<IssueComment[]> {
@@ -174,7 +192,14 @@ export class GitHubClient {
     path: string,
     init: RequestInit = {},
   ): Promise<Static<Schema>> {
-    const response = await this.request(path, init)
+    return this.parse(schema, path, await this.request(path, init))
+  }
+
+  private async parse<Schema extends TSchema>(
+    schema: Schema,
+    path: string,
+    response: Response,
+  ): Promise<Static<Schema>> {
     if (!response.ok) throw await this.error(response)
     const body: unknown = await response.json()
     if (Value.Check(schema, body)) return body
@@ -189,7 +214,8 @@ export class GitHubClient {
     headers.set("x-github-api-version", "2022-11-28")
     headers.set("user-agent", "andabot")
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json")
-    return fetch(`${this.apiBase}${path}`, { ...init, headers })
+    const { fetchImpl } = this
+    return fetchImpl(`${this.apiBase}${path}`, { ...init, headers })
   }
 
   private async error(response: Response): Promise<Error> {

@@ -65,6 +65,13 @@ describe("migratePending", () => {
     expect(migratePending(flagged)).toEqual(flagged)
   })
 
+  it("keeps the linked issues the prompt was built with, which the summary footer reads back", () => {
+    const linked: PendingReview = { ...pending, linkedIssues: [12, 14] }
+    expect(Value.Check(StoredPending, linked)).toBe(true)
+    expect(migratePending(linked)).toEqual(linked)
+    expect(Value.Check(StoredPending, { ...pending, linkedIssues: ["#12"] })).toBe(false)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)

@@ -481,7 +481,7 @@ describe("renderReviewBody", () => {
 })
 
 describe("renderSummaryComment", () => {
-  const summaryWith = (attribution: { model?: string; skillsFingerprint?: string }) =>
+  const summaryWith = (attribution: { model?: string; skillsFingerprint?: string; linkedIssues?: number[] }) =>
     renderSummaryComment({
       botLogin: "andabot",
       headSha: "0123456789abcdef",
@@ -495,6 +495,7 @@ describe("renderSummaryComment", () => {
       },
       accepted: [finding()],
       droppedCount: 1,
+      linkedIssues: [],
       ...attribution,
     })
 
@@ -522,6 +523,7 @@ describe("renderSummaryComment", () => {
       submission: { ...base, merge_danger: { door: "one-way", blast_radius: "billing\n  and the\tinvoices table\n" } },
       accepted: [],
       droppedCount: 0,
+      linkedIssues: [],
     })
     expect(text).toContain("**Merge danger:** one-way door · billing and the invoices table\n\n### Summary")
   })
@@ -529,7 +531,18 @@ describe("renderSummaryComment", () => {
   it("leaves the skills claim out when the build that ran the review recorded no model or fingerprint", () => {
     expect(summaryWith({})).not.toContain("Reviewed by")
     expect(summaryWith({ model: "@cf/openai/gpt-oss-120b" })).not.toContain("Reviewed by")
-    expect(summaryWith({})).toContain("even after a retry.</sub>\n\n<sub>Commands: `@andabot review`")
+    expect(summaryWith({})).toContain(
+      "even after a retry.</sub>\n\n<sub>Linked issues: none</sub>\n<sub>Commands: `@andabot review`",
+    )
+  })
+
+  it("names the linked issues the review read on the line after the skills claim", () => {
+    const text = summaryWith({
+      model: "@cf/openai/gpt-oss-120b",
+      skillsFingerprint: "89abcdef01234567",
+      linkedIssues: [12, 14],
+    })
+    expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: #12, #14</sub>\n<sub>Commands:")
   })
 })
 
