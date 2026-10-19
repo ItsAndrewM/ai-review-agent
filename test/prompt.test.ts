@@ -23,7 +23,16 @@ describe("systemPrompt", () => {
 describe("rejectionsText", () => {
   it("returns every rejected finding with its anchor, title and reason, not only the first few", () => {
     const rejected = [1, 2, 3, 4].map((line) => ({
-      finding: { path: "src/x.ts", line, quote: "q", severity: "blocking" as const, title: `t${line}`, body: "b" },
+      finding: {
+        path: "src/x.ts",
+        line,
+        quote: "q",
+        basis_kind: "defect" as const,
+        basis: "x",
+        severity: "blocking" as const,
+        title: `t${line}`,
+        body: "b",
+      },
       reason: `reason ${line}`,
     }))
     const text = rejectionsText(rejected)

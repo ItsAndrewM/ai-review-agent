@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { commentableLines, isGenerated, renderPatches } from "../src/github/diff.ts"
+import { commentableLines, isGenerated, renderPatches, requiresWalkthrough } from "../src/github/diff.ts"
 
 const patch = [
   "@@ -1,4 +1,5 @@",
@@ -106,5 +106,16 @@ describe("isGenerated", () => {
       expect(isGenerated(path)).toBe(true)
     for (const path of ["src/index.ts", "package.json", "docs/lock.md", "distribution.ts"])
       expect(isGenerated(path)).toBe(false)
+  })
+})
+
+describe("requiresWalkthrough", () => {
+  it("asks for a row on a source file and on a binary file with no patch, not on a lock file", () => {
+    const source = { filename: "src/index.ts", status: "modified", additions: 1, deletions: 0, patch }
+    const binary = { filename: "logo.png", status: "added", additions: 0, deletions: 0 }
+    const lock = { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0, patch: "+x" }
+    expect(requiresWalkthrough(source)).toBe(true)
+    expect(requiresWalkthrough(binary)).toBe(true)
+    expect(requiresWalkthrough(lock)).toBe(false)
   })
 })

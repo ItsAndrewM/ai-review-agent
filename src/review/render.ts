@@ -29,6 +29,7 @@ export function renderSummaryComment(input: {
   skillsFingerprint?: string | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
+  const { door, blast_radius } = input.submission.merge_danger
   const walkthrough =
     input.submission.walkthrough.length === 0
       ? "_No per-file notes._"
@@ -46,6 +47,8 @@ export function renderSummaryComment(input: {
     `## ${input.botLogin} review`,
     "",
     `**Head:** \`${input.headSha.slice(0, 7)}\` · **Verdict:** ${VERDICT_LABEL[input.event]} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`,
+    "",
+    `**Merge danger:** ${door} door · ${blast_radius}`,
     "",
     "### Summary",
     "",

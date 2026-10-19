@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { commentableLines } from "../src/github/diff.ts"
 import {
   MAX_FINDINGS,
+  missingWalkthrough,
   parseWrittenReview,
   toReviewComment,
   validateFindings,
@@ -20,11 +21,21 @@ import {
 const patch = ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " export { a, b };"].join("\n")
 const commentable = new Map([["src/x.ts", commentableLines(patch)]])
 
+const base: ReviewSubmissionInput = {
+  summary: "s",
+  walkthrough: [],
+  findings: [],
+  verdict: "approve",
+  merge_danger: { door: "two-way", blast_radius: "one module" },
+}
+
 function finding(overrides: Partial<FindingInput> = {}): FindingInput {
   return {
     path: "src/x.ts",
     line: 2,
     quote: "const b = 3;",
+    basis_kind: "defect",
+    basis: "with an empty cart the total is NaN",
     severity: "blocking",
     title: "b changed",
     body: "Why did b change?",
@@ -134,6 +145,8 @@ describe("quote verification", () => {
         path: "src/x.ts",
         line: 2,
         quote: "const b = 3;",
+        basis_kind: "defect",
+        basis: "with an empty cart the total is NaN",
         severity: "blocking",
         title: "b changed",
         body: "Why did b change?",
@@ -243,12 +256,75 @@ describe("suggestions", () => {
   })
 })
 
+describe("basis", () => {
+  it("rejects an empty basis and a blocking standard or test finding", () => {
+    const result = validateFindings(
+      [
+        finding({ basis: "  " }),
+        finding({ basis_kind: "standard", basis: "Feature Envy" }),
+        finding({ basis_kind: "test", basis: "checkout has no test" }),
+      ],
+      commentable,
+    )
+    expect(result.rejected.map((r) => r.reason)).toEqual([
+      "basis is required",
+      "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
+      "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
+    ])
+  })
+
+  it("accepts a blocking defect or spec finding, and a standard or test finding graded below blocking", () => {
+    const result = validateFindings(
+      [
+        finding({ basis_kind: "spec", basis: "#7: totals are never NaN" }),
+        finding({
+          line: 1,
+          quote: "const a = 1;",
+          severity: "suggestion",
+          basis_kind: "standard",
+          basis: "Feature Envy",
+        }),
+        finding({
+          line: 3,
+          quote: "export { a, b };",
+          severity: "nitpick",
+          basis_kind: "test",
+          basis: "b has no test",
+        }),
+      ],
+      commentable,
+    )
+    expect(result.rejected).toEqual([])
+    expect(result.accepted).toHaveLength(3)
+  })
+
+  it("renders the basis after the body and before the suggestion", () => {
+    const comment = toReviewComment(finding({ suggestion: "const b = 4;" }))
+    expect(comment.body).toBe(
+      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis: with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
+    )
+  })
+})
+
+describe("missingWalkthrough", () => {
+  it("names source and binary files without a row and ignores generated ones", () => {
+    const files = [
+      { filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch },
+      { filename: "logo.png", status: "added", additions: 0, deletions: 0 },
+      { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
+    ]
+    const submission = { ...base, walkthrough: [{ path: "src/x.ts", summary: "s" }] }
+    expect(missingWalkthrough(submission, files)).toEqual(["logo.png"])
+  })
+})
+
 describe("parseWrittenReview", () => {
   const submitted = {
     summary: "Changes b from 2 to 3.",
     walkthrough: [{ path: "src/x.ts", summary: "b is now 3." }],
     findings: [finding({ severity: "suggestion", body: "Name it:\n```ts\nconst three = 3\n```" })],
     verdict: "comment",
+    merge_danger: { door: "two-way", blast_radius: "one module" },
   } satisfies ReviewSubmissionInput
   const submittedJson = JSON.stringify(submitted, null, 2)
 
@@ -280,11 +356,21 @@ describe("parseWrittenReview", () => {
   })
 
   it('holds back an approval with no walkthrough, the shell gpt-oss-120b put around "Review submitted." when held to JSON', () => {
-    const shell = { summary: "Review submitted.", walkthrough: [], findings: [], verdict: "approve" }
+    const shell = { ...base, summary: "Review submitted." }
     expect(parseWrittenReview(JSON.stringify(shell))).toEqual({
       kind: "unfit",
       problem: expect.stringContaining("/walkthrough"),
     })
+  })
+
+  it("holds back a submission without a merge danger", () => {
+    const written = parseWrittenReview(JSON.stringify({ ...submitted, merge_danger: undefined }))
+    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("merge_danger") })
+  })
+
+  it("holds back a finding without a basis", () => {
+    const written = parseWrittenReview(JSON.stringify({ ...submitted, findings: [{ ...finding(), basis: undefined }] }))
+    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("basis") })
   })
 
   it("holds back JSON the output limit cut off, rather than taking it for prose", () => {
@@ -296,22 +382,23 @@ describe("toReviewComment", () => {
   it("formats severity, title, body and a suggestion block with a range", () => {
     const comment = toReviewComment(finding({ start_line: 1, line: 2, suggestion: "const b = 4;\n" }))
     expect(comment).toMatchObject({ path: "src/x.ts", line: 2, side: "RIGHT", start_line: 1, start_side: "RIGHT" })
-    expect(comment.body).toBe("**🔴 Blocking: b changed**\n\nWhy did b change?\n\n```suggestion\nconst b = 4;\n```")
+    expect(comment.body).toBe(
+      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis: with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
+    )
   })
 })
 
 describe("chooseReviewEvent", () => {
-  const submission = { summary: "s", walkthrough: [], findings: [], verdict: "approve" as const }
   it("requests changes on a blocking finding, approves a clean approve verdict, else comments", () => {
-    expect(chooseReviewEvent(submission, [finding()], [], true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(submission, [finding({ severity: "nitpick" })], [], true)).toBe("APPROVE")
-    expect(chooseReviewEvent({ ...submission, verdict: "comment" }, [], [], true)).toBe("COMMENT")
-    expect(chooseReviewEvent(submission, [finding()], [], false)).toBe("COMMENT")
+    expect(chooseReviewEvent(base, [finding()], [], true)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(base, [finding({ severity: "nitpick" })], [], true)).toBe("APPROVE")
+    expect(chooseReviewEvent({ ...base, verdict: "comment" }, [], [], true)).toBe("COMMENT")
+    expect(chooseReviewEvent(base, [finding()], [], false)).toBe("COMMENT")
   })
 
   it("never approves while a blocking finding stands rejected, so a mis-anchored one still blocks", () => {
-    expect(chooseReviewEvent(submission, [], [{ finding: finding(), reason: "r" }], true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(submission, [], [{ finding: finding({ severity: "nitpick" }), reason: "r" }], true)).toBe(
+    expect(chooseReviewEvent(base, [], [{ finding: finding(), reason: "r" }], true)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(base, [], [{ finding: finding({ severity: "nitpick" }), reason: "r" }], true)).toBe(
       "APPROVE",
     )
   })
@@ -366,6 +453,7 @@ describe("renderSummaryComment", () => {
         walkthrough: [{ path: "src/x.ts", summary: "b is | now 3" }],
         findings: [],
         verdict: "request_changes",
+        merge_danger: { door: "two-way", blast_radius: "one module" },
       },
       accepted: [finding()],
       droppedCount: 1,
@@ -378,7 +466,12 @@ describe("renderSummaryComment", () => {
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
     expect(text).toContain("1 finding(s) were dropped")
+    expect(text).toContain("**Merge danger:** two-way door · one module")
     expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@89abcdef`.</sub>")
+  })
+
+  it("puts the merge danger on the line under the verdict, before the summary", () => {
+    expect(summaryWith({})).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
   })
 
   it("leaves the skills claim out when the build that ran the review recorded no model or fingerprint", () => {
@@ -409,7 +502,7 @@ describe("renderUnpostedNote", () => {
   })
 
   it("shows nothing the model wrote unless it was prose, so its JSON stays in the log", () => {
-    const submission = { summary: "Changes b.", walkthrough: [], findings: [], verdict: "approve" as const }
+    const submission = { ...base, summary: "Changes b." }
     expect(renderUnpostedNote({ kind: "submission", submission }, { kind: "unanswered" })).not.toContain("Changes b.")
     expect(
       renderUnpostedNote({ kind: "unfit", problem: "/verdict: must be equal to constant" }, { kind: "unanswered" }),
