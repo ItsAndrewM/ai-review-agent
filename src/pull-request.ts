@@ -20,7 +20,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
+import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -122,7 +122,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider)))
+      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider, this.outputLimit())))
       return Harness.open(
         storage,
         {
@@ -142,7 +142,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
 
   reviewModel() {
-    return this.ai(this.env.REVIEW_MODEL, { maxTokens: REVIEW_MAX_OUTPUT_TOKENS })
+    return this.ai(this.env.REVIEW_MODEL)
+  }
+
+  private outputLimit(): number {
+    return outputLimitOf(this.env.MAX_OUTPUT_TOKENS)
   }
 
   private version(): Version {
@@ -382,6 +386,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
         thinkingLevel: this.env.REVIEW_THINKING_LEVEL,
+        maxOutputTokens: this.outputLimit(),
         skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
         build: this.version().id,
@@ -756,7 +761,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 }
 
-const REVIEW_MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
 function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
