@@ -51,7 +51,7 @@ function missingRowsText(missing: readonly string[]): string {
   return [
     "Files without a walkthrough row:",
     ...missing.map((path) => `- ${path}`),
-    "Add one row for each of them, then call submit_review again with the whole review.",
+    "Add one row for each of them, then call submit_review again with the whole review. A review with rows still missing after this is not posted.",
   ].join("\n")
 }
 

@@ -44,6 +44,7 @@ import {
 import {
   decideFlight,
   migratePending,
+  runStanding,
   StoredPending,
   type FlightDecision,
   type PendingReview,
@@ -149,6 +150,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   #pr: PullRequestInfo | undefined
   #files: ChangedFile[] | undefined
+  #incompleteDelivery: string | undefined
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -266,6 +268,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const note = `_The review did not complete: no walkthrough row for ${paths}._`
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
     await this.failOwnRun(pending.deliveryId, note)
+    this.#incompleteDelivery = pending.deliveryId
     await this.releasePending(pending.deliveryId)
     return { text: `Not posted: no walkthrough row for ${paths}. The review ends here.`, done: true }
   }
@@ -508,10 +511,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       })
     }
     if (written.kind !== "submission") return this.askAgain(pr, written, undefined, run)
-    const refusal = await this.postReview(written.submission, run.deliveryId).then(({ text }) => text, errorText)
+    const outcome = await this.postReview(written.submission, run.deliveryId).catch((cause) => ({
+      text: errorText(cause),
+      done: false,
+    }))
     if (await this.isPosted(pr)) return "text"
-    log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal })
-    return this.askAgain(pr, written, refusal, run)
+    if (outcome.done) return undefined
+    log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal: outcome.text })
+    return this.askAgain(pr, written, outcome.text, run)
   }
 
   private async askAgain(
@@ -547,9 +554,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async replaced(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
-    if (await this.ownsPending(run.deliveryId)) return false
-    log("review.superseded", { number: pr.number, head: short(pr.head.sha), delivery: run.deliveryId })
-    return true
+    const standing = runStanding(await this.readPending(), run.deliveryId, this.#incompleteDelivery)
+    if (standing === "replaced") {
+      log("review.superseded", { number: pr.number, head: short(pr.head.sha), delivery: run.deliveryId })
+    }
+    return standing !== "in_flight"
   }
 
   private async headMoved(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {

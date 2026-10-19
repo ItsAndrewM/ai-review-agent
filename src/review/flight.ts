@@ -39,3 +39,14 @@ export function decideFlight(pending: PendingReview | undefined, headSha: string
   if (live) return { kind: "skip", reason: "in_progress" }
   return { kind: "replace", previous: pending, because: "dead" }
 }
+
+export type RunStanding = "in_flight" | "ended" | "replaced"
+
+export function runStanding(
+  pending: PendingReview | undefined,
+  deliveryId: string,
+  endedDelivery: string | undefined,
+): RunStanding {
+  if (pending?.deliveryId === deliveryId) return "in_flight"
+  return endedDelivery === deliveryId ? "ended" : "replaced"
+}

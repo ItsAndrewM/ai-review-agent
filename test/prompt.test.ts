@@ -58,7 +58,7 @@ describe("problemsText", () => {
     },
   ]
   const missingRows =
-    "Files without a walkthrough row:\n- logo.png\n- src/b.ts\nAdd one row for each of them, then call submit_review again with the whole review."
+    "Files without a walkthrough row:\n- logo.png\n- src/b.ts\nAdd one row for each of them, then call submit_review again with the whole review. A review with rows still missing after this is not posted."
 
   it("lists every file without a walkthrough row and asks for one row each", () => {
     expect(problemsText([], ["logo.png", "src/b.ts"])).toBe(missingRows)

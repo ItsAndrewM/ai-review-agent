@@ -1,6 +1,6 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { decideFlight, migratePending, StoredPending, type PendingReview } from "../src/review/flight.ts"
+import { decideFlight, migratePending, runStanding, StoredPending, type PendingReview } from "../src/review/flight.ts"
 
 const pending: PendingReview = {
   headSha: "aaa",
@@ -26,6 +26,24 @@ describe("decideFlight", () => {
 
   it("replaces a review of the same head that the harness no longer runs as dead", () => {
     expect(decideFlight(pending, "aaa", false)).toEqual({ kind: "replace", previous: pending, because: "dead" })
+  })
+})
+
+describe("runStanding", () => {
+  it("is in flight while its delivery holds the pending, even one an earlier run under that id ended, as when GitHub redelivers the event", () => {
+    expect(runStanding(pending, "d-1", undefined)).toBe("in_flight")
+    expect(runStanding(pending, "d-1", "d-1")).toBe("in_flight")
+  })
+
+  it("is replaced when another delivery holds the pending or none does, since a replacer deletes the record before it writes its own", () => {
+    expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", undefined)).toBe("replaced")
+    expect(runStanding(undefined, "d-1", undefined)).toBe("replaced")
+    expect(runStanding(undefined, "d-1", "d-0")).toBe("replaced")
+  })
+
+  it("is ended once its own review ended without posting, even after another delivery takes the pending", () => {
+    expect(runStanding(undefined, "d-1", "d-1")).toBe("ended")
+    expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", "d-1")).toBe("ended")
   })
 })
 
