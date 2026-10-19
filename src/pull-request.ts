@@ -120,7 +120,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withOutputLimit(this.ai.provider))
+      models.setProvider(withOutputLimit(this.ai.provider, MAX_OUTPUT_TOKENS))
       return Harness.open(
         storage,
         {
@@ -140,7 +140,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
 
   reviewModel() {
-    return this.ai(this.env.REVIEW_MODEL, { maxTokens: REVIEW_MAX_OUTPUT_TOKENS })
+    return this.ai(this.env.REVIEW_MODEL)
   }
 
   private version(): Version {
@@ -730,7 +730,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 }
 
-const REVIEW_MAX_OUTPUT_TOKENS = 16_000
+const MAX_OUTPUT_TOKENS = 16_000
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
