@@ -70,7 +70,7 @@ export const ReviewSubmission = Type.Object({
       door: Type.Union([Type.Literal("one-way"), Type.Literal("two-way")], {
         description: "one-way when reverting the pull request cannot undo its effects, two-way when a revert can.",
       }),
-      blast_radius: Type.String({ description: "One line: who or what breaks if the change is wrong." }),
+      blast_radius: Type.String({ minLength: 1, description: "One line: who or what breaks if the change is wrong." }),
     },
     { description: "How hard the change is to walk back, and how far a failure reaches." },
   ),
@@ -323,8 +323,12 @@ function commentSizeProblem(finding: FindingInput): string | undefined {
 }
 
 export function missingWalkthrough(submission: ReviewSubmissionInput, files: readonly ChangedFile[]): string[] {
-  const covered = new Set(submission.walkthrough.map((row) => row.path))
+  const covered = new Set(submission.walkthrough.map((row) => rowPath(row.path)))
   return files.filter((file) => requiresWalkthrough(file) && !covered.has(file.filename)).map((file) => file.filename)
+}
+
+function rowPath(path: string): string {
+  return path.trim().replace(/^\.\//, "")
 }
 
 const SEVERITY_LABEL = {

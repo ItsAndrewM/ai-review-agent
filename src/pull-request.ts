@@ -32,9 +32,12 @@ import {
 } from "./review/check.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
+  missingWalkthrough,
   parseWrittenReview,
   toReviewComment,
   validateFindings,
+  type FindingInput,
+  type Rejected,
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
@@ -45,7 +48,7 @@ import {
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
-import { answerPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import { answerPrompt, problemsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
   renderReviewBody,
@@ -56,7 +59,7 @@ import {
   type RetryOutcome,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
-import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
+import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -100,6 +103,12 @@ interface PostedReview {
 interface Attribution {
   model: string
   fingerprint: string
+}
+
+interface CheckedSubmission {
+  accepted: FindingInput[]
+  rejected: Rejected[]
+  missing: string[]
 }
 
 interface ReviewRun {
@@ -191,31 +200,49 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.#files
   }
 
-  async submitReview(submission: ReviewSubmissionInput): Promise<string> {
+  async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
     const pending = await this.readPending()
-    if (!pending) return "Nothing to post: no review is pending. Answer in text instead."
-    if (!(await this.callerIsReviewInFlight(pending))) return NOT_IN_FLIGHT_REFUSAL
+    if (!pending) return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
+    if (!(await this.callerIsReviewInFlight(pending))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
     return this.postReview(submission, pending.deliveryId)
   }
 
-  private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<string> {
+  private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
     const pending = await this.pendingFor(deliveryId)
-    if (!pending) return NOT_IN_FLIGHT_REFUSAL
+    if (!pending) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
     const posted = await this.ctx.storage.get<PostedReview>(`posted:${pending.headSha}`)
     if (posted) {
       await this.completeAsPostedEarlier(deliveryId, posted)
-      return `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`
+      return { text: `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`, done: true }
     }
 
     const pr = await this.freshPullRequest()
     if (pr.head.sha !== pending.headSha) {
-      return `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`
+      return {
+        text: `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`,
+        done: false,
+      }
     }
+    const checked = await this.checkSubmission(submission, pr, pending)
+    if (pending.rejectionsReturned !== true && (checked.rejected.length > 0 || checked.missing.length > 0)) {
+      await this.markRejectionsReturned(pending.deliveryId)
+      return { text: problemsText(checked.rejected, checked.missing), done: false }
+    }
+    if (checked.missing.length > 0) return this.endIncomplete(pr, pending, checked.missing)
+    return this.publishReview(submission, pr, pending, checked)
+  }
+
+  private async checkSubmission(
+    submission: ReviewSubmissionInput,
+    pr: PullRequestInfo,
+    pending: PendingReview,
+  ): Promise<CheckedSubmission> {
     const files = await this.changedFiles()
     const { accepted, rejected, relocated, suggestionsDropped } = validateFindings(
       submission.findings,
       indexCommentableLines(files),
     )
+    const missing = missingWalkthrough(submission, files)
     log("review.findings", {
       number: pr.number,
       head: short(pr.head.sha),
@@ -223,12 +250,32 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       relocated,
       suggestionsDropped,
       rejected: rejected.length,
+      missingRows: missing.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    if (rejected.length > 0 && pending.rejectionsReturned !== true) {
-      await this.markRejectionsReturned(pending.deliveryId)
-      return rejectionsText(rejected)
-    }
+    return { accepted, rejected, missing }
+  }
+
+  private async endIncomplete(
+    pr: PullRequestInfo,
+    pending: PendingReview,
+    missing: readonly string[],
+  ): Promise<SubmitOutcome> {
+    const paths = missing.join(", ")
+    log("review.incomplete", { number: pr.number, head: short(pr.head.sha), missing: missing.length })
+    const note = `_The review did not complete: no walkthrough row for ${paths}._`
+    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+    await this.failOwnRun(pending.deliveryId, note)
+    await this.releasePending(pending.deliveryId)
+    return { text: `Not posted: no walkthrough row for ${paths}. The review ends here.`, done: true }
+  }
+
+  private async publishReview(
+    submission: ReviewSubmissionInput,
+    pr: PullRequestInfo,
+    pending: PendingReview,
+    { accepted, rejected }: CheckedSubmission,
+  ): Promise<SubmitOutcome> {
     const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
     const key = await this.key()
     const github = await this.github()
@@ -263,7 +310,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.releasePending(pending.deliveryId)
     const dropped =
       rejected.length > 0 ? ` ${rejected.length} finding(s) that still failed the checks were dropped.` : ""
-    return `Posted review ${review.id} (${event}) with ${accepted.length} inline comment(s).${dropped}`
+    return {
+      text: `Posted review ${review.id} (${event}) with ${accepted.length} inline comment(s).${dropped}`,
+      done: true,
+    }
   }
 
   private async markRejectionsReturned(deliveryId: string): Promise<void> {
@@ -458,7 +508,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       })
     }
     if (written.kind !== "submission") return this.askAgain(pr, written, undefined, run)
-    const refusal = await this.postReview(written.submission, run.deliveryId).catch(errorText)
+    const refusal = await this.postReview(written.submission, run.deliveryId).then(({ text }) => text, errorText)
     if (await this.isPosted(pr)) return "text"
     log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal })
     return this.askAgain(pr, written, refusal, run)
@@ -490,7 +540,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const written = parseWrittenReview(retry.text ?? "")
     if (written.kind !== "submission") return undefined
     await this.markRejectionsReturned(run.deliveryId)
-    return this.postReview(written.submission, run.deliveryId).catch(errorText)
+    return this.postReview(written.submission, run.deliveryId).then(
+      ({ text, done }) => (done ? undefined : text),
+      errorText,
+    )
   }
 
   private async replaced(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {

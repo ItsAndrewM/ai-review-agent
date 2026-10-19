@@ -316,6 +316,12 @@ describe("missingWalkthrough", () => {
     const submission = { ...base, walkthrough: [{ path: "src/x.ts", summary: "s" }] }
     expect(missingWalkthrough(submission, files)).toEqual(["logo.png"])
   })
+
+  it("counts a row whose path has surrounding spaces or a leading ./", () => {
+    const files = [{ filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch }]
+    const submission = { ...base, walkthrough: [{ path: "./src/x.ts ", summary: "s" }] }
+    expect(missingWalkthrough(submission, files)).toEqual([])
+  })
 })
 
 describe("parseWrittenReview", () => {
@@ -368,6 +374,13 @@ describe("parseWrittenReview", () => {
     expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("merge_danger") })
   })
 
+  it("holds back a submission with an empty blast radius", () => {
+    const written = parseWrittenReview(
+      JSON.stringify({ ...submitted, merge_danger: { door: "two-way", blast_radius: "" } }),
+    )
+    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("/merge_danger/blast_radius") })
+  })
+
   it("holds back a finding without a basis", () => {
     const written = parseWrittenReview(JSON.stringify({ ...submitted, findings: [{ ...finding(), basis: undefined }] }))
     expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("basis") })
@@ -402,6 +415,14 @@ describe("chooseReviewEvent", () => {
       "APPROVE",
     )
   })
+
+  it("lets only a defect or spec finding hold approval back, since a standard or test one graded blocking was rejected for that grade", () => {
+    const rejectedAs = (kind: FindingInput["basis_kind"]) => [{ finding: finding({ basis_kind: kind }), reason: "r" }]
+    expect(chooseReviewEvent(base, [], rejectedAs("standard"), true)).toBe("APPROVE")
+    expect(chooseReviewEvent(base, [], rejectedAs("test"), true)).toBe("APPROVE")
+    expect(chooseReviewEvent(base, [], rejectedAs("defect"), true)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(base, [], rejectedAs("spec"), true)).toBe("REQUEST_CHANGES")
+  })
 })
 
 describe("renderReviewBody", () => {
@@ -412,6 +433,23 @@ describe("renderReviewBody", () => {
       [
         { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
         { finding: finding({ severity: "nitpick", title: "Rename b" }), reason: "quote matches 2 lines" },
+      ],
+    )
+    expect(body).toBe(
+      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+    )
+  })
+
+  it("leaves out a standard or test finding rejected for its blocking grade, since it doesn't hold approval back", () => {
+    const body = renderReviewBody(
+      "REQUEST_CHANGES",
+      [],
+      [
+        { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
+        {
+          finding: finding({ basis_kind: "standard", basis: "Feature Envy", title: "Move the total into Cart" }),
+          reason: "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
+        },
       ],
     )
     expect(body).toBe(
@@ -465,13 +503,27 @@ describe("renderSummaryComment", () => {
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
-    expect(text).toContain("1 finding(s) were dropped")
+    expect(text).toContain(
+      "<sub>1 finding(s) were dropped because they failed the host's checks, even after a retry.</sub>",
+    )
     expect(text).toContain("**Merge danger:** two-way door · one module")
     expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@89abcdef`.</sub>")
   })
 
   it("puts the merge danger on the line under the verdict, before the summary", () => {
     expect(summaryWith({})).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
+  })
+
+  it("flattens a multi-line blast radius onto the merge-danger line", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "COMMENT",
+      submission: { ...base, merge_danger: { door: "one-way", blast_radius: "billing\n  and the\tinvoices table\n" } },
+      accepted: [],
+      droppedCount: 0,
+    })
+    expect(text).toContain("**Merge danger:** one-way door · billing and the invoices table\n\n### Summary")
   })
 
   it("leaves the skills claim out when the build that ran the review recorded no model or fingerprint", () => {

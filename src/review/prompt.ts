@@ -40,6 +40,21 @@ export function rejectionsText(rejected: readonly Rejected[]): string {
   ].join("\n")
 }
 
+export function problemsText(rejected: readonly Rejected[], missing: readonly string[]): string {
+  const parts: string[] = []
+  if (rejected.length > 0) parts.push(rejectionsText(rejected))
+  if (missing.length > 0) parts.push(missingRowsText(missing))
+  return parts.join("\n\n")
+}
+
+function missingRowsText(missing: readonly string[]): string {
+  return [
+    "Files without a walkthrough row:",
+    ...missing.map((path) => `- ${path}`),
+    "Add one row for each of them, then call submit_review again with the whole review.",
+  ].join("\n")
+}
+
 export function resubmitPrompt(refusal: string | undefined): string {
   const outcome =
     refusal === undefined

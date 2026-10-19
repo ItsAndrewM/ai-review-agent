@@ -40,7 +40,7 @@ export function renderSummaryComment(input: {
         ].join("\n")
   const dropped =
     input.droppedCount > 0
-      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they couldn't be posted inline, even after a retry.</sub>`
+      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they failed the host's checks, even after a retry.</sub>`
       : ""
   return [
     SUMMARY_MARKER,
@@ -48,7 +48,7 @@ export function renderSummaryComment(input: {
     "",
     `**Head:** \`${input.headSha.slice(0, 7)}\` · **Verdict:** ${VERDICT_LABEL[input.event]} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`,
     "",
-    `**Merge danger:** ${door} door · ${blast_radius}`,
+    `**Merge danger:** ${door} door · ${oneLine(blast_radius)}`,
     "",
     "### Summary",
     "",
@@ -112,7 +112,7 @@ export function renderReviewBody(
 }
 
 function heldBack(rejected: readonly Rejected[]): string | undefined {
-  const blocking = rejected.filter((r) => r.finding.severity === "blocking")
+  const blocking = rejected.filter(holdsApprovalBack)
   if (blocking.length === 0) return undefined
   return [
     `${blocking.length} blocking finding(s) couldn't be posted inline and hold approval back:`,
@@ -148,9 +148,13 @@ export function chooseReviewEvent(
   requestChangesWorkflow: boolean,
 ): ReviewEvent {
   if (!requestChangesWorkflow) return "COMMENT"
-  if (countBySeverity([...accepted, ...rejected.map((r) => r.finding)]).blocking > 0) return "REQUEST_CHANGES"
+  if (countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
   return "COMMENT"
+}
+
+function holdsApprovalBack({ finding }: Rejected): boolean {
+  return finding.severity === "blocking" && (finding.basis_kind === "defect" || finding.basis_kind === "spec")
 }
 
 function oneLine(text: string): string {

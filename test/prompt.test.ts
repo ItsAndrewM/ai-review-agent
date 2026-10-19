@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { answerPrompt, rejectionsText, resubmitPrompt, systemPrompt } from "../src/review/prompt.ts"
+import { answerPrompt, problemsText, rejectionsText, resubmitPrompt, systemPrompt } from "../src/review/prompt.ts"
 
 describe("systemPrompt", () => {
   it("names the bot and only the three tools the model is given, and leaves the procedure to the skills", () => {
@@ -38,6 +38,38 @@ describe("rejectionsText", () => {
     const text = rejectionsText(rejected)
     expect(text).toContain('- src/x.ts:1 "t1": reason 1\n- src/x.ts:2 "t2": reason 2\n')
     expect(text).toContain('- src/x.ts:3 "t3": reason 3\n- src/x.ts:4 "t4": reason 4\n')
+  })
+})
+
+describe("problemsText", () => {
+  const rejected = [
+    {
+      finding: {
+        path: "src/x.ts",
+        line: 2,
+        quote: "q",
+        basis_kind: "defect" as const,
+        basis: "x",
+        severity: "blocking" as const,
+        title: "t2",
+        body: "b",
+      },
+      reason: "quote does not match line 2 (RIGHT) and no other line in src/x.ts matches",
+    },
+  ]
+  const missingRows =
+    "Files without a walkthrough row:\n- logo.png\n- src/b.ts\nAdd one row for each of them, then call submit_review again with the whole review."
+
+  it("lists every file without a walkthrough row and asks for one row each", () => {
+    expect(problemsText([], ["logo.png", "src/b.ts"])).toBe(missingRows)
+  })
+
+  it("is the rejections alone when every file has a row", () => {
+    expect(problemsText(rejected, [])).toBe(rejectionsText(rejected))
+  })
+
+  it("returns the rejections and then the missing rows, a blank line apart, so both come back in the one reply", () => {
+    expect(problemsText(rejected, ["logo.png", "src/b.ts"])).toBe(`${rejectionsText(rejected)}\n\n${missingRows}`)
   })
 })
 

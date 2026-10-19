@@ -5,12 +5,17 @@ import type { ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { systemPrompt } from "./prompt.ts"
 
+export interface SubmitOutcome {
+  readonly text: string
+  readonly done: boolean
+}
+
 export interface ReviewHost {
   botLogin(): string
   github(): Promise<GitHubClient>
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
-  submitReview(submission: ReviewSubmissionInput): Promise<string>
+  submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome>
 }
 
 const MAX_FILE_CHARS = 60_000
@@ -63,8 +68,8 @@ export function createReviewExtension(host: ReviewHost): Extension {
     callers: ["model"],
     async execute(submission) {
       const outcome = await host.submitReview(submission)
-      if (!outcome.startsWith("Posted")) return text(outcome)
-      return { ...text(outcome), control: { terminate: true as const } }
+      if (!outcome.done) return text(outcome.text)
+      return { ...text(outcome.text), control: { terminate: true as const } }
     },
   })
 
