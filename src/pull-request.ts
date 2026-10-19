@@ -20,7 +20,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { outputLimitOf, withOutputLimit } from "./models.ts"
+import { outputLimitOf, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -53,6 +53,7 @@ import {
   renderUnpostedNote,
   renderUnpostedSummary,
   SUMMARY_MARKER,
+  type RetryOutcome,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost } from "./review/tools.ts"
@@ -109,7 +110,7 @@ interface ReviewRun {
   skillsFingerprint: string
 }
 
-type ReviewSource = "tool" | "text" | "retry"
+type ReviewSource = "tool" | "text" | "retry" | "retry_text"
 
 const StoredDetailText = Type.String()
 
@@ -120,7 +121,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withOutputLimit(this.ai.provider, this.outputLimit()))
+      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider, this.outputLimit())))
       return Harness.open(
         storage,
         {
@@ -466,10 +467,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
     await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"
+    const retryRefusal = await this.postRetryText(retry, run)
+    if (await this.isPosted(pr)) return "retry_text"
     if (await this.replaced(pr, run)) return undefined
     if (await this.headMoved(pr, run)) return undefined
-    await this.reportUnpostedReview(pr, written, retry, run)
+    await this.reportUnpostedReview(pr, written, retry, retryRefusal, run)
     return undefined
+  }
+
+  private async postRetryText(retry: PiPromptResponse, run: ReviewRun): Promise<string | undefined> {
+    if (retry.status !== "done") return undefined
+    const written = parseWrittenReview(retry.text ?? "")
+    if (written.kind !== "submission") return undefined
+    await this.markRejectionsReturned(run.deliveryId)
+    return this.postReview(written.submission, run.deliveryId).catch(errorText)
   }
 
   private async replaced(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
@@ -515,17 +526,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pr: PullRequestInfo,
     written: WrittenReview,
     retry: PiPromptResponse,
+    retryRefusal: string | undefined,
     run: ReviewRun,
   ): Promise<void> {
     const failure =
       retry.status === "done" ? undefined : describeFailure(retry, await this.storedFailureDetail(retry.operationId))
     const fields = { number: pr.number, head: short(pr.head.sha), wrote: written.kind, ms: Date.now() - run.started }
     if (failure === undefined) {
-      log("review.no_submission", { ...fields, retryText: retry.text?.slice(0, MAX_LOGGED_TEXT_CHARS) })
+      log("review.no_submission", {
+        ...fields,
+        retryText: retry.text?.slice(0, MAX_LOGGED_TEXT_CHARS),
+        retryRefusal,
+      })
     } else {
       logError("review.failed", { ...fields, reason: failure, retry: true, staleBuild: run.staleBuild })
     }
-    const note = renderUnpostedNote(written, failure)
+    const note = renderUnpostedNote(written, retryOutcome(failure, retryRefusal))
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
     await this.failOwnRun(run.deliveryId, note)
   }
@@ -737,6 +753,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
+function retryOutcome(failure: string | undefined, refusal: string | undefined): RetryOutcome {
+  if (failure !== undefined) return { kind: "failed", reason: failure }
+  if (refusal !== undefined) return { kind: "refused", refusal }
+  return { kind: "unanswered" }
+}
+
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
 
 function short(sha: string): string {

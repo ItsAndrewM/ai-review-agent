@@ -77,10 +77,25 @@ export function renderUnpostedSummary(input: { botLogin: string; headSha: string
   ].join("\n")
 }
 
-export function renderUnpostedNote(written: WrittenReview, retryFailure: string | undefined): string {
-  const asked = retryFailure === undefined ? "even when asked again" : `and asking again failed: ${retryFailure}`
-  const reason = `_The review couldn't be posted: the model didn't submit one that could be, ${asked}._`
+export type RetryOutcome =
+  | { kind: "unanswered" }
+  | { kind: "failed"; reason: string }
+  | { kind: "refused"; refusal: string }
+
+export function renderUnpostedNote(written: WrittenReview, retry: RetryOutcome): string {
+  const reason = `_The review couldn't be posted: the model didn't submit one that could be, ${askedAgain(retry)}._`
   return written.kind === "prose" && written.text !== "" ? `${reason}\n\n${written.text}` : reason
+}
+
+function askedAgain(retry: RetryOutcome): string {
+  switch (retry.kind) {
+    case "unanswered":
+      return "even when asked again"
+    case "failed":
+      return `and asking again failed: ${retry.reason}`
+    case "refused":
+      return `and the host refused the review it submitted when asked again: ${retry.refusal.replace(/\s+/g, " ").replace(/\.$/, "")}`
+  }
 }
 
 export function renderReviewBody(

@@ -14,6 +14,10 @@ describe("systemPrompt", () => {
     expect(text).not.toContain("nitpick")
     expect(text.length).toBeLessThan(900)
   })
+
+  it("says only a submit_review call posts the review, so the closing sentence can't stand in for the call", () => {
+    expect(systemPrompt("andabot")).toContain("Only a submit_review call posts the review;")
+  })
 })
 
 describe("rejectionsText", () => {

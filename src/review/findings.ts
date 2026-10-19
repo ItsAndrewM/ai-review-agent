@@ -48,7 +48,7 @@ export const ReviewSubmission = Type.Object({
   summary: Type.String({
     description: "Two to five sentences on what the pull request does and how it does it. Markdown.",
   }),
-  walkthrough: Type.Array(Walkthrough),
+  walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
   verdict: Type.Union([Type.Literal("approve"), Type.Literal("request_changes"), Type.Literal("comment")], {
     description:
