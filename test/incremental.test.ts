@@ -218,8 +218,39 @@ describe("applyDeltaPolicy", () => {
     expect(result.duplicates).toEqual([])
   })
 
+  it("still posts a blocking finding on the line of an open thread that isn't blocking", () => {
+    const threads = [open("T1", { line: 3 }), open("T2", { line: 9, blocking: true })]
+    const blockingOnNitpick = found({ line: 3, severity: "blocking" })
+    const suggestionOnBlocker = found({ line: 9, quote: "nine" })
+    const result = applyDeltaPolicy(validated([blockingOnNitpick, suggestionOnBlocker]), {
+      mode: "full",
+      covered,
+      open: threads,
+    })
+    expect(result.accepted).toEqual([blockingOnNitpick])
+    expect(result.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T2"])
+  })
+
+  it("matches a thread by its quote only once GitHub reports it outdated", () => {
+    const threads = [open("T1", { line: 3, quote: "}" }), open("T2", { outdated: true, line: null, quote: "}" })]
+    const sameTextElsewhere = found({ path: "b.ts", line: 7, quote: "}" })
+    const result = applyDeltaPolicy(validated([sameTextElsewhere]), {
+      mode: "full",
+      covered,
+      open: [...threads, open("T3", { path: "b.ts", line: 2, quote: "}" })],
+    })
+    expect(result.accepted).toEqual([sameTextElsewhere])
+    const moved = found({ line: 12, quote: "}" })
+    expect(applyDeltaPolicy(validated([moved]), { mode: "full", covered, open: threads }).duplicates).toEqual([
+      { finding: moved, reason: "duplicates open thread T2" },
+    ])
+  })
+
   it("sets aside a duplicate of an open thread by line or by quote", () => {
-    const threads = [open("T1", { line: 3, quote: "three" }), open("T2", { line: 9, quote: "const nine = 9;" })]
+    const threads = [
+      open("T1", { line: 3, quote: "three" }),
+      open("T2", { outdated: true, line: null, quote: "const nine = 9;" }),
+    ]
     const sameLine = found({ line: 3, quote: "something else" })
     const sameQuote = found({ line: 4, quote: "  const  nine = 9; " })
     const unique = found({ line: 7, quote: "seven" })

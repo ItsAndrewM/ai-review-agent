@@ -232,14 +232,20 @@ export function applyDeltaPolicy(validated: ValidatedReview, scope: DeltaScope):
 }
 
 function duplicatedThread(finding: FindingInput, open: readonly OpenThread[]): OpenThread | undefined {
-  const side = finding.side ?? "RIGHT"
-  const quote = comparableText(finding.quote)
   return open.find(
     (thread) =>
       thread.path === finding.path &&
-      ((thread.side === side && thread.line === finding.line) ||
-        (thread.quote !== undefined && comparableText(thread.quote) === quote)),
+      (thread.blocking || finding.severity !== "blocking") &&
+      (onTheSameLine(thread, finding) || movedFrom(thread, finding)),
   )
+}
+
+function onTheSameLine(thread: OpenThread, finding: FindingInput): boolean {
+  return thread.side === (finding.side ?? "RIGHT") && thread.line === finding.line
+}
+
+function movedFrom(thread: OpenThread, finding: FindingInput): boolean {
+  return thread.outdated && thread.quote !== undefined && comparableText(thread.quote) === comparableText(finding.quote)
 }
 
 function outsideTheDelta(finding: FindingInput, covered: ReadonlyMap<string, MarkedLines>): boolean {
