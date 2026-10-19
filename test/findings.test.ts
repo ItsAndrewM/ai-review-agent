@@ -279,6 +279,14 @@ describe("parseWrittenReview", () => {
     expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("/verdict") })
   })
 
+  it('holds back an approval with no walkthrough, the shell gpt-oss-120b put around "Review submitted." when held to JSON', () => {
+    const shell = { summary: "Review submitted.", walkthrough: [], findings: [], verdict: "approve" }
+    expect(parseWrittenReview(JSON.stringify(shell))).toEqual({
+      kind: "unfit",
+      problem: expect.stringContaining("/walkthrough"),
+    })
+  })
+
   it("holds back JSON the output limit cut off, rather than taking it for prose", () => {
     expect(parseWrittenReview(`Review:\n${submittedJson.slice(0, 200)}`)).toMatchObject({ kind: "unfit" })
   })

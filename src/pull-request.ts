@@ -20,7 +20,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { withOutputLimit } from "./models.ts"
+import { withForcedResubmission, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -109,7 +109,7 @@ interface ReviewRun {
   skillsFingerprint: string
 }
 
-type ReviewSource = "tool" | "text" | "retry"
+type ReviewSource = "tool" | "text" | "retry" | "retry_text"
 
 const StoredDetailText = Type.String()
 
@@ -120,7 +120,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withOutputLimit(this.ai.provider))
+      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider)))
       return Harness.open(
         storage,
         {
@@ -461,10 +461,21 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
     await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"
+    if (await this.postedRetryText(pr, retry, run)) return "retry_text"
     if (await this.replaced(pr, run)) return undefined
     if (await this.headMoved(pr, run)) return undefined
     await this.reportUnpostedReview(pr, written, retry, run)
     return undefined
+  }
+
+  private async postedRetryText(pr: PullRequestInfo, retry: PiPromptResponse, run: ReviewRun): Promise<boolean> {
+    if (retry.status !== "done") return false
+    const written = parseWrittenReview(retry.text ?? "")
+    if (written.kind !== "submission") return false
+    const refusal = await this.postReview(written.submission, run.deliveryId).catch(errorText)
+    if (await this.isPosted(pr)) return true
+    log("review.retry_text_refused", { number: pr.number, head: short(pr.head.sha), refusal })
+    return false
   }
 
   private async replaced(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
