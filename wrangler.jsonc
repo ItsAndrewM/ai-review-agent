@@ -17,6 +17,11 @@
     // Workers AI model for the review. Kimi K2.7 Code, GLM 5.x and DeepSeek V4
     // need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash run on Free.
     "REVIEW_MODEL": "@cf/openai/gpt-oss-120b",
+    // Most output tokens one model call may ask for, reasoning included. The
+    // model's own maximum and its context still cap it. A review's
+    // submit_review call grows with its findings, so raise it for large pull
+    // requests whose reviews get cut off.
+    "MAX_OUTPUT_TOKENS": "16000",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",

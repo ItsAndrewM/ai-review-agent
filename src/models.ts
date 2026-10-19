@@ -3,13 +3,20 @@ import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-option
 import { ReviewSubmission } from "./review/findings.ts"
 import { isResubmitPrompt } from "./review/prompt.ts"
 
-export function withOutputLimit(provider: Provider): Provider {
+const DEFAULT_OUTPUT_LIMIT = 16_000
+
+export function outputLimitOf(value: string): number {
+  const limit = Number(value)
+  return Number.isSafeInteger(limit) && limit > 0 ? limit : DEFAULT_OUTPUT_LIMIT
+}
+
+export function withOutputLimit(provider: Provider, limit: number): Provider {
   return {
     ...provider,
     streamSimple: (model, context, options) =>
       provider.streamSimple(model, context, {
         ...options,
-        maxTokens: options?.maxTokens ?? clampMaxTokensToContext(model, context, model.maxTokens),
+        maxTokens: options?.maxTokens ?? clampMaxTokensToContext(model, context, Math.min(model.maxTokens, limit)),
       }),
   }
 }
