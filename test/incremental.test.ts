@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
 import type { ChangedFile } from "../src/github/diff.ts"
-import type { FindingInput, ValidatedReview } from "../src/review/findings.ts"
+import type { FindingInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
 import {
   addressedThreads,
   applyDeltaPolicy,
+  buildScope,
   chooseMode,
   coveredFiles,
+  coveredMap,
+  findingRecords,
+  nextReviewed,
+  openBlockingAfter,
   openBotThreads,
   threadsToRecheck,
   type OpenThread,
@@ -63,9 +68,13 @@ describe("chooseMode", () => {
   })
 
   it("reviews the whole pull request when history was rewritten or the compare failed", () => {
-    for (const compareStatus of ["diverged", "behind", "identical", undefined] as const) {
+    for (const compareStatus of ["diverged", "behind", undefined] as const) {
       expect(chooseMode({ ...push, compareStatus })).toBe("full")
     }
+  })
+
+  it("treats an unchanged head as an incremental review with nothing new, not a full one", () => {
+    expect(chooseMode({ ...push, compareStatus: "identical" })).toBe("incremental")
   })
 
   it("reviews the whole pull request when its base branch changed", () => {
@@ -118,6 +127,12 @@ describe("openBotThreads", () => {
     expect(threads).toHaveLength(30)
     expect(threads.at(-1)?.handle).toBe("T30")
     expect(leftOut).toBe(2)
+  })
+
+  it("counts every open blocking thread, including those past the cap, so approval can't skip them", () => {
+    const blockers = Array.from({ length: 31 }, (_, i) => botThread(`b${i}`, { firstCommentId: i }))
+    const nit = botThread("nit", { firstCommentId: 99, firstCommentBody: "**⚪ Nitpick: Spacing**" })
+    expect(openBotThreads([...blockers, nit], new Map(), "andabot").blocking).toBe(31)
   })
 
   it("reads severity from the stored finding, else from the comment's label", () => {
@@ -219,5 +234,104 @@ describe("addressedThreads", () => {
 
   it("resolves nothing when the model listed no threads", () => {
     expect(addressedThreads(undefined, recheck)).toEqual({ resolve: [], unknown: [] })
+  })
+})
+
+describe("the review scope", () => {
+  const covered = new Map([["a.ts", { right: new Set([3, 4]), left: new Set([2]) }]])
+  const listed = { open: [open("T1", { blocking: true }), open("T2")], leftOut: 1, blocking: 3 }
+  const threads = { listed, recheck: [listed.open[0] ?? open("T1")] }
+
+  it("keeps the range only for an incremental review and records whether threads were read", () => {
+    const incremental = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(incremental).toMatchObject({ deliveryId: "d-1", mode: "incremental", from: "aaa", threadsKnown: true })
+    expect(incremental).toMatchObject({ leftOut: 1, blockingOpen: 3 })
+    expect(incremental.recheck.map((t) => t.handle)).toEqual(["T1"])
+    const full = buildScope({ deliveryId: "d-1", mode: "full", from: "aaa", covered: new Map(), threads: undefined })
+    expect(full.from).toBeUndefined()
+    expect(full).toMatchObject({ threadsKnown: false, open: [], recheck: [], blockingOpen: 0 })
+  })
+
+  it("round-trips its covered lines through the stored record", () => {
+    const scope = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(coveredMap(scope)).toEqual(covered)
+  })
+
+  it("counts the blocking threads left open after this review's resolutions, unless they couldn't be read", () => {
+    const scope = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(openBlockingAfter(scope, [])).toBe(3)
+    expect(openBlockingAfter(scope, [open("T1", { blocking: true }), open("T2")])).toBe(2)
+    const unread = buildScope({ deliveryId: "d-1", mode: "full", from: undefined, covered, threads: undefined })
+    expect(openBlockingAfter(unread, [])).toBe("unknown")
+  })
+})
+
+describe("findingRecords", () => {
+  it("matches each posted comment to its finding by path, line and side", () => {
+    const right = found({ line: 3, quote: "three", severity: "blocking", title: "Right" })
+    const left = found({ line: 3, side: "LEFT", quote: "old three", title: "Left" })
+    const records = findingRecords(
+      [right, left],
+      [
+        { id: 11, reviewId: 7, path: "a.ts", line: 3, side: "RIGHT" },
+        { id: 12, reviewId: 7, path: "a.ts", line: 3, side: "LEFT" },
+        { id: 13, reviewId: 7, path: "a.ts", line: null, side: null },
+      ],
+    )
+    expect(records).toEqual(
+      new Map([
+        [11, { severity: "blocking", title: "Right", quote: "three", path: "a.ts" }],
+        [12, { severity: "suggestion", title: "Left", quote: "old three", path: "a.ts" }],
+      ]),
+    )
+  })
+})
+
+describe("nextReviewed", () => {
+  const submission: ReviewSubmissionInput = {
+    summary: "This push fixes the total.",
+    walkthrough: [{ path: "a.ts", summary: "new a" }],
+    findings: [],
+    verdict: "comment",
+  }
+  const previous: ReviewedRecord = {
+    headSha: "aaa",
+    baseRef: "main",
+    at: 1,
+    mode: "full",
+    summary: "The whole PR.",
+    walkthrough: [
+      { path: "a.ts", summary: "old a" },
+      { path: "b.ts", summary: "old b" },
+    ],
+  }
+  const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("starts over from a full review's summary and walkthrough", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 0 })).toEqual({
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      mode: "full",
+      summary: "This push fixes the total.",
+      walkthrough: [{ path: "a.ts", summary: "new a" }],
+    })
+  })
+
+  it("keeps the last full summary and adds a since section on an incremental review", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
+    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 1 })).toEqual({
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      mode: "incremental",
+      summary: "The whole PR.",
+      walkthrough: [
+        { path: "a.ts", summary: "new a" },
+        { path: "b.ts", summary: "old b" },
+      ],
+      since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
+    })
   })
 })

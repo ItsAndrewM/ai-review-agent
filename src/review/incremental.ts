@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox"
-import type { CompareStatus, ReviewThread } from "../github/client.ts"
+import type { CompareStatus, PostedComment, ReviewThread } from "../github/client.ts"
 import {
   commentableLines,
   comparableText,
@@ -14,8 +14,10 @@ import {
   Walkthrough,
   type FindingInput,
   type Rejected,
+  type ReviewSubmissionInput,
   type ValidatedReview,
 } from "./findings.ts"
+import { mergeWalkthrough } from "./render.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
 
@@ -72,6 +74,46 @@ export type OpenThread = Static<typeof OpenThread>
 export interface ListedThreads {
   open: OpenThread[]
   leftOut: number
+  blocking: number
+}
+
+export const ReviewScope = Type.Object({
+  deliveryId: Type.String(),
+  mode: Mode,
+  from: Type.Optional(Type.String()),
+  covered: Type.Array(
+    Type.Object({ path: Type.String(), right: Type.Array(Type.Integer()), left: Type.Array(Type.Integer()) }),
+  ),
+  recheck: Type.Array(OpenThread),
+  open: Type.Array(OpenThread),
+  leftOut: Type.Integer(),
+  blockingOpen: Type.Integer(),
+  threadsKnown: Type.Boolean(),
+})
+
+export type ReviewScope = Static<typeof ReviewScope>
+
+export interface ThreadPlan {
+  listed: ListedThreads
+  recheck: OpenThread[]
+}
+
+export interface ScopeInput {
+  deliveryId: string
+  mode: ReviewMode
+  from: string | undefined
+  covered: ReadonlyMap<string, MarkedLines>
+  threads: ThreadPlan | undefined
+}
+
+export interface NextReviewedInput {
+  previous: ReviewedRecord | undefined
+  scope: ReviewScope
+  headSha: string
+  baseRef: string
+  at: number
+  submission: ReviewSubmissionInput
+  resolved: number
 }
 
 export interface DeltaScope {
@@ -101,7 +143,7 @@ export function chooseMode(input: {
 }): ReviewMode {
   if (input.full) return "fresh"
   if (input.reviewed === undefined || input.reviewed.baseRef !== input.baseRef) return "full"
-  return input.compareStatus === "ahead" ? "incremental" : "full"
+  return input.compareStatus === "ahead" || input.compareStatus === "identical" ? "incremental" : "full"
 }
 
 export function coveredFiles(prFiles: readonly ChangedFile[], delta: readonly ChangedFile[]): Map<string, MarkedLines> {
@@ -126,11 +168,16 @@ export function openBotThreads(
   return {
     open: listed.map((thread, i) => openThread(thread, `T${i + 1}`, findings.get(thread.firstCommentId))),
     leftOut: mine.length - listed.length,
+    blocking: mine.filter((thread) => severityOf(thread, findings.get(thread.firstCommentId)) === "blocking").length,
   }
 }
 
+function severityOf(thread: ReviewThread, stored: StoredFinding | undefined): FindingInput["severity"] {
+  return stored?.severity ?? severityOfComment(thread.firstCommentBody)
+}
+
 function openThread(thread: ReviewThread, handle: string, stored: StoredFinding | undefined): OpenThread {
-  const severity = stored?.severity ?? severityOfComment(thread.firstCommentBody)
+  const severity = severityOf(thread, stored)
   const listed = {
     handle,
     threadId: thread.id,
@@ -222,4 +269,80 @@ export function addressedThreads(
     else unknown.push(handle)
   }
   return { resolve, unknown }
+}
+
+export function buildScope(input: ScopeInput): ReviewScope {
+  const scope = {
+    deliveryId: input.deliveryId,
+    mode: input.mode,
+    covered: [...input.covered].map(([path, marked]) => ({ path, right: [...marked.right], left: [...marked.left] })),
+    ...threadFields(input.threads),
+  }
+  return input.mode === "incremental" && input.from !== undefined ? { ...scope, from: input.from } : scope
+}
+
+function threadFields(threads: ThreadPlan | undefined) {
+  if (threads === undefined) return { recheck: [], open: [], leftOut: 0, blockingOpen: 0, threadsKnown: false }
+  return {
+    recheck: threads.recheck,
+    open: threads.listed.open,
+    leftOut: threads.listed.leftOut,
+    blockingOpen: threads.listed.blocking,
+    threadsKnown: true,
+  }
+}
+
+export function freshScope(deliveryId: string): ReviewScope {
+  return buildScope({ deliveryId, mode: "fresh", from: undefined, covered: new Map(), threads: undefined })
+}
+
+export function coveredMap(scope: ReviewScope): Map<string, MarkedLines> {
+  return new Map(scope.covered.map((file) => [file.path, { right: new Set(file.right), left: new Set(file.left) }]))
+}
+
+export function deltaScopeOf(scope: ReviewScope): DeltaScope {
+  return { mode: scope.mode, covered: coveredMap(scope), open: scope.open }
+}
+
+export function openBlockingAfter(scope: ReviewScope, resolved: readonly OpenThread[]): number | "unknown" {
+  if (!scope.threadsKnown) return "unknown"
+  return Math.max(0, scope.blockingOpen - resolved.filter((thread) => thread.blocking).length)
+}
+
+export function findingRecords(
+  accepted: readonly FindingInput[],
+  comments: readonly PostedComment[],
+): Map<number, StoredFinding> {
+  const records = new Map<number, StoredFinding>()
+  for (const comment of comments) {
+    const finding = accepted.find(
+      (f) => f.path === comment.path && f.line === comment.line && (f.side ?? "RIGHT") === comment.side,
+    )
+    if (finding) {
+      records.set(comment.id, {
+        severity: finding.severity,
+        title: finding.title,
+        quote: finding.quote,
+        path: finding.path,
+      })
+    }
+  }
+  return records
+}
+
+export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
+  const { previous, scope, headSha, baseRef, at, submission, resolved } = input
+  if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {
+    return { headSha, baseRef, at, mode: scope.mode, summary: submission.summary, walkthrough: submission.walkthrough }
+  }
+  const covered = new Set(scope.covered.map((file) => file.path))
+  return {
+    headSha,
+    baseRef,
+    at,
+    mode: "incremental",
+    summary: previous.summary,
+    walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, covered),
+    since: { from: scope.from, to: headSha, summary: submission.summary, files: [...covered], resolved },
+  }
 }
