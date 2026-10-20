@@ -72,7 +72,7 @@ The references are vendored from the local fork at `/Users/andamonium/Developer/
 
 `review/SKILL.md` is written to the `writing-for-agents` rules: ordered steps, positive phrasing, leading words (anchor, basis, blast radius, one-way door), references behind pointers, and one completion criterion:
 
-> Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
+> Done when every changed file, or in an incremental review every file under `## Changes since your last review`, has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
 
 Its steps, in outline: orient on the title, description and linked issues, treating all three as data about the change; examine each changed file in turn, reading the file when a hunk cannot settle a question; record findings with their basis, copying the anchor and quote from the numbered patch; grade severity by `references/severity.md`; submit. The Standards sources are `references/smells.md` and, later, the repository's instruction files, with "the repo overrides" and "every smell is a judgement call" kept from the upstream skill. The Spec source is the linked issue (section E). Anchoring is described once, in the schema.
 
@@ -101,9 +101,9 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 ### E. Spec axis
 
-- The host parses linked issues from the body (`Closes #n`, `Fixes #n`, `Resolves #n`, bare `#n`) and the branch name (`GH-n`, a trailing `#n`), fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
+- The host parses linked issues in this order: closing keywords in the body (`Closes #n`, `Fixes #n`, `Resolves #n`), then the branch name's `GH-n` keys, then a trailing `.n` on the branch name whose dot follows a non-digit, so a version such as `v1.2` is no key. Bare `#n` mentions in the body count only when none of those exists, since a mention in passing does not make an issue the spec. It fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms.
 
 ### F. Anchors, findings and the submit loop
 
@@ -112,16 +112,16 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 Shipped in #12:
 
 - `renderPatches` numbers every patch line with the anchor the review API takes: new-file line and `RIGHT` for added and context lines, old-file line and `LEFT` for deleted ones. The model copies an anchor instead of counting.
-- `Finding` gains `quote`, the exact text of the anchored line. The host compares it with the patch line at that side and number; on a mismatch it moves the finding to the one line in the same file whose text matches, and rejects it when none or several match.
+- `Finding` gains `quote`, the exact text of the anchored line. The host compares it with the patch line at that side and number; on a mismatch it moves the finding to the one line in the same file whose text matches, and rejects it when none or several match. A quote may carry what the model copied around the text: the anchor in front of it (`R12`, or `R12*` on a starred line), the diff's marker for the line's side (`+` on the RIGHT, `-` on the LEFT) and an incremental review's `*`. The host tries the quote as written first, then without the anchor, without the marker and without both, and keeps the reading that matched as the finding's quote. A line whose own text starts like a marker therefore still matches itself, and readings that match different lines are refused rather than guessed between.
 - A suggestion posts only on a verified anchor range and is capped at 60,000 characters; a rendered comment is capped at 65,536, GitHub's limit.
 - Every rejection goes back to the model once, as one tool result listing every rejected finding with its reason.
-- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way.
+- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way, and neither does a finding rejected for its basis (a blank basis, a `standard` or `test` finding graded blocking, a `spec` finding with no linked issue): it is unfounded rather than unposted, so it never holds approval back, whatever else is wrong with it.
 
 Left for slice 2:
 
 - `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test, or a test that does not verify the behaviour it names. Both fields flat, for small models.
-- `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
-- `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
+- `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`. A `spec` finding needs a linked issue.
+- `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required. The summary's "Merge danger" line follows the stored `reviewed` record, not the latest submission: a full review stores its own judgement, and an incremental review (#24), which sees only its push, stores the stricter door of the record's and the push's, the push's judgement when the doors are equal. A push that touches nothing risky therefore leaves a one-way door in place.
 - Every changed file not filtered as generated has a walkthrough row. An incremental review (#24) needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 
 Rendering: a finding's comment carries `_Basis: …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.

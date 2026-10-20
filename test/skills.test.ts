@@ -29,7 +29,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("3")
+    expect(review?.version).toBe("4")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -223,5 +223,15 @@ describe("bundledSkills", () => {
   it("tells the review to claim only what the code shows, since the model can't build or run it", async () => {
     const review = await (await bundledSkills()).source.load("review")
     expect(review?.body).toContain("You can't build, run or test the code")
+  })
+
+  it("names the files that need a walkthrough row in an incremental review, in its step and in its completion criterion", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain(
+      "Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.",
+    )
+    expect(review?.body).toContain(
+      "Done when every changed file, or in an incremental review every file under `## Changes since your last review`, has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.",
+    )
   })
 })

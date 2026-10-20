@@ -237,8 +237,8 @@ export function chooseReviewEvent(
   return "COMMENT"
 }
 
-function holdsApprovalBack({ finding }: Rejected): boolean {
-  return finding.severity === "blocking" && (finding.basis_kind === "defect" || finding.basis_kind === "spec")
+function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
+  return !unfounded && finding.severity === "blocking"
 }
 
 function oneLine(text: string): string {

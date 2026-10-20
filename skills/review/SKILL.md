@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "3"
+  version: "4"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -20,7 +20,7 @@ Take the files in the diff's order and read every hunk. Call `read_file` when a 
 - **Standards**: the repository's documented standards, when the prompt supplies them, and the smells in `references/smells.md`, below. When a hunk adds or reshapes logic, match the hunks against the smells.
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
 
-Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row.
+Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.
 
 ## 3. Record findings
 
@@ -44,4 +44,4 @@ The summary says what the code shows. You can't build, run or test the code, so 
 
 Judge the merge danger by `references/merge-danger.md`, below. State its door and blast radius in `merge_danger`, which the host prints above the summary. Submit with `submit_review`. When it returns rejected findings or files without a walkthrough row, resubmit the whole review with each rejected finding fixed or dropped and a row for each of those files.
 
-Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
+Done when every changed file, or in an incremental review every file under `## Changes since your last review`, has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
