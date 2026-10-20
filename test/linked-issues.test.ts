@@ -7,7 +7,7 @@ describe("linkedIssueNumbers", () => {
     expect(linkedIssueNumbers("Fixes #7, closes #3, resolves #9, fixed #7 and fixes #11", "feature/x.GH-5")).toEqual([
       7, 3, 9,
     ])
-    expect(linkedIssueNumbers("Fixes #7", "feature/x.GH-5.12")).toEqual([7, 5, 12])
+    expect(linkedIssueNumbers("Fixes #7", "feature/x.GH-5")).toEqual([7, 5])
     expect(linkedIssueNumbers(null, "fix/thing.GH-12")).toEqual([12])
     expect(linkedIssueNumbers("", "feature/thing.8")).toEqual([8])
     expect(linkedIssueNumbers("nothing", "main")).toEqual([])
@@ -30,6 +30,11 @@ describe("linkedIssueNumbers", () => {
 
   it("no longer reads a trailing #n on the branch, since a branch is keyed by .n or GH-n", () => {
     expect(linkedIssueNumbers("", "feature/thing#8")).toEqual([])
+  })
+
+  it("does not read a version number such as release/v1.2 as a trailing .n key", () => {
+    expect(linkedIssueNumbers("", "release/v1.2")).toEqual([])
+    expect(linkedIssueNumbers("", "release/v1.2.3")).toEqual([])
   })
 
   it("leaves another repository's owner/repo#n alone, since its number names an issue there", () => {

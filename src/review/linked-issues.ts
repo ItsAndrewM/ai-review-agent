@@ -22,7 +22,7 @@ type ReportUnreadable = (number: number, error: string) => void
 const CLOSING_REFERENCE = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi
 const BARE_REFERENCE = /(?<!\w)#(\d+)\b/g
 const BRANCH_ISSUE_KEY = /\bGH-(\d+)/g
-const BRANCH_TRAILING_KEY = /\.(\d+)$/g
+const BRANCH_TRAILING_KEY = /(?<!\d)\.(\d+)$/g
 
 export function linkedIssueNumbers(body: string | null, branch: string): number[] {
   const text = body ?? ""
