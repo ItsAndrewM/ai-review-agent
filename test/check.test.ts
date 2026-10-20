@@ -9,8 +9,21 @@ import {
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
+  unchangedCheckRun,
 } from "../src/review/check.ts"
 import type { FindingInput } from "../src/review/findings.ts"
+
+describe("unchangedCheckRun", () => {
+  it("completes the run as success when a push added no line to the diff and touched no open thread", () => {
+    const update = unchangedCheckRun("abc1234567", Date.UTC(2026, 9, 19, 14, 0, 0, 500))
+    expect(update.conclusion).toBe("success")
+    expect(update.completed_at).toBe("2026-10-19T14:00:00Z")
+    expect(update.output.title).toBe("No changes to review since `abc1234`")
+    expect(update.output.summary).toBe(
+      "The commits since `abc1234` add no line to the pull request's diff and touch none of its open threads, so there was nothing new to review.",
+    )
+  })
+})
 
 function finding(severity: FindingInput["severity"]): FindingInput {
   return { path: "src/x.ts", line: 1, quote: "q", basis_kind: "defect", basis: "x", severity, title: "t", body: "b" }

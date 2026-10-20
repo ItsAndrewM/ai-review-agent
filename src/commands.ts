@@ -16,8 +16,8 @@ export function helpText(botLogin: string): string {
   return [
     `**@${botLogin} commands**`,
     "",
-    `- \`@${botLogin} review\`: review the pull request at its current head.`,
-    `- \`@${botLogin} full review\`: the same, ignoring what was reviewed before.`,
+    `- \`@${botLogin} review\`: review what changed since the last review, or the whole pull request if there was none.`,
+    `- \`@${botLogin} full review\`: start over: review the whole pull request again, ignoring earlier reviews.`,
     `- \`@${botLogin} help\`: this message.`,
     "",
     `Anything else after \`@${botLogin}\` is a question for the reviewer about this pull request.`,

@@ -4,8 +4,18 @@ import {
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
+  type WalkthroughInput,
   type WrittenReview,
 } from "./findings.ts"
+import type { ReviewMode, SinceSection } from "./incremental.ts"
+
+export interface Coverage {
+  mode: ReviewMode
+  from?: string
+  to: string
+  files: number
+  resolved: number
+}
 
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
@@ -29,6 +39,7 @@ export function renderSummaryComment(input: {
   model?: string | undefined
   skillsFingerprint?: string | undefined
   linkedIssues: readonly number[]
+  since?: SinceSection | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
   const { door, blast_radius } = input.submission.merge_danger
@@ -60,11 +71,38 @@ export function renderSummaryComment(input: {
     "",
     walkthrough,
     dropped,
+    ...sinceLines(input.since),
     "",
     ...reviewedBy(input.model, input.skillsFingerprint),
     linkedIssuesLine(input.linkedIssues),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
+}
+
+function sinceLines(since: SinceSection | undefined): string[] {
+  if (since === undefined) return []
+  const files = since.files.map((path) => `\`${path}\``).join(", ") || "none"
+  return [
+    "",
+    `### Since \`${since.from.slice(0, 7)}\``,
+    "",
+    since.summary.trim(),
+    "",
+    `Files: ${files}. Resolved ${since.resolved} thread(s).`,
+  ]
+}
+
+export function mergeWalkthrough(
+  stored: readonly WalkthroughInput[],
+  incoming: readonly WalkthroughInput[],
+  covered: ReadonlySet<string>,
+): WalkthroughInput[] {
+  const replacements = new Map(incoming.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
+  const known = new Set(stored.map((row) => row.path))
+  return [
+    ...stored.map((row) => replacements.get(row.path) ?? row),
+    ...[...replacements.values()].filter((row) => !known.has(row.path)),
+  ]
 }
 
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
@@ -123,10 +161,28 @@ export function renderReviewBody(
   event: ReviewEvent,
   accepted: readonly FindingInput[],
   rejected: readonly Rejected[],
+  coverage?: Coverage,
 ): string {
+  const body = findingsLines(event, accepted, rejected)
+  const covered = coverageLine(coverage)
+  return covered === undefined ? body : `${body}\n\n${covered}`
+}
+
+function findingsLines(event: ReviewEvent, accepted: readonly FindingInput[], rejected: readonly Rejected[]): string {
   const held = heldBack(rejected)
   if (held === undefined) return inlineSummary(event, accepted)
   return accepted.length === 0 ? held : `${inlineSummary(event, accepted)}\n\n${held}`
+}
+
+function coverageLine(coverage: Coverage | undefined): string | undefined {
+  if (coverage === undefined) return undefined
+  if (coverage.mode !== "incremental" || coverage.from === undefined) return "<sub>Full review.</sub>"
+  const range = `${coverage.from.slice(0, 7)}..${coverage.to.slice(0, 7)}`
+  return `<sub>Incremental review of \`${range}\`: ${plural(coverage.files, "file")}; ${plural(coverage.resolved, "thread")} resolved.</sub>`
+}
+
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
 }
 
 function heldBack(rejected: readonly Rejected[]): string | undefined {
@@ -164,9 +220,12 @@ export function chooseReviewEvent(
   accepted: readonly FindingInput[],
   rejected: readonly Rejected[],
   requestChangesWorkflow: boolean,
+  openBlocking?: number | "unknown",
 ): ReviewEvent {
   if (!requestChangesWorkflow) return "COMMENT"
   if (countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)) return "REQUEST_CHANGES"
+  if (openBlocking === "unknown") return "COMMENT"
+  if ((openBlocking ?? 0) > 0) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
   return "COMMENT"
 }

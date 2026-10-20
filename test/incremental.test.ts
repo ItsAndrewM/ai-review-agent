@@ -1,0 +1,554 @@
+import { describe, expect, it } from "vitest"
+import type { ReviewThread } from "../src/github/client.ts"
+import type { ChangedFile } from "../src/github/diff.ts"
+import type { FindingInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
+import {
+  addressedThreads,
+  applyDeltaPolicy,
+  buildScope,
+  chooseMode,
+  coveredFiles,
+  coveredMap,
+  findingRecords,
+  nextReviewed,
+  nothingToReview,
+  openBlockingAfter,
+  openBotThreads,
+  pathsNeedingRows,
+  planThreads,
+  promptFiles,
+  resolveThreads,
+  threadLists,
+  threadsToRecheck,
+  type OpenThread,
+  type ReviewedRecord,
+  type StoredFinding,
+} from "../src/review/incremental.ts"
+
+const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
+
+function changed(filename: string, patch: string): ChangedFile {
+  return { filename, status: "modified", additions: 1, deletions: 0, patch }
+}
+
+function botThread(id: string, overrides: Partial<ReviewThread> = {}): ReviewThread {
+  return {
+    id,
+    resolved: false,
+    outdated: false,
+    path: "a.ts",
+    line: 3,
+    side: "RIGHT",
+    firstCommentId: 100,
+    firstCommentBody: "**🔴 Blocking: Total is NaN**\n\nWhy.",
+    authorLogin: "andabot",
+    authorIsBot: true,
+    ...overrides,
+  }
+}
+
+function open(handle: string, overrides: Partial<OpenThread> = {}): OpenThread {
+  return {
+    handle,
+    threadId: `thread-${handle}`,
+    firstCommentId: 1,
+    path: "a.ts",
+    line: 3,
+    side: "RIGHT",
+    outdated: false,
+    title: "t",
+    blocking: false,
+    ...overrides,
+  }
+}
+
+describe("chooseMode", () => {
+  const push = { full: false, reviewed, baseRef: "main" }
+
+  it("starts over on a full review request, whatever came before", () => {
+    expect(chooseMode({ ...push, full: true, compareStatus: "ahead" })).toBe("fresh")
+  })
+
+  it("reviews the whole pull request when nothing was reviewed before", () => {
+    expect(chooseMode({ ...push, reviewed: undefined, compareStatus: undefined })).toBe("full")
+  })
+
+  it("reviews the whole pull request when history was rewritten or the compare failed", () => {
+    for (const compareStatus of ["diverged", "behind", undefined] as const) {
+      expect(chooseMode({ ...push, compareStatus })).toBe("full")
+    }
+  })
+
+  it("treats an unchanged head as an incremental review with nothing new, not a full one", () => {
+    expect(chooseMode({ ...push, compareStatus: "identical" })).toBe("incremental")
+  })
+
+  it("reviews the whole pull request when its base branch changed", () => {
+    expect(chooseMode({ ...push, baseRef: "release", compareStatus: "ahead" })).toBe("full")
+  })
+
+  it("reviews only the new commits after a fast-forward on the same base", () => {
+    expect(chooseMode({ ...push, compareStatus: "ahead" })).toBe("incremental")
+  })
+})
+
+describe("coveredFiles", () => {
+  it("skips a file only the compare changed, as a merge from the base would", () => {
+    const pr = [
+      changed("a.ts", ["@@ -1,2 +1,3 @@", " one", "+two", "+three"].join("\n")),
+      changed("b.ts", ["@@ -1 +1 @@", "-x", "+y"].join("\n")),
+      changed("reverted.ts", ["@@ -1 +1 @@", "-p", "+q"].join("\n")),
+    ]
+    const delta = [
+      changed("a.ts", ["@@ -1,2 +1,3 @@", " one", " two", "+three"].join("\n")),
+      changed("from-main.ts", ["@@ -1 +1 @@", "-m", "+n"].join("\n")),
+      changed("reverted.ts", ["@@ -1,2 +1 @@", " q", "-r"].join("\n")),
+    ]
+    const covered = coveredFiles(pr, delta)
+    expect([...covered.keys()]).toEqual(["a.ts"])
+    expect([...(covered.get("a.ts")?.right ?? [])]).toEqual([3])
+  })
+
+  it("leaves a merge from the base unmarked when it only changed context lines of the pull request's hunk", () => {
+    const mergedOnly = coveredFiles(
+      [changed("a.ts", ["@@ -1,5 +1,5 @@", " a", " b", "-c", "+C", " d", " E"].join("\n"))],
+      [changed("a.ts", ["@@ -3,3 +3,3 @@", " C", " d", "-e", "+E"].join("\n"))],
+    )
+    expect(mergedOnly.size).toBe(0)
+
+    const both = coveredFiles(
+      [changed("a.ts", ["@@ -1,5 +1,5 @@", " a", " b", "-c", "+CC", " d", " E"].join("\n"))],
+      [changed("a.ts", ["@@ -3,3 +3,3 @@", "-C", "+CC", " d", "-e", "+E"].join("\n"))],
+    )
+    expect([...(both.get("a.ts")?.right ?? [])]).toEqual([3])
+  })
+})
+
+describe("openBotThreads", () => {
+  it("keeps only the bot's unresolved threads and ignores a person's and CodeRabbit's", () => {
+    const threads = openBotThreads(
+      [
+        botThread("mine"),
+        botThread("person", { authorLogin: "andrew", authorIsBot: false }),
+        botThread("rabbit", { authorLogin: "coderabbitai", authorIsBot: true }),
+        botThread("done", { resolved: true }),
+        botThread("ghost", { authorLogin: null, authorIsBot: false }),
+      ],
+      new Map(),
+      "andabot",
+    )
+    expect(threads.map((t) => [t.handle, t.threadId])).toEqual([["T1", "mine"]])
+  })
+
+  it("keeps every open thread, newest first", () => {
+    const many = Array.from({ length: 32 }, (_, i) => botThread(`t${i}`, { firstCommentId: i }))
+    const threads = openBotThreads(many, new Map(), "andabot")
+    expect(threads).toHaveLength(32)
+    expect(threads.slice(0, 2).map((t) => [t.handle, t.threadId])).toEqual([
+      ["T1", "t31"],
+      ["T2", "t30"],
+    ])
+  })
+
+  it("reads severity from the stored finding, else from the comment's label", () => {
+    const stored: StoredFinding = { severity: "nitpick", title: "Stored title", quote: "const b = 3;", path: "a.ts" }
+    const threads = openBotThreads(
+      [
+        botThread("stored", { firstCommentId: 1 }),
+        botThread("labelled", { firstCommentId: 2 }),
+        botThread("suggestion", { firstCommentId: 3, firstCommentBody: "**🟡 Suggestion: Rename it**\n\nWhy." }),
+        botThread("unlabelled", { firstCommentId: 4, firstCommentBody: "Something else entirely" }),
+      ],
+      new Map([[1, stored]]),
+      "andabot",
+    )
+    expect(threads.map((t) => [t.title, t.blocking, t.quote])).toEqual([
+      ["Something else entirely", false, undefined],
+      ["Rename it", false, undefined],
+      ["Total is NaN", true, undefined],
+      ["Stored title", false, "const b = 3;"],
+    ])
+  })
+})
+
+describe("planThreads", () => {
+  it("re-checks and dedupes against every open thread, not only the 30 the prompt lists", () => {
+    const threads = Array.from({ length: 42 }, (_, i) =>
+      botThread(`t${i + 1}`, { firstCommentId: i + 1, line: i === 41 ? null : i + 1, outdated: i === 41 }),
+    )
+    const plan = planThreads({
+      threads,
+      findings: new Map(),
+      botLogin: "andabot",
+      mode: "full",
+      covered: new Map(),
+      since: [],
+    })
+    expect(plan.open).toHaveLength(42)
+    expect(plan.recheck.map((t) => t.threadId)).toEqual(["t42"])
+    const onTheOldestThread = found({ line: 1, severity: "blocking" })
+    const scoped = applyDeltaPolicy(validated([onTheOldestThread]), {
+      mode: "full",
+      covered: new Map(),
+      open: plan.open,
+    })
+    expect(scoped.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T42"])
+  })
+})
+
+describe("threadLists", () => {
+  it("lists the threads to re-check first and caps both lists at 30 together, counting the rest", () => {
+    const all = Array.from({ length: 42 }, (_, i) => open(`T${i + 1}`))
+    const lists = threadLists(all, all.slice(40))
+    expect(lists.recheck.map((t) => t.handle)).toEqual(["T41", "T42"])
+    expect(lists.otherThreads.map((t) => t.handle)).toEqual(all.slice(0, 28).map((t) => t.handle))
+    expect(lists.leftOut).toBe(12)
+  })
+})
+
+describe("threadsToRecheck", () => {
+  const threads = [
+    open("T1", { outdated: true, line: null, quote: "console.log(secret)" }),
+    open("T2", { line: 3 }),
+    open("T3", { line: 9 }),
+    open("T4", { path: "c.ts", line: 3 }),
+    open("T5", { outdated: true, line: null, quote: "const kept = 1;" }),
+    open("T6", { path: "b.ts", outdated: true, line: null }),
+    open("T7", { path: "d.ts", outdated: true, line: null }),
+    open("T8", { path: "e.ts", side: "LEFT", outdated: true, line: null, quote: "guard()" }),
+  ]
+  const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+  const since = [
+    changed("a.ts", ["@@ -1,3 +1,3 @@", " one", "-console.log(secret)", " const kept = 1;", "+three"].join("\n")),
+    changed("d.ts", ["@@ -1 +1 @@", "-x", "+y"].join("\n")),
+    changed("e.ts", ["@@ -1 +1,2 @@", " a", "+guard()"].join("\n")),
+  ]
+
+  it("re-checks threads on marked lines and outdated threads whose code the push changed", () => {
+    expect(threadsToRecheck(threads, "incremental", covered, since).map((t) => t.handle)).toEqual([
+      "T1",
+      "T2",
+      "T7",
+      "T8",
+    ])
+  })
+
+  it("takes every outdated thread in a full review, and none when starting over", () => {
+    expect(threadsToRecheck(threads, "full", covered, []).map((t) => t.handle)).toEqual(["T1", "T5", "T6", "T7", "T8"])
+    expect(threadsToRecheck(threads, "fresh", covered, since)).toEqual([])
+  })
+})
+
+describe("nothingToReview", () => {
+  const incremental = { deliveryId: "d", mode: "incremental" as const, from: "aaa", threads: undefined }
+  const marked = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("skips an incremental review only when no line is marked and no thread is to be re-checked", () => {
+    expect(nothingToReview(buildScope({ ...incremental, covered: new Map() }))).toBe(true)
+    expect(nothingToReview(buildScope({ ...incremental, covered: marked }))).toBe(false)
+    const fixed = open("T1", { outdated: true, line: null })
+    const recheckOnly = { ...incremental, covered: new Map(), threads: { open: [fixed], recheck: [fixed] } }
+    expect(nothingToReview(buildScope(recheckOnly))).toBe(false)
+    expect(nothingToReview(buildScope({ ...incremental, mode: "full", covered: new Map() }))).toBe(false)
+  })
+})
+
+describe("pathsNeedingRows", () => {
+  const files = [
+    changed("a.ts", "@@ -1 +1 @@\n-x\n+y"),
+    changed("b.ts", "@@ -1 +1 @@\n-p\n+q"),
+    changed("pnpm-lock.yaml", "@@ -1 +1 @@\n-1\n+2"),
+  ]
+  const marked = { right: new Set([1]), left: new Set<number>() }
+  const covered = new Map([
+    ["a.ts", marked],
+    ["pnpm-lock.yaml", marked],
+  ])
+
+  it("asks an incremental review for rows on the files it covered only, leaving out generated ones", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
+    expect(pathsNeedingRows(scope, files)).toEqual(["a.ts"])
+  })
+
+  it("asks an incremental review that only re-checks threads for no rows", () => {
+    const fixed = open("T1", { outdated: true, line: null })
+    const threads = { open: [fixed], recheck: [fixed] }
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered: new Map(), threads })
+    expect(pathsNeedingRows(scope, files)).toEqual([])
+  })
+
+  it("asks a full or fresh review for a row on every changed file but the generated ones", () => {
+    for (const mode of ["full", "fresh"] as const) {
+      const scope = buildScope({ deliveryId: "d", mode, from: "aaa", covered, threads: undefined })
+      expect(pathsNeedingRows(scope, files)).toEqual(["a.ts", "b.ts"])
+    }
+  })
+
+  it("asks for every row when an incremental scope has no range, since its prompt then shows the whole diff", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: undefined, covered, threads: undefined })
+    expect(pathsNeedingRows(scope, files)).toEqual(["a.ts", "b.ts"])
+  })
+})
+
+describe("promptFiles", () => {
+  it("shows a file whose only new changes left the diff when one of its threads is to be re-checked", () => {
+    const prFiles = [
+      changed("a.ts", "@@ -1 +1 @@\n-x\n+y"),
+      changed("b.ts", "@@ -1 +1 @@\n-p\n+q"),
+      changed("c.ts", ""),
+    ]
+    const since = [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), changed("gone.ts", "@@ -1 +0,0 @@\n-debug()")]
+    const gone = open("T1", { path: "gone.ts", outdated: true, line: null, quote: "debug()" })
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered: new Map([["a.ts", { right: new Set([1]), left: new Set<number>() }]]),
+      threads: { open: [gone], recheck: [gone] },
+    })
+    const files = promptFiles(prFiles, since, scope)
+    expect(files.covered.map((f) => f.filename)).toEqual(["a.ts"])
+    expect(files.recheckOnly.map((f) => f.filename)).toEqual(["gone.ts"])
+    expect(files.others.map((f) => f.filename)).toEqual(["b.ts", "c.ts"])
+  })
+})
+
+function found(overrides: Partial<FindingInput> = {}): FindingInput {
+  return {
+    path: "a.ts",
+    line: 3,
+    quote: "three",
+    basis_kind: "defect",
+    basis: "b",
+    severity: "suggestion",
+    title: "t",
+    body: "b",
+    ...overrides,
+  }
+}
+
+function validated(accepted: FindingInput[]): ValidatedReview {
+  return { accepted, rejected: [], relocated: 0, suggestionsDropped: 0 }
+}
+
+describe("applyDeltaPolicy", () => {
+  const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("rejects a non-blocking finding off the marked lines and keeps a blocking one", () => {
+    const onMarked = found({ line: 3 })
+    const offMarked = found({ line: 5 })
+    const blockingOff = found({ line: 6, severity: "blocking" })
+    const uncoveredFile = found({ path: "b.ts", line: 2 })
+    const result = applyDeltaPolicy(validated([onMarked, offMarked, blockingOff, uncoveredFile]), {
+      mode: "incremental",
+      covered,
+      open: [],
+    })
+    expect(result.accepted).toEqual([onMarked, blockingOff])
+    expect(result.rejected.map((r) => [r.finding.line, r.reason])).toEqual([
+      [5, "line 5 was not changed since the last review; only a blocking finding may go elsewhere"],
+      [2, "line 2 was not changed since the last review; only a blocking finding may go elsewhere"],
+    ])
+    expect(result.duplicates).toEqual([])
+  })
+
+  it("still posts a blocking finding on the line of an open thread that isn't blocking", () => {
+    const threads = [open("T1", { line: 3 }), open("T2", { line: 9, blocking: true })]
+    const blockingOnNitpick = found({ line: 3, severity: "blocking" })
+    const suggestionOnBlocker = found({ line: 9, quote: "nine" })
+    const result = applyDeltaPolicy(validated([blockingOnNitpick, suggestionOnBlocker]), {
+      mode: "full",
+      covered,
+      open: threads,
+    })
+    expect(result.accepted).toEqual([blockingOnNitpick])
+    expect(result.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T2"])
+  })
+
+  it("matches a thread by its quote only once GitHub reports it outdated", () => {
+    const threads = [open("T1", { line: 3, quote: "}" }), open("T2", { outdated: true, line: null, quote: "}" })]
+    const sameTextElsewhere = found({ path: "b.ts", line: 7, quote: "}" })
+    const result = applyDeltaPolicy(validated([sameTextElsewhere]), {
+      mode: "full",
+      covered,
+      open: [...threads, open("T3", { path: "b.ts", line: 2, quote: "}" })],
+    })
+    expect(result.accepted).toEqual([sameTextElsewhere])
+    const moved = found({ line: 12, quote: "}" })
+    expect(applyDeltaPolicy(validated([moved]), { mode: "full", covered, open: threads }).duplicates).toEqual([
+      { finding: moved, reason: "duplicates open thread T2" },
+    ])
+  })
+
+  it("sets aside a duplicate of an open thread by line or by quote", () => {
+    const threads = [
+      open("T1", { line: 3, quote: "three" }),
+      open("T2", { outdated: true, line: null, quote: "const nine = 9;" }),
+    ]
+    const sameLine = found({ line: 3, quote: "something else" })
+    const sameQuote = found({ line: 4, quote: "  const  nine = 9; " })
+    const unique = found({ line: 7, quote: "seven" })
+    const result = applyDeltaPolicy(validated([sameLine, sameQuote, unique]), { mode: "full", covered, open: threads })
+    expect(result.accepted).toEqual([unique])
+    expect(result.duplicates.map((r) => r.reason)).toEqual(["duplicates open thread T1", "duplicates open thread T2"])
+    expect(result.rejected).toEqual([])
+  })
+
+  it("passes a fresh review through untouched, keeping what validation rejected", () => {
+    const earlier = { finding: found({ line: 40 }), reason: "line 40 (RIGHT) is not in the diff of a.ts" }
+    const input = { ...validated([found({ line: 5 })]), rejected: [earlier] }
+    const result = applyDeltaPolicy(input, { mode: "fresh", covered, open: [open("T1", { line: 5 })] })
+    expect(result).toEqual({ accepted: input.accepted, rejected: [earlier], duplicates: [] })
+  })
+})
+
+describe("addressedThreads", () => {
+  const recheck = [open("T1"), open("T3")]
+
+  it("resolves only handles from the re-check list, once each", () => {
+    const { resolve, unknown } = addressedThreads(["T1", "T2", "T3", "T1"], recheck)
+    expect(resolve.map((t) => t.handle)).toEqual(["T1", "T3"])
+    expect(unknown).toEqual(["T2"])
+  })
+
+  it("resolves nothing when the model listed no threads", () => {
+    expect(addressedThreads(undefined, recheck)).toEqual({ resolve: [], unknown: [] })
+  })
+})
+
+describe("the review scope", () => {
+  const covered = new Map([["a.ts", { right: new Set([3, 4]), left: new Set([2]) }]])
+  const blocker = open("T1", { blocking: true })
+  const threads = {
+    open: [blocker, open("T2"), open("T3", { blocking: true }), open("T4", { blocking: true })],
+    recheck: [blocker],
+  }
+
+  it("keeps the range only for an incremental review and records whether threads were read", () => {
+    const incremental = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(incremental).toMatchObject({ deliveryId: "d-1", mode: "incremental", from: "aaa", threadsKnown: true })
+    expect(incremental.open.map((t) => t.handle)).toEqual(["T1", "T2", "T3", "T4"])
+    expect(incremental.recheck.map((t) => t.handle)).toEqual(["T1"])
+    const full = buildScope({ deliveryId: "d-1", mode: "full", from: "aaa", covered: new Map(), threads: undefined })
+    expect(full.from).toBeUndefined()
+    expect(full).toMatchObject({ threadsKnown: false, open: [], recheck: [] })
+  })
+
+  it("counts every open blocking thread, including those the prompt's lists leave out", () => {
+    const blockers = Array.from({ length: 31 }, (_, i) => open(`T${i + 1}`, { blocking: true }))
+    const scope = buildScope({
+      deliveryId: "d-1",
+      mode: "full",
+      from: undefined,
+      covered: new Map(),
+      threads: { open: [...blockers, open("T32")], recheck: [] },
+    })
+    expect(openBlockingAfter(scope, [])).toBe(31)
+  })
+
+  it("round-trips its covered lines through the stored record", () => {
+    const scope = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(coveredMap(scope)).toEqual(covered)
+  })
+
+  it("counts the blocking threads left open after this review's resolutions, unless they couldn't be read", () => {
+    const scope = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
+    expect(openBlockingAfter(scope, [])).toBe(3)
+    expect(openBlockingAfter(scope, [open("T1", { blocking: true }), open("T2")])).toBe(2)
+    const unread = buildScope({ deliveryId: "d-1", mode: "full", from: undefined, covered, threads: undefined })
+    expect(openBlockingAfter(unread, [])).toBe("unknown")
+  })
+})
+
+describe("resolveThreads", () => {
+  it("returns only the threads GitHub resolved, so a failed resolution still blocks approval", async () => {
+    const resolver = {
+      resolveReviewThread: (threadId: string): Promise<void> =>
+        threadId === "thread-T2" ? Promise.reject(new Error("GitHub GraphQL: 502")) : Promise.resolve(),
+    }
+    const fixed = open("T1", { blocking: true })
+    const stillOpen = open("T2", { blocking: true })
+    const attempt = await resolveThreads(resolver, [fixed, stillOpen])
+    expect(attempt.resolved).toEqual([fixed])
+    expect(attempt.failed).toEqual([{ thread: stillOpen, error: "Error: GitHub GraphQL: 502" }])
+    const scope = buildScope({
+      deliveryId: "d-1",
+      mode: "incremental",
+      from: "aaa",
+      covered: new Map(),
+      threads: { open: [fixed, stillOpen], recheck: [fixed, stillOpen] },
+    })
+    expect(openBlockingAfter(scope, attempt.resolved)).toBe(1)
+  })
+})
+
+describe("findingRecords", () => {
+  it("matches each posted comment to its finding by path, line and side", () => {
+    const right = found({ line: 3, quote: "three", severity: "blocking", title: "Right" })
+    const left = found({ line: 3, side: "LEFT", quote: "old three", title: "Left" })
+    const records = findingRecords(
+      [right, left],
+      [
+        { id: 11, reviewId: 7, path: "a.ts", line: 3, side: "RIGHT" },
+        { id: 12, reviewId: 7, path: "a.ts", line: 3, side: "LEFT" },
+        { id: 13, reviewId: 7, path: "a.ts", line: null, side: null },
+      ],
+    )
+    expect(records).toEqual(
+      new Map([
+        [11, { severity: "blocking", title: "Right", quote: "three", path: "a.ts" }],
+        [12, { severity: "suggestion", title: "Left", quote: "old three", path: "a.ts" }],
+      ]),
+    )
+  })
+})
+
+describe("nextReviewed", () => {
+  const submission: ReviewSubmissionInput = {
+    summary: "This push fixes the total.",
+    walkthrough: [{ path: "a.ts", summary: "new a" }],
+    findings: [],
+    verdict: "comment",
+    merge_danger: { door: "two-way", blast_radius: "the totals" },
+  }
+  const previous: ReviewedRecord = {
+    headSha: "aaa",
+    baseRef: "main",
+    at: 1,
+    mode: "full",
+    summary: "The whole PR.",
+    walkthrough: [
+      { path: "a.ts", summary: "old a" },
+      { path: "b.ts", summary: "old b" },
+    ],
+  }
+  const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("starts over from a full review's summary and walkthrough", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 0 })).toEqual({
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      mode: "full",
+      summary: "This push fixes the total.",
+      walkthrough: [{ path: "a.ts", summary: "new a" }],
+    })
+  })
+
+  it("keeps the last full summary and adds a since section on an incremental review", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
+    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 1 })).toEqual({
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      mode: "incremental",
+      summary: "The whole PR.",
+      walkthrough: [
+        { path: "a.ts", summary: "new a" },
+        { path: "b.ts", summary: "old b" },
+      ],
+      since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
+    })
+  })
+})

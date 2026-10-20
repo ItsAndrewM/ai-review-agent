@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "2"
+  version: "3"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -31,6 +31,8 @@ Record a finding only where a check fails on an anchored line. A requirement the
 - Rest each finding on code you have read, in the diff or through `read_file`.
 - When one problem recurs, record it once, on its first line, and name the other lines in its body.
 - Before giving replacement code in `suggestion`, read it in place of the lines it replaces: it keeps what they did right and fixes the problem.
+
+In an incremental review, comment only on lines marked `*`, except for a blocking bug the new changes cause elsewhere in the diff. List in `addressed_threads` each thread to re-check whose problem the new changes fix. Don't repeat an open thread.
 
 ## 4. Grade severity
 

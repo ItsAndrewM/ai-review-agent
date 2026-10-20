@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest"
-import { commentableLines, isGenerated, renderPatches, requiresWalkthrough } from "../src/github/diff.ts"
+import {
+  commentableLines,
+  deltaLines,
+  isGenerated,
+  markedLines,
+  renderPatches,
+  requiresWalkthrough,
+} from "../src/github/diff.ts"
 
 const patch = [
   "@@ -1,4 +1,5 @@",
@@ -90,6 +97,62 @@ describe("renderPatches", () => {
     ])
     expect(text).toContain("### pnpm-lock.yaml (added, +4000 -0)\n(patch omitted")
     expect(text).not.toContain("lockfileVersion")
+  })
+})
+
+describe("deltaLines and markedLines", () => {
+  const prPatch = [
+    "@@ -1,3 +1,4 @@",
+    " const a = 1;",
+    "-const b = 2;",
+    "+const b = 3;",
+    "+const c = 4;",
+    " export { a, b };",
+  ].join("\n")
+
+  it("deltaLines takes added lines by new number and by text, and deleted lines by text", () => {
+    const delta = deltaLines(patch)
+    expect([...delta.added].sort((x, y) => x - y)).toEqual([2, 3, 11, 12])
+    expect([...delta.addedTexts].sort()).toEqual(["", "// added", "import { b, c } from './b';", "return c;"])
+    expect([...delta.deletedTexts].sort()).toEqual(["import { b } from './b';", "return 1;"])
+  })
+
+  it("a file with no patch has no delta lines", () => {
+    const delta = deltaLines(undefined)
+    expect(delta.added.size).toBe(0)
+    expect(delta.deletedTexts.size).toBe(0)
+  })
+
+  it("markedLines marks the PR's lines the delta added, and its deleted lines by text", () => {
+    const addedSince = ["@@ -1,3 +1,4 @@", " const a = 1;", " const b = 3;", "+const c = 4;", " export { a, b };"]
+    const onlyC = markedLines(prPatch, addedSince.join("\n"))
+    expect([...onlyC.right]).toEqual([3])
+    expect([...onlyC.left]).toEqual([])
+
+    const changedSince = ["@@ -1,3 +1,4 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " const c = 4;"]
+    const bothSides = markedLines(prPatch, changedSince.join("\n"))
+    expect([...bothSides.right]).toEqual([2])
+    expect([...bothSides.left]).toEqual([2])
+
+    const newFile = ["@@ -0,0 +1,3 @@", "+x", "+y", "+z"].join("\n")
+    const lastLineOnly = markedLines(newFile, ["@@ -1,2 +1,3 @@", " x", " y", "+z"].join("\n"))
+    expect([...lastLineOnly.right]).toEqual([3])
+  })
+
+  it("markedLines leaves the PR's context lines unmarked, even when the delta added them", () => {
+    const fromMain = ["@@ -3,2 +3,2 @@", " const c = 4;", "-export { a };", "+export { a, b };"].join("\n")
+    expect([...markedLines(prPatch, fromMain).right]).toEqual([])
+  })
+
+  it("renderPatches stars marked anchors and leaves the others alone", () => {
+    const text = renderPatches(
+      [{ filename: "src/x.ts", status: "modified", additions: 2, deletions: 1, patch: prPatch }],
+      undefined,
+      new Map([["src/x.ts", { right: new Set([2]), left: new Set<number>() }]]),
+    )
+    expect(text).toContain("R2*    +const b = 3;")
+    expect(text).toContain("R1      const a = 1;")
+    expect(text).toContain("R3     +const c = 4;")
   })
 })
 

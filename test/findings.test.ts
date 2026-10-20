@@ -15,6 +15,7 @@ import {
 import {
   chooseReviewEvent,
   incompleteNote,
+  mergeWalkthrough,
   renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
@@ -331,13 +332,12 @@ describe("missingWalkthrough", () => {
       { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
     ]
     const submission = { ...base, walkthrough: [{ path: "src/x.ts", summary: "s" }] }
-    expect(missingWalkthrough(submission, files)).toEqual(["logo.png"])
+    expect(missingWalkthrough(submission, walkthroughPaths(files))).toEqual(["logo.png"])
   })
 
   it("counts a row whose path has surrounding spaces or a leading ./", () => {
-    const files = [{ filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch }]
     const submission = { ...base, walkthrough: [{ path: "./src/x.ts ", summary: "s" }] }
-    expect(missingWalkthrough(submission, files)).toEqual([])
+    expect(missingWalkthrough(submission, ["src/x.ts"])).toEqual([])
   })
 })
 
@@ -364,6 +364,13 @@ describe("parseWrittenReview", () => {
 
   it("takes a submission written as bare JSON, as gpt-oss-120b wrote its review of #5", () => {
     expect(parseWrittenReview(submittedJson)).toEqual({ kind: "submission", submission: submitted })
+  })
+
+  it("accepts the threads a submission says the new changes fixed, and holds back a malformed list", () => {
+    const withThreads = { ...submitted, addressed_threads: ["T1", "T3"] }
+    expect(parseWrittenReview(JSON.stringify(withThreads))).toEqual({ kind: "submission", submission: withThreads })
+    const malformed = parseWrittenReview(JSON.stringify({ ...submitted, addressed_threads: "T1" }))
+    expect(malformed).toEqual({ kind: "unfit", problem: expect.stringContaining("/addressed_threads") })
   })
 
   it("takes a submission inside a json code fence, with prose around it and fences in its findings", () => {
@@ -451,6 +458,23 @@ describe("chooseReviewEvent", () => {
     expect(chooseReviewEvent(base, [], rejectedAs("defect"), true)).toBe("REQUEST_CHANGES")
     expect(chooseReviewEvent(base, [], rejectedAs("spec"), true)).toBe("REQUEST_CHANGES")
   })
+
+  it("requests changes while one of its blocking threads stays open, and approves once none does", () => {
+    expect(chooseReviewEvent(base, [], [], true, 2)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(base, [], [], true, 0)).toBe("APPROVE")
+    expect(chooseReviewEvent(base, [], [], false, 2)).toBe("COMMENT")
+  })
+
+  it("never approves when its open threads couldn't be read", () => {
+    expect(chooseReviewEvent(base, [], [], true, "unknown")).toBe("COMMENT")
+    expect(chooseReviewEvent(base, [finding()], [], true, "unknown")).toBe("REQUEST_CHANGES")
+  })
+
+  it("holds approval back for an open blocking thread even when the only rejected finding is a standard one", () => {
+    const standard = [{ finding: finding({ basis_kind: "standard" }), reason: BLOCKING_STANDARD_OR_TEST }]
+    expect(chooseReviewEvent(base, [], standard, true, 1)).toBe("REQUEST_CHANGES")
+    expect(chooseReviewEvent(base, [], standard, true, 0)).toBe("APPROVE")
+  })
 })
 
 describe("renderReviewBody", () => {
@@ -508,7 +532,84 @@ describe("renderReviewBody", () => {
   })
 })
 
+describe("renderReviewBody coverage", () => {
+  it("says which commits and files an incremental review covered and how many threads it resolved", () => {
+    const coverage = { mode: "incremental" as const, from: "abc1234567", to: "def5678901", files: 3, resolved: 2 }
+    expect(renderReviewBody("COMMENT", [], [], coverage)).toBe(
+      "No findings to anchor to the diff. See the summary comment.\n\n<sub>Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved.</sub>",
+    )
+    expect(renderReviewBody("COMMENT", [], [], { ...coverage, files: 1, resolved: 1 })).toContain(
+      "`abc1234..def5678`: 1 file; 1 thread resolved.",
+    )
+  })
+
+  it("says a full review covered everything, and says nothing without a coverage", () => {
+    expect(renderReviewBody("COMMENT", [], [], { mode: "full", to: "def5678901", files: 9, resolved: 0 })).toContain(
+      "\n\n<sub>Full review.</sub>",
+    )
+    expect(renderReviewBody("COMMENT", [], [])).not.toContain("<sub>")
+  })
+})
+
+describe("mergeWalkthrough", () => {
+  it("replaces the rows of re-reviewed files, keeps the rest, and ignores rows for files it didn't cover", () => {
+    const merged = mergeWalkthrough(
+      [
+        { path: "a.ts", summary: "old a" },
+        { path: "b.ts", summary: "old b" },
+      ],
+      [
+        { path: "a.ts", summary: "new a" },
+        { path: "b.ts", summary: "not covered" },
+        { path: "c.ts", summary: "new c" },
+      ],
+      new Set(["a.ts", "c.ts"]),
+    )
+    expect(merged).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+      { path: "c.ts", summary: "new c" },
+    ])
+  })
+})
+
 describe("renderSummaryComment", () => {
+  it("adds a section for what changed since the last full review", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "COMMENT",
+      submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      since: {
+        from: "abc1234567",
+        to: "def5678901",
+        summary: "Fixed the total.",
+        files: ["a.ts", "b.ts"],
+        resolved: 1,
+      },
+    })
+    expect(text).toContain("### Summary\n\nThe whole PR.")
+    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread(s).")
+  })
+
+  it("keeps the merge danger under the verdict and the linked issues in the footer when it adds the since section", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "COMMENT",
+      submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [24],
+      since: { from: "abc1234567", to: "def5678901", summary: "Fixed the total.", files: ["a.ts"], resolved: 0 },
+    })
+    expect(text).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
+    expect(text.indexOf("### Since `abc1234`")).toBeLessThan(text.indexOf("<sub>Linked issues: #24</sub>"))
+  })
+
   const summaryWith = (attribution: { model?: string; skillsFingerprint?: string; linkedIssues?: number[] }) =>
     renderSummaryComment({
       botLogin: "andabot",

@@ -2,7 +2,13 @@ import { Type } from "@earendil-works/pi-ai"
 import type { Static } from "typebox"
 import { Value } from "typebox/value"
 import type { ReviewComment } from "../github/client.ts"
-import { requiresWalkthrough, type ChangedFile, type CommentableLines, type Side } from "../github/diff.ts"
+import {
+  comparableText,
+  requiresWalkthrough,
+  type ChangedFile,
+  type CommentableLines,
+  type Side,
+} from "../github/diff.ts"
 import { errorText } from "../log.ts"
 
 export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
@@ -75,9 +81,17 @@ export const ReviewSubmission = Type.Object({
     },
     { description: "How hard the change is to walk back, and how far a failure reaches." },
   ),
+  addressed_threads: Type.Optional(
+    Type.Array(
+      Type.String({
+        description: "A handle from the threads to re-check, such as T2, whose problem the new changes fix.",
+      }),
+    ),
+  ),
 })
 
 export type FindingInput = Static<typeof Finding>
+export type WalkthroughInput = Static<typeof Walkthrough>
 export type ReviewSubmissionInput = Static<typeof ReviewSubmission>
 
 export type WrittenReview =
@@ -214,9 +228,9 @@ function checkFinding(finding: FindingInput, commentable: ReadonlyMap<string, Co
 function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Anchored {
   const text = lines.get(finding.line)
   if (text === undefined) return { reason: `line ${finding.line} (${side}) is not in the diff of ${finding.path}` }
-  const quote = comparable(finding.quote)
-  if (comparable(text) === quote) return { finding, relocated: false }
-  const [only, ...others] = [...lines].filter(([, other]) => comparable(other) === quote).map(([line]) => line)
+  const quote = comparableText(finding.quote)
+  if (comparableText(text) === quote) return { finding, relocated: false }
+  const [only, ...others] = [...lines].filter(([, other]) => comparableText(other) === quote).map(([line]) => line)
   if (only === undefined)
     return {
       reason: `quote does not match line ${finding.line} (${side}) and no other line in ${finding.path} matches`,
@@ -224,10 +238,6 @@ function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<num
   if (others.length > 0)
     return { reason: `quote matches ${others.length + 1} lines in ${finding.path}; anchor the right one` }
   return { finding: moveTo(finding, only), relocated: true }
-}
-
-function comparable(text: string): string {
-  return text.trim().replace(/\s+/g, " ")
 }
 
 function moveTo({ start_line, suggestion, ...finding }: FindingInput, line: number): FindingInput {
@@ -327,16 +337,16 @@ export function walkthroughPaths(files: readonly ChangedFile[]): string[] {
   return files.filter((file) => requiresWalkthrough(file)).map((file) => file.filename)
 }
 
-export function missingWalkthrough(submission: ReviewSubmissionInput, files: readonly ChangedFile[]): string[] {
+export function missingWalkthrough(submission: ReviewSubmissionInput, needed: readonly string[]): string[] {
   const covered = new Set(submission.walkthrough.map((row) => rowPath(row.path)))
-  return walkthroughPaths(files).filter((path) => !covered.has(path))
+  return needed.filter((path) => !covered.has(path))
 }
 
 function rowPath(path: string): string {
   return path.trim().replace(/^\.\//, "")
 }
 
-const SEVERITY_LABEL = {
+export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
   suggestion: "🟡 Suggestion",
   nitpick: "⚪ Nitpick",

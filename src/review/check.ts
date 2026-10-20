@@ -57,6 +57,15 @@ export function supersededCheckRun(newHeadSha: string, completedAt: number): Upd
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
+export function unchangedCheckRun(sinceSha: string, completedAt: number): UpdateCheckRun {
+  const since = shortSha(sinceSha)
+  const output = checkOutput(
+    `No changes to review since \`${since}\``,
+    `The commits since \`${since}\` add no line to the pull request's diff and touch none of its open threads, so there was nothing new to review.`,
+  )
+  return completedCheckRun("success", output, undefined, completedAt)
+}
+
 export function replacedCheckRun(completedAt: number): UpdateCheckRun {
   const output = checkOutput("Replaced by a newer review", "A newer review of this head replaced this run.")
   return completedCheckRun("cancelled", output, undefined, completedAt)

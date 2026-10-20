@@ -43,7 +43,7 @@ Variables in `wrangler.jsonc`:
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. |
-| `REVIEW_MODEL` | `@cf/openai/gpt-oss-120b` | Workers AI model. Kimi K2.7 Code, GLM 5.x and DeepSeek V4 need the Workers Paid plan; on Free, the daily allowance of 10,000 neurons is about 300k input tokens for this model. |
+| `REVIEW_MODEL` | `@cf/zai-org/glm-5.3-flash` | Workers AI model. GLM 5.x, the default included, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash also run on Free. Workers AI's free 10,000 neurons a day cover about 15 to 28 reviews on GLM-5.3 Flash, as measured on #2. |
 | `MAX_OUTPUT_TOKENS` | `16000` | Most output tokens one model call may ask for, reasoning included; the model's own maximum and its context still cap it. Raise it, for example with `--var MAX_OUTPUT_TOKENS:32000` on deploy, when large pull requests get cut-off reviews. Anything but a positive whole number falls back to 16,000. `review.start` logs the value in effect as `maxOutputTokens`. |
 | `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. |
 

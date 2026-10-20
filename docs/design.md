@@ -10,7 +10,7 @@ Status: phase 1, the walking skeleton, is built, deployed and reviewing this rep
 | --- | --- | --- |
 | Agent harness | Pi Durable through the Agents SDK's `PiHarness` | Every turn, tool call and piece of state is committed before it is shown; idempotent submissions by request id; hooks before and after tool calls; survives eviction. Smallest loop of the three options. |
 | Approval policy | Request changes on actionable findings, approve when they are resolved | CodeRabbit's request-changes workflow, which is the feature worth keeping. |
-| Plan | Workers Paid, since 17 Oct 2026 | Unlocks Workers AI's paid models, such as Kimi K2.7 Code, and Containers for the sandbox tier. Reviews still run on gpt-oss-120b until #2 compares models. |
+| Plan | Workers Paid, since 17 Oct 2026 | Unlocks Workers AI's paid models, such as Kimi K2.7 Code, and Containers for the sandbox tier. Reviews run on GLM-5.3 Flash since #2 compared models on 19 Oct 2026. |
 | Repos | Andrew's own repos, public and private, through one GitHub App named `andabot` | An App's approval counts toward required reviews like a person's. The default Actions token's does not without an org setting. |
 | State | One Durable Object per pull request | Memory per PR for chat follow-ups, the approval state machine and incremental review live where the PR does. |
 
@@ -62,17 +62,18 @@ App permissions: Pull requests write, Contents read, Issues write, Checks write 
 
 State in its SQLite, beside Pi's `pi_` tables:
 
-- `reviewed_head`: the head SHA of the last completed review, and the base SHA it was diffed against.
+- `reviewed`: the head of the last review, the base branch's name, the mode it ran in, and the last full review's summary and walkthrough, with a `since` section from the latest incremental one. The next push diffs against that head, and a different base branch (a retargeted pull request) means a full review.
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
-- `bot_threads`: review comment ids the bot opened, with the finding each carries and whether it is resolved.
+- `finding:<commentId>`: the severity, title and quoted line of each inline comment the bot posted. Thread state isn't stored. Whether a thread is resolved or outdated, and where it sits now, is read live from GitHub on each review, so a thread a person resolved is always seen as resolved. These records only supply what GitHub doesn't: the quote to catch a repeat, and the severity that gates approval.
+- `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, and the threads to re-check. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
-- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the numbers of the linked issues its prompt carried, and whether its rejected findings and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
+- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the numbers of the linked issues its prompt carried, and whether its rejected findings, duplicates and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
 
 Methods, each an idempotent Pi submission:
 
-- `onPush(head, delivery)`: full review on first sight, incremental review (`compare reviewed_head...head`) after that.
+- `onPush(head, delivery)`: full review on first sight, incremental review (`compare reviewed...head`) after that.
 - `onCommand(comment, delivery)`: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`, else a chat turn.
 - `onThreadResolved`, `onChecksCompleted`: run the approval evaluation, no model call.
 
@@ -94,7 +95,7 @@ Findings are anchored by copying, not counting (#4). On #1 the model counted lin
 
 A suggestion replaces the anchored lines whole, indentation included, and the model writes it like a code block in prose: on #9 every suggestion lost its line's indentation, and one restoring a deleted guard replaced the line after the deletion instead of going above it, which would not have compiled (#14). So when a suggestion is less indented than the lines it replaces, the host moves its common indentation to theirs, keeping its relative indentation; a suggestion indented further is left alone, since that may be deliberate. Then the suggestion must leave each kind of bracket, `()`, `[]` and `{}`, as balanced as the lines it replaces. When it doesn't, committing it would unbalance the file, so the host drops the suggestion and posts the finding without it, since the comment still explains the fix.
 
-The first submission with a rejected finding, or with a changed file other than a generated or lock file that has no walkthrough row, is not posted: every rejection and every file without a row go back to the model together, once, as the tool's result or in the prompt that asks again. The next submission posts with whatever still fails dropped, unless files still have no row: then nothing is posted, `review.incomplete` is logged, the check run fails, and the summary comment says the review did not complete and names the files, ten at most and then a count of the rest. Only a `defect` or `spec` finding graded blocking that stands rejected holds approval back: the review requests changes, and its body names the finding. A `standard` or `test` finding graded blocking is rejected for that grade, so it holds nothing back. `review.findings` logs the accepted, relocated and rejected counts of every submission, how many suggestions were dropped, and how many walkthrough rows are missing (`missingRows`).
+The first submission with a rejected finding, a duplicate of an open thread, or a changed file other than a generated or lock file that has no walkthrough row, is not posted: every rejection, every duplicate and every file without a row go back to the model together, once, as the tool's result or in the prompt that asks again. An `incremental` review needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. The next submission posts with whatever still fails dropped, unless files still have no row: then nothing is posted, `review.incomplete` is logged, the check run fails, and the summary comment says the review did not complete and names the files, ten at most and then a count of the rest. Only a `defect` or `spec` finding graded blocking that stands rejected holds approval back: the review requests changes, and its body names the finding. A `standard` or `test` finding graded blocking is rejected for that grade, so it holds nothing back. `review.findings` logs the mode and the accepted, relocated, rejected and duplicate counts of every submission, how many suggestions were dropped, and how many walkthrough rows are missing (`missingRows`).
 
 Tools offered to the model, all read only and `replay: "safe"`:
 
@@ -125,9 +126,35 @@ The review procedure, with its severity rubric and references, and the rules for
 2. Draft: one pass over the diff, in chunks sized to the model's context, producing candidate findings and a per-file walkthrough.
 3. Verify: a second pass takes each candidate with the exact lines it cites and the surrounding file, and keeps it only if the problem is real on those lines. This is what makes cheaper models usable; unverifiable findings are the noise people leave CodeRabbit over.
 4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it.
-5. Record: `reviewed_head`, thread ids, the review id.
+5. Record: `reviewed`, a `finding:<commentId>` per inline comment, the review id.
 
-Incremental review on `synchronize` diffs only `reviewed_head...head`, re-checks whether the bot's open threads still apply to the new head (a thread whose lines were changed is replied to and resolved), and posts a short delta to the summary.
+Reviews follow CodeRabbit's model (#24). A push reviews only what changed since the last review. A push never repeats an open thread, and it resolves the threads it fixed. `full review` starts over. Each review runs in one of three modes, chosen before the prompt:
+
+- **`fresh`**, on `@andabot full review` or a check Re-run, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
+- **`full`**, on a push with no `reviewed` record, a retargeted base, a failed compare, or any compare status but `ahead` or `identical`, is the whole pull request too, but it never repeats an open thread. `diverged` and `behind` mean rewritten history. The first push to each pull request after this shipped is `full`, so it doesn't repost every existing finding.
+- **`incremental`** reviews what changed since the last review. It covers the pull request's files whose own changed lines the compare `reviewed...head` also changed, so a merge from the base branch drags nothing in.
+
+In `incremental` mode, the prompt shows the pull request's own numbered patch for each covered file, with the lines that changed since the last review starred after their anchors (`R12*`). A file with a thread to re-check but no starred line gets the compare's patch instead, unnumbered, under "New changes outside the diff", so the model can see that the push deleted or reverted the flagged code. It lists the other files by name only.
+
+- **Why marked lines are the PR's own.** Comments anchor to the pull request's diff, not to the compare's, so marking that diff's lines keeps every anchor one GitHub accepts. RIGHT lines are marked by number, since both diffs number the head the same way, and only the pull request's own `+` lines are marked: a context line the compare added is the base's change, merged in. LEFT lines are marked by text, since their old-file numbers differ.
+- **What a finding may anchor to.** A finding must sit on a marked line, except a blocking one: a bug the push causes in code it didn't edit, such as a caller of a changed function, still gets an inline comment if its line is in the diff.
+- **When there's nothing to review.** When no line is marked and no thread is due a re-check, there is no model call. The check run completes as "No changes to review since `abc1234`". A push whose changes all left the diff, such as deleting a line the pull request added, has nothing to comment on, so it is reviewed only through the threads it touched.
+- **An unchanged head.** `identical`, a head already reviewed, takes the same path, so a redelivered push isn't fully reviewed again.
+
+Both `incremental` and `full` reviews fetch the bot's open threads from GitHub's GraphQL `reviewThreads` and list them for the model in two groups, with handles (`T1`, `T2`, …):
+
+- **The threads to re-check.** In `full` mode, these are the threads GitHub marks outdated. In `incremental` mode, they are the threads on a marked line, and the outdated threads whose quoted line the push added or deleted in that file. For a thread with no stored quote, any change to its file counts. Deleting the flagged line, the most common fix, re-checks its thread. Threads the push didn't touch are left alone.
+- **The other open threads** are listed so the model doesn't repeat them.
+- **Duplicates.** A finding is set aside as a duplicate when it sits on an open thread's line, or quotes the code of an outdated one (whose line GitHub no longer reports). A thread that isn't outdated still has its line, so a common line such as `}` elsewhere in the file is no repeat. The check runs against every open thread, listed or not. A blocking finding on the line of a thread that isn't blocking still posts, since that thread doesn't gate approval. Like other rejections a duplicate goes back to the model once, but it doesn't hold approval back, since the open thread already does.
+- **The cap.** The lists hold at most 30 threads, newest first, with the threads to re-check ahead of the rest. A note counts the threads left out.
+
+The model names the threads it fixed in `addressed_threads`. Only the bot's own unresolved threads are touched:
+
+- **Before the review is chosen,** the host resolves each named thread with `resolveReviewThread`, best effort, like the check-run calls. The event then counts only the threads that resolved.
+- **After the review posts,** it replies "Fixed in `def5678`." on each one that resolved. A publish retried after a failed `createReview` resolves again, which is harmless, but never replies twice.
+- **Approval.** Such a review never approves while one of the bot's blocking threads stays open, counting every open thread, not only those listed. If the threads couldn't be read, it never approves at all. Neither does it when a pull request has more than the 500 threads the query pages through, since an incomplete count could miss a blocker.
+
+The summary comment keeps the last full review's summary and walkthrough. An incremental review replaces the walkthrough rows of the files it covered and adds a "Since `abc1234`" section. The review's body says what it covered: "Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved." or "Full review.". `review.start` logs `mode`, `since`, `covered` and `recheck`; `review.resolved` and `review.skip` (`no_new_changes`) say what happened.
 
 ### Approval state machine
 
@@ -176,7 +203,7 @@ Workers AI through the Pi AI provider, with AI Gateway for anything else. The ac
 
 | Role | First choice | Fallback | Why |
 | --- | --- | --- | --- |
-| Review, one pass (phase 1, live) | `@cf/openai/gpt-oss-120b` | | Reliable tool calls; #2 compares it with `@cf/moonshotai/kimi-k2.7-code` |
+| Review, one pass (phase 1, live) | `@cf/zai-org/glm-5.3-flash` | | On #2 it caught all five of #9's planted defects with no false positive and posted through the tool, for under a cent a review. gpt-oss-120b caught 4 or 5 and skipped the tool on #18 and #19, Gemma 4 26B caught 4 and leaned on the text fallback, and Qwen3.8-27B's stream died mid-review. No model has caught #38's defect yet |
 | Draft findings and walkthrough (phase 2) | `@cf/zai-org/glm-5.3-flash` | `@cf/zai-org/glm-4.7-flash` | Cheap per token, long context, good enough for candidates |
 | Verify findings, chat replies (phase 2) | `@cf/moonshotai/kimi-k2.7-code` | `@cf/openai/gpt-oss-120b` | Code-tuned, stronger reasoning, called on a small input |
 | Emergency fallback | OpenRouter `:free` models via AI Gateway | | 50 requests a day without a card; models rotate, so never primary |
