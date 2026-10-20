@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { parseCommand } from "../src/commands.ts"
+import { helpText, parseCommand } from "../src/commands.ts"
+
+describe("helpText", () => {
+  it("says a full review starts over", () => {
+    expect(helpText("andabot")).toContain(
+      "`@andabot full review`: start over: review the whole pull request again, ignoring earlier reviews.",
+    )
+  })
+})
 
 describe("parseCommand", () => {
   it("finds the mention anywhere and reads the command after it, in any case", () => {

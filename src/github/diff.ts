@@ -56,10 +56,61 @@ export function commentableLines(patch: string | undefined): CommentableLines {
   return { right, left }
 }
 
-function numberPatch(patch: string): string {
+export interface DeltaLines {
+  added: Set<number>
+  addedTexts: Set<string>
+  deletedTexts: Set<string>
+}
+
+export interface MarkedLines {
+  right: Set<number>
+  left: Set<number>
+}
+
+export function comparableText(text: string): string {
+  return text.trim().replace(/\s+/g, " ")
+}
+
+export function deltaLines(patch: string | undefined): DeltaLines {
+  const added = new Set<number>()
+  const addedTexts = new Set<string>()
+  const deletedTexts = new Set<string>()
+  for (const { text, anchor } of patchLines(patch ?? "")) {
+    if (anchor?.side === "RIGHT" && text.startsWith("+")) {
+      added.add(anchor.line)
+      addedTexts.add(comparableText(text.slice(1)))
+    }
+    if (anchor?.side === "LEFT") deletedTexts.add(comparableText(text.slice(1)))
+  }
+  return { added, addedTexts, deletedTexts }
+}
+
+export function markedLines(prPatch: string | undefined, sincePatch: string | undefined): MarkedLines {
+  const since = deltaLines(sincePatch)
+  const right = new Set([...deltaLines(prPatch).added].filter((line) => since.added.has(line)))
+  const left = new Set(
+    [...commentableLines(prPatch).left]
+      .filter(([, text]) => since.deletedTexts.has(comparableText(text)))
+      .map(([line]) => line),
+  )
+  return { right, left }
+}
+
+function numberPatch(patch: string, marked: MarkedLines | undefined): string {
   return patchLines(patch)
-    .map(({ text, anchor }) => (anchor ? `${`${SIDE_LETTER[anchor.side]}${anchor.line}`.padEnd(6)} ${text}` : text))
+    .map((line) => numberedLine(line, marked))
     .join("\n")
+}
+
+function numberedLine({ text, anchor }: PatchLine, marked: MarkedLines | undefined): string {
+  if (!anchor) return text
+  const star = isMarked(anchor, marked) ? "*" : ""
+  return `${`${SIDE_LETTER[anchor.side]}${anchor.line}${star}`.padEnd(6)} ${text}`
+}
+
+function isMarked(anchor: Anchor, marked: MarkedLines | undefined): boolean {
+  if (!marked) return false
+  return (anchor.side === "RIGHT" ? marked.right : marked.left).has(anchor.line)
 }
 
 function truncateAtLine(text: string, maxChars: number): string {
@@ -94,14 +145,24 @@ export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
 }
 
-export function renderPatches(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
+export function renderPatches(
+  files: readonly ChangedFile[],
+  maxCharsPerFile = 40_000,
+  marked?: ReadonlyMap<string, MarkedLines>,
+): string {
   return files
-    .map((file) => {
-      const header = `### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`
-      if (isGenerated(file.filename))
-        return `${header}\n(patch omitted: generated or lock file; read_file shows it if it matters)`
-      if (!file.patch) return `${header}\n(no textual diff: binary, too large, or a rename without changes)`
-      return `${header}\n\`\`\`diff\n${truncateAtLine(numberPatch(file.patch), maxCharsPerFile)}\n\`\`\``
-    })
+    .map((file) => renderFile(file, maxCharsPerFile, (patch) => numberPatch(patch, marked?.get(file.filename))))
     .join("\n\n")
+}
+
+export function renderChanges(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
+  return files.map((file) => renderFile(file, maxCharsPerFile, (patch) => patch)).join("\n\n")
+}
+
+function renderFile(file: ChangedFile, maxChars: number, render: (patch: string) => string): string {
+  const header = `### ${file.filename} (${file.status}, +${file.additions} -${file.deletions})`
+  if (isGenerated(file.filename))
+    return `${header}\n(patch omitted: generated or lock file; read_file shows it if it matters)`
+  if (!file.patch) return `${header}\n(no textual diff: binary, too large, or a rename without changes)`
+  return `${header}\n\`\`\`diff\n${truncateAtLine(render(file.patch), maxChars)}\n\`\`\``
 }

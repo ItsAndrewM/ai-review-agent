@@ -14,9 +14,11 @@
   "vars": {
     // The GitHub App's login, without the [bot] suffix. People tag @andabot.
     "BOT_LOGIN": "andabot",
-    // Workers AI model for the review. Kimi K2.7 Code, GLM 5.x and DeepSeek V4
-    // need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash run on Free.
-    "REVIEW_MODEL": "@cf/openai/gpt-oss-120b",
+    // Workers AI model for the review. GLM-5.3 Flash caught all five of #9's
+    // planted defects and posts through the tool, for under a cent a review
+    // (#2). GLM 5.x, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid
+    // plan; gpt-oss-120b and glm-4.7-flash run on Free.
+    "REVIEW_MODEL": "@cf/zai-org/glm-5.3-flash",
     // How hard the review model thinks: off, minimal, low, medium, high, xhigh
     // or max. Measured on #37, #23 at d1bd6f7, in #34.
     "REVIEW_THINKING_LEVEL": "low",
