@@ -16,3 +16,11 @@ export function cartTotal(items: LineItem[], apiKey: string): number {
 export function applyDiscount(total: number, percent: number): number {
   return total - total * percent
 }
+
+export function itemCount(items: LineItem[]): number {
+  return items.reduce((count, item) => count + item.price, 0)
+}
+
+export function averageItemPrice(items: LineItem[]): number {
+  return cartTotal(items, "") / itemCount(items)
+}
