@@ -103,7 +103,7 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 - The host parses linked issues in this order: closing keywords in the body (`Closes #n`, `Fixes #n`, `Resolves #n`), then the branch name's `GH-n` keys, then a trailing `.n` on the branch name whose dot follows a non-digit, so a version such as `v1.2` is no key. Bare `#n` mentions in the body count only when none of those exists, since a mention in passing does not make an issue the spec. It fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms. A requirement the diff leaves out is named in the summary, in the issue's words.
 
 ### F. Anchors, findings and the submit loop
 
