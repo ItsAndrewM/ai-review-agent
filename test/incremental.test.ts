@@ -12,7 +12,6 @@ import {
   coveredMap,
   findingRecords,
   nextReviewed,
-  submissionFromRecord,
   nothingToReview,
   openBlockingAfter,
   openBotThreads,
@@ -23,6 +22,7 @@ import {
   resolveThreads,
   ReviewedRecord,
   stricterMergeDanger,
+  submissionFromRecord,
   threadLists,
   threadsToRecheck,
   type OpenThread,
@@ -709,7 +709,7 @@ describe("submissionFromRecord", () => {
     const oneWay = { door: "one-way" as const, blast_radius: "the migration" }
     const shown = submissionFromRecord(pushed, { ...record, merge_danger: oneWay })
     expect(shown.summary).toBe("The whole PR.")
-    expect(shown.walkthrough).toHaveLength(2)
+    expect(shown.walkthrough).toEqual(record.walkthrough)
     expect(shown.merge_danger).toEqual(oneWay)
     expect(shown.findings).toEqual([])
   })
