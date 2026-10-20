@@ -13,7 +13,7 @@ export function cartTotal(items: LineItem[], apiKey: string): number {
 }
 
 export function applyDiscount(total: number, percent: number): number {
-  return total - total * percent
+  return total - (total * percent) / 100
 }
 
 export function itemCount(items: LineItem[]): number {
