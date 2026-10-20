@@ -281,7 +281,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<CheckedSubmission> {
     const files = await this.changedFiles()
     const scope = await this.scopeFor(pending.deliveryId)
-    const validated = validateFindings(submission.findings, indexCommentableLines(files))
+    const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
+    const validated = validateFindings(submission.findings, indexCommentableLines(files), hasLinkedIssues)
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
     log("review.findings", {

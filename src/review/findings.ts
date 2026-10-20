@@ -155,6 +155,7 @@ export const MAX_COMMENT_CHARS = 65_536
 export interface Rejected {
   finding: FindingInput
   reason: string
+  readonly unfounded: boolean
 }
 
 export interface ValidatedReview {
@@ -166,7 +167,9 @@ export interface ValidatedReview {
 
 type Anchored = { finding: FindingInput; relocated: boolean } | { reason: string }
 
-type Checked = { finding: FindingInput; relocated: boolean; suggestionDropped: boolean } | { reason: string }
+type Checked =
+  | { finding: FindingInput; relocated: boolean; suggestionDropped: boolean }
+  | { reason: string; unfounded: boolean }
 
 interface Fitted {
   finding: FindingInput
@@ -184,6 +187,7 @@ const DIFF_MARKER = { RIGHT: "+", LEFT: "-" } satisfies Record<Side, string>
 export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
+  hasLinkedIssues: boolean,
 ): ValidatedReview {
   const accepted: FindingInput[] = []
   const rejected: Rejected[] = []
@@ -191,19 +195,23 @@ export function validateFindings(
   let relocated = 0
   let suggestionsDropped = 0
   for (const finding of findings) {
-    const checked = checkFinding(finding, commentable)
+    const checked = checkFinding(finding, commentable, hasLinkedIssues)
     if ("reason" in checked) {
-      rejected.push({ finding, reason: checked.reason })
+      rejected.push({ finding, reason: checked.reason, unfounded: checked.unfounded })
       continue
     }
     const key = `${checked.finding.path}:${checked.finding.side ?? "RIGHT"}:${checked.finding.line}`
     if (seen.has(key)) {
-      rejected.push({ finding, reason: "duplicate anchor: one comment per line, merge them" })
+      rejected.push({ finding, reason: "duplicate anchor: one comment per line, merge them", unfounded: false })
       continue
     }
     seen.add(key)
     if (accepted.length >= MAX_FINDINGS) {
-      rejected.push({ finding, reason: `more than ${MAX_FINDINGS} findings; keep the most important` })
+      rejected.push({
+        finding,
+        reason: `more than ${MAX_FINDINGS} findings; keep the most important`,
+        unfounded: false,
+      })
       continue
     }
     accepted.push(checked.finding)
@@ -213,18 +221,28 @@ export function validateFindings(
   return { accepted, rejected, relocated, suggestionsDropped }
 }
 
-function checkFinding(finding: FindingInput, commentable: ReadonlyMap<string, CommentableLines>): Checked {
+function checkFinding(
+  finding: FindingInput,
+  commentable: ReadonlyMap<string, CommentableLines>,
+  hasLinkedIssues: boolean,
+): Checked {
+  const basisIssue = basisProblem(finding, hasLinkedIssues)
+  if (basisIssue !== undefined) return { reason: basisIssue, unfounded: true }
   const lines = commentable.get(finding.path)
-  if (!lines) return { reason: `path "${finding.path}" is not a changed file` }
+  if (!lines) return refused(`path "${finding.path}" is not a changed file`)
   const side = finding.side ?? "RIGHT"
   const sideLines = side === "RIGHT" ? lines.right : lines.left
   const anchored = anchorByQuote(finding, side, sideLines)
-  if ("reason" in anchored) return anchored
+  if ("reason" in anchored) return refused(anchored.reason)
   const rangeIssue = rangeProblem(anchored.finding, side, sideLines)
-  if (rangeIssue !== undefined) return { reason: rangeIssue }
+  if (rangeIssue !== undefined) return refused(rangeIssue)
   const fitted = fitSuggestion(anchored.finding, sideLines)
   const problem = contentProblem(fitted.finding)
-  return problem === undefined ? { ...fitted, relocated: anchored.relocated } : { reason: problem }
+  return problem === undefined ? { ...fitted, relocated: anchored.relocated } : refused(problem)
+}
+
+function refused(reason: string): Checked {
+  return { reason, unfounded: false }
 }
 
 function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Anchored {
@@ -333,13 +351,15 @@ function rangeProblem(finding: FindingInput, side: Side, lines: ReadonlyMap<numb
 function contentProblem(finding: FindingInput): string | undefined {
   if (finding.title.trim() === "" || finding.body.trim() === "") return "title and body are required"
   if (finding.body.length > MAX_BODY_CHARS) return `body longer than ${MAX_BODY_CHARS} characters`
-  return basisProblem(finding) ?? suggestionProblem(finding) ?? commentSizeProblem(finding)
+  return suggestionProblem(finding) ?? commentSizeProblem(finding)
 }
 
-function basisProblem(finding: FindingInput): string | undefined {
+function basisProblem(finding: FindingInput, hasLinkedIssues: boolean): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
   if (finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test"))
     return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  if (finding.basis_kind === "spec" && !hasLinkedIssues)
+    return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
   return undefined
 }
 

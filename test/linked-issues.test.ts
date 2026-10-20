@@ -3,20 +3,38 @@ import type { Issue } from "../src/github/client.ts"
 import { issueText, linkedIssueNumbers, linkedIssuesFrom, readLinkedIssues } from "../src/review/linked-issues.ts"
 
 describe("linkedIssueNumbers", () => {
-  it("prefers closing keywords, then mentions, then the branch, unique and capped at three", () => {
-    expect(linkedIssueNumbers("Fixes #7 and relates to #3, see #7 and #9 and #11", "feature/x.GH-5")).toEqual([7, 3, 9])
+  it("reads closing keywords, then the branch's GH-n, then its trailing .n, unique and capped at three", () => {
+    expect(linkedIssueNumbers("Fixes #7, closes #3, resolves #9, fixed #7 and fixes #11", "feature/x.GH-5")).toEqual([
+      7, 3, 9,
+    ])
+    expect(linkedIssueNumbers("Fixes #7", "feature/x.GH-5.12")).toEqual([7, 5, 12])
     expect(linkedIssueNumbers(null, "fix/thing.GH-12")).toEqual([12])
-    expect(linkedIssueNumbers("", "feature/thing#8")).toEqual([8])
+    expect(linkedIssueNumbers("", "feature/thing.8")).toEqual([8])
     expect(linkedIssueNumbers("nothing", "main")).toEqual([])
   })
 
-  it("puts a closing keyword ahead of an earlier mention, and a branch's GH-n ahead of its trailing #n", () => {
-    expect(linkedIssueNumbers("See #3. Fixes #7", "main")).toEqual([7, 3])
-    expect(linkedIssueNumbers("", "GH-5#8")).toEqual([5, 8])
+  it("puts a branch's GH-n ahead of its trailing .n", () => {
+    expect(linkedIssueNumbers("", "fix/GH-5-thing.8")).toEqual([5, 8])
+  })
+
+  it("leaves out a bare mention when a closing keyword or the branch key names the spec, since a passing mention is no requirement", () => {
+    expect(linkedIssueNumbers("Closes #12. Compare with #2.", "feature/x.GH-14")).toEqual([12, 14])
+    expect(linkedIssueNumbers("See #3. Fixes #7", "main")).toEqual([7])
+    expect(linkedIssueNumbers("Builds on #2", "feature/review-only-what-changed.24")).toEqual([24])
+  })
+
+  it("falls back to bare mentions only when neither a closing keyword nor the branch names an issue", () => {
+    expect(linkedIssueNumbers("#2 and #3", "chore/x")).toEqual([2, 3])
+    expect(linkedIssueNumbers("See #3 and #4, and #3 again", "main")).toEqual([3, 4])
+  })
+
+  it("no longer reads a trailing #n on the branch, since a branch is keyed by .n or GH-n", () => {
+    expect(linkedIssueNumbers("", "feature/thing#8")).toEqual([])
   })
 
   it("leaves another repository's owner/repo#n alone, since its number names an issue there", () => {
     expect(linkedIssueNumbers("Needs cloudflare/agents#412 first. Fixes #2", "main")).toEqual([2])
+    expect(linkedIssueNumbers("Needs cloudflare/agents#412 first. See #2", "main")).toEqual([2])
   })
 })
 

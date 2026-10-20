@@ -285,11 +285,12 @@ export function applyDeltaPolicy(validated: ValidatedReview, scope: DeltaScope):
   const duplicates: Rejected[] = []
   for (const finding of validated.accepted) {
     const duplicate = duplicatedThread(finding, scope.open)
-    if (duplicate) duplicates.push({ finding, reason: `duplicates open thread ${duplicate.handle}` })
+    if (duplicate) duplicates.push({ finding, reason: `duplicates open thread ${duplicate.handle}`, unfounded: false })
     else if (scope.mode === "incremental" && outsideTheDelta(finding, scope.covered)) {
       rejected.push({
         finding,
         reason: `line ${finding.line} was not changed since the last review; only a blocking finding may go elsewhere`,
+        unfounded: false,
       })
     } else accepted.push(finding)
   }

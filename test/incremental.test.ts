@@ -402,7 +402,7 @@ describe("applyDeltaPolicy", () => {
     expect(result.accepted).toEqual([sameTextElsewhere])
     const moved = found({ line: 12, quote: "}" })
     expect(applyDeltaPolicy(validated([moved]), { mode: "full", covered, open: threads }).duplicates).toEqual([
-      { finding: moved, reason: "duplicates open thread T2" },
+      { finding: moved, reason: "duplicates open thread T2", unfounded: false },
     ])
   })
 
@@ -421,7 +421,11 @@ describe("applyDeltaPolicy", () => {
   })
 
   it("passes a fresh review through untouched, keeping what validation rejected", () => {
-    const earlier = { finding: found({ line: 40 }), reason: "line 40 (RIGHT) is not in the diff of a.ts" }
+    const earlier = {
+      finding: found({ line: 40 }),
+      reason: "line 40 (RIGHT) is not in the diff of a.ts",
+      unfounded: false,
+    }
     const input = { ...validated([found({ line: 5 })]), rejected: [earlier] }
     const result = applyDeltaPolicy(input, { mode: "fresh", covered, open: [open("T1", { line: 5 })] })
     expect(result).toEqual({ accepted: input.accepted, rejected: [earlier], duplicates: [] })

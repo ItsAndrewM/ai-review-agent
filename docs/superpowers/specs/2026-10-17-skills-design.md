@@ -101,9 +101,9 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 ### E. Spec axis
 
-- The host parses linked issues from the body (`Closes #n`, `Fixes #n`, `Resolves #n`, bare `#n`) and the branch name (`GH-n`, a trailing `#n`), fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
+- The host parses linked issues in this order: closing keywords in the body (`Closes #n`, `Fixes #n`, `Resolves #n`), then the branch name's `GH-n` keys, then a trailing `.n` on the branch name. Bare `#n` mentions in the body count only when none of those exists, since a mention in passing does not make an issue the spec. It fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms.
 
 ### F. Anchors, findings and the submit loop
 
@@ -115,12 +115,12 @@ Shipped in #12:
 - `Finding` gains `quote`, the exact text of the anchored line. The host compares it with the patch line at that side and number; on a mismatch it moves the finding to the one line in the same file whose text matches, and rejects it when none or several match.
 - A suggestion posts only on a verified anchor range and is capped at 60,000 characters; a rendered comment is capped at 65,536, GitHub's limit.
 - Every rejection goes back to the model once, as one tool result listing every rejected finding with its reason.
-- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way.
+- Approval gate: APPROVE only when the verdict is approve, no accepted finding is blocking, and no blocking finding was rejected on the final submission. A mis-anchored blocking finding holds the review at REQUEST_CHANGES. Rejected suggestions and nitpicks do not stand in the way, and neither does a finding rejected for its basis (a blank basis, a `standard` or `test` finding graded blocking, a `spec` finding with no linked issue): it is unfounded rather than unposted, so it never holds approval back, whatever else is wrong with it.
 
 Left for slice 2:
 
 - `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test, or a test that does not verify the behaviour it names. Both fields flat, for small models.
-- `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
+- `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`. A `spec` finding needs a linked issue.
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
 - Every changed file not filtered as generated has a walkthrough row. An incremental review (#24) needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 

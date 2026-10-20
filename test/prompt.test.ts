@@ -305,6 +305,7 @@ describe("rejectionsText", () => {
         body: "b",
       },
       reason: `reason ${line}`,
+      unfounded: false,
     }))
     const text = rejectionsText(rejected)
     expect(text).toContain('- src/x.ts:1 "t1": reason 1\n- src/x.ts:2 "t2": reason 2\n')
@@ -326,6 +327,7 @@ describe("problemsText", () => {
         body: "b",
       },
       reason: "quote does not match line 2 (RIGHT) and no other line in src/x.ts matches",
+      unfounded: false,
     },
   ]
   const missingRows =

@@ -51,11 +51,18 @@ function finding(overrides: Partial<FindingInput> = {}): FindingInput {
 const BLOCKING_STANDARD_OR_TEST =
   "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
 
+const NO_LINKED_ISSUE =
+  "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
+
+const specFinding = (overrides: Partial<FindingInput> = {}): FindingInput =>
+  finding({ basis_kind: "spec", basis: "#7: totals are never NaN", ...overrides })
+
 describe("validateFindings", () => {
   it("accepts a finding on an added line and one on a deleted line", () => {
     const result = validateFindings(
       [finding(), finding({ line: 2, side: "LEFT", quote: "const b = 2;", title: "removed" })],
       commentable,
+      true,
     )
     expect(result.accepted).toHaveLength(2)
     expect(result.rejected).toHaveLength(0)
@@ -71,6 +78,7 @@ describe("validateFindings", () => {
         finding({ title: "   " }),
       ],
       commentable,
+      true,
     )
     expect(result.accepted).toHaveLength(0)
     expect(result.rejected.map((r) => r.reason)).toEqual([
@@ -94,6 +102,7 @@ describe("validateFindings", () => {
     const result = validateFindings(
       [finding({ path: "src/hunks.ts", start_line: 2, line: 10, quote: "const j = 10;" })],
       new Map([["src/hunks.ts", commentableLines(hunks.join("\n"))]]),
+      true,
     )
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "lines 2 to 10 (RIGHT) are not all in the diff of src/hunks.ts",
@@ -101,15 +110,15 @@ describe("validateFindings", () => {
   })
 
   it("rejects a suggestion over 60000 characters, since one comment over GitHub's limit fails the whole review", () => {
-    expect(validateFindings([finding({ suggestion: "x".repeat(60_000) })], commentable).accepted).toHaveLength(1)
+    expect(validateFindings([finding({ suggestion: "x".repeat(60_000) })], commentable, true).accepted).toHaveLength(1)
     expect(
-      validateFindings([finding({ suggestion: "x".repeat(60_001) })], commentable).rejected.map((r) => r.reason),
+      validateFindings([finding({ suggestion: "x".repeat(60_001) })], commentable, true).rejected.map((r) => r.reason),
     ).toEqual(["suggestion longer than 60000 characters"])
   })
 
   it("rejects a finding whose rendered comment would pass GitHub's 65536-character limit", () => {
     const long = finding({ title: "t".repeat(2_000), body: "b".repeat(4_000), suggestion: "s".repeat(60_000) })
-    expect(validateFindings([long], commentable).rejected.map((r) => r.reason)).toEqual([
+    expect(validateFindings([long], commentable, true).rejected.map((r) => r.reason)).toEqual([
       "comment longer than 65536 characters, GitHub's limit",
     ])
   })
@@ -121,7 +130,7 @@ describe("validateFindings", () => {
       { line: 3, quote: "export { a, b };" },
     ]
     const many = Array.from({ length: MAX_FINDINGS + 2 }, (_, i) => finding({ ...anchors[i % 3], title: `t${i}` }))
-    const result = validateFindings(many, commentable)
+    const result = validateFindings(many, commentable, true)
     expect(result.accepted).toHaveLength(3)
     expect(result.rejected.every((r) => r.reason.startsWith("duplicate anchor"))).toBe(true)
   })
@@ -135,19 +144,19 @@ describe("quote verification", () => {
   ])
 
   it("accepts a quote that matches its line up to surrounding and repeated whitespace", () => {
-    const result = validateFindings([finding({ quote: "  const  b = 3;\t" })], files)
+    const result = validateFindings([finding({ quote: "  const  b = 3;\t" })], files, true)
     expect(result.accepted).toEqual([finding({ quote: "  const  b = 3;\t" })])
     expect(result.relocated).toBe(0)
   })
 
   it("moves a finding to the one line its quote matches, as when the model miscounts", () => {
-    const result = validateFindings([finding({ line: 3, suggestion: "const b = 4;" })], files)
+    const result = validateFindings([finding({ line: 3, suggestion: "const b = 4;" })], files, true)
     expect(result.accepted).toEqual([finding({ line: 2, suggestion: "const b = 4;" })])
     expect(result.relocated).toBe(1)
   })
 
   it("drops the range and its suggestion when it moves a multi-line finding, since only the quoted line is verified", () => {
-    const result = validateFindings([finding({ start_line: 1, line: 3, suggestion: "const b = 4;" })], files)
+    const result = validateFindings([finding({ start_line: 1, line: 3, suggestion: "const b = 4;" })], files, true)
     expect(result.accepted).toEqual([
       {
         path: "src/x.ts",
@@ -166,6 +175,7 @@ describe("quote verification", () => {
     const result = validateFindings(
       [finding({ quote: "const c = 4;" }), finding({ path: "src/twice.ts", line: 2, quote: "const x = 1;" })],
       files,
+      true,
     )
     expect(result.accepted).toHaveLength(0)
     expect(result.rejected.map((r) => r.reason)).toEqual([
@@ -175,9 +185,9 @@ describe("quote verification", () => {
   })
 
   it("accepts a quote carrying the diff's marker for its side, and keeps the quote without it", () => {
-    const right = validateFindings([finding({ quote: "+const b = 3;" })], files)
-    const left = validateFindings([finding({ side: "LEFT", quote: "-  const b = 2;" })], files)
-    const moved = validateFindings([finding({ line: 3, quote: " + const b = 3;" })], files)
+    const right = validateFindings([finding({ quote: "+const b = 3;" })], files, true)
+    const left = validateFindings([finding({ side: "LEFT", quote: "-  const b = 2;" })], files, true)
+    const moved = validateFindings([finding({ line: 3, quote: " + const b = 3;" })], files, true)
     expect([...right.accepted, ...left.accepted, ...moved.accepted].map((f) => [f.line, f.quote])).toEqual([
       [2, "const b = 3;"],
       [2, "const b = 2;"],
@@ -188,7 +198,7 @@ describe("quote verification", () => {
 
   it("refuses to move a finding when the quote as written and without its marker match different lines", () => {
     const marks = new Map([["src/marks.ts", commentableLines(["@@ -0,0 +1,3 @@", "++x", "+x", "+y"].join("\n"))]])
-    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks)
+    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks, true)
     expect(result.accepted).toEqual([])
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "quote matches 2 lines in src/marks.ts; anchor the right one",
@@ -197,8 +207,8 @@ describe("quote verification", () => {
 
   it("keeps a quote whose own text starts with a plus, and refuses the other side's marker", () => {
     const plus = new Map([["src/plus.ts", commentableLines(["@@ -1 +1,2 @@", " a", "++x"].join("\n"))]])
-    expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus).accepted[0]?.quote).toBe("+x")
-    expect(validateFindings([finding({ quote: "-const b = 3;" })], files).accepted).toEqual([])
+    expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus, true).accepted[0]?.quote).toBe("+x")
+    expect(validateFindings([finding({ quote: "-const b = 3;" })], files, true).accepted).toEqual([])
   })
 })
 
@@ -233,6 +243,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion: "right.add(newLine++)" })],
       files,
+      true,
     )
     expect(result.accepted[0]?.suggestion).toBe("      right.add(newLine++)")
     expect(result.suggestionsDropped).toBe(0)
@@ -250,6 +261,7 @@ describe("suggestions", () => {
         }),
       ],
       files,
+      true,
     )
     expect(result.accepted[0]?.suggestion).toBe('    if (fresh) {\n      log("review.skip")\n      return\n    }')
   })
@@ -259,6 +271,7 @@ describe("suggestions", () => {
       const result = validateFindings(
         [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion })],
         files,
+        true,
       )
       expect(result.accepted[0]?.suggestion).toBe(suggestion)
     }
@@ -276,6 +289,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed, suggestion: guard })],
       files,
+      true,
     )
     expect(result.accepted).toEqual([finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed })])
     expect(result.suggestionsDropped).toBe(1)
@@ -285,6 +299,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/list.ts", line: 1, quote: "const list = [", suggestion: "const list = {" })],
       files,
+      true,
     )
     expect(result.accepted[0]?.suggestion).toBeUndefined()
     expect(result.suggestionsDropped).toBe(1)
@@ -300,6 +315,7 @@ describe("basis", () => {
         finding({ basis_kind: "test", basis: "checkout has no test" }),
       ],
       commentable,
+      true,
     )
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "basis is required",
@@ -338,9 +354,61 @@ describe("basis", () => {
         }),
       ],
       commentable,
+      true,
     )
     expect(result.rejected).toEqual([])
     expect(result.accepted).toHaveLength(3)
+  })
+
+  it("rejects a spec finding when no issue is linked, offering the defect kind, and accepts it when one is", () => {
+    const spec = specFinding()
+    const result = validateFindings([spec], commentable, false)
+    expect(result.accepted).toEqual([])
+    expect(result.rejected).toEqual([{ finding: spec, reason: NO_LINKED_ISSUE, unfounded: true }])
+    expect(validateFindings([spec], commentable, true).accepted).toEqual([spec])
+  })
+
+  it("rejects a spec finding with no linked issue whatever its grade", () => {
+    const result = validateFindings([specFinding(), specFinding({ severity: "nitpick" })], commentable, false)
+    expect(result.rejected.map((r) => r.reason)).toEqual([NO_LINKED_ISSUE, NO_LINKED_ISSUE])
+  })
+
+  it("marks a rejection unfounded when its basis caused it, and not for an anchor, range, size or suggestion side", () => {
+    const unfoundedOf = (findings: FindingInput[]) =>
+      validateFindings(findings, commentable, false).rejected.map((r) => r.unfounded)
+    expect(
+      unfoundedOf([finding({ basis: "  " }), finding({ basis_kind: "test", basis: "no test" }), specFinding()]),
+    ).toEqual([true, true, true])
+    expect(
+      unfoundedOf([
+        finding({ path: "src/other.ts" }),
+        finding({ quote: "const c = 4;" }),
+        finding({ line: 3, start_line: 4, quote: "export { a, b };" }),
+        finding({ title: "   " }),
+        finding({ side: "LEFT", quote: "const b = 2;", suggestion: "x" }),
+        finding({ suggestion: "x".repeat(60_001) }),
+      ]),
+    ).toEqual([false, false, false, false, false, false])
+  })
+
+  it("never marks a duplicate anchor or a finding past the cap unfounded, since it passed every check", () => {
+    const lines = Array.from({ length: MAX_FINDINGS + 1 }, (_, i) => `const v${i} = ${i};`)
+    const crowdedPatch = [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)].join("\n")
+    const crowded = new Map([["src/crowded.ts", commentableLines(crowdedPatch)]])
+    const each = lines.map((quote, i) => finding({ path: "src/crowded.ts", line: i + 1, quote }))
+    const result = validateFindings([...each, finding({ ...each[0], title: "again" })], crowded, false)
+    expect(result.accepted).toHaveLength(MAX_FINDINGS)
+    expect(result.rejected.map((r) => [r.reason, r.unfounded])).toEqual([
+      [`more than ${MAX_FINDINGS} findings; keep the most important`, false],
+      ["duplicate anchor: one comment per line, merge them", false],
+    ])
+  })
+
+  it("counts a blocking standard finding as unfounded even when its quote matches no line, so it never holds approval back", () => {
+    const standard = finding({ basis_kind: "standard", basis: "Feature Envy", quote: "const c = 4;" })
+    const { rejected } = validateFindings([standard], commentable, true)
+    expect(rejected).toEqual([{ finding: standard, reason: BLOCKING_STANDARD_OR_TEST, unfounded: true }])
+    expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
   })
 
   it("renders the basis after the body and before the suggestion", () => {
@@ -472,18 +540,44 @@ describe("chooseReviewEvent", () => {
   })
 
   it("never approves while a blocking finding stands rejected, so a mis-anchored one still blocks", () => {
-    expect(chooseReviewEvent(base, [], [{ finding: finding(), reason: "r" }], true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(base, [], [{ finding: finding({ severity: "nitpick" }), reason: "r" }], true)).toBe(
-      "APPROVE",
+    expect(chooseReviewEvent(base, [], [{ finding: finding(), reason: "r", unfounded: false }], true)).toBe(
+      "REQUEST_CHANGES",
     )
+    expect(
+      chooseReviewEvent(base, [], [{ finding: finding({ severity: "nitpick" }), reason: "r", unfounded: false }], true),
+    ).toBe("APPROVE")
   })
 
-  it("lets only a defect or spec finding hold approval back, since a standard or test one graded blocking was rejected for that grade", () => {
-    const rejectedAs = (kind: FindingInput["basis_kind"]) => [{ finding: finding({ basis_kind: kind }), reason: "r" }]
-    expect(chooseReviewEvent(base, [], rejectedAs("standard"), true)).toBe("APPROVE")
-    expect(chooseReviewEvent(base, [], rejectedAs("test"), true)).toBe("APPROVE")
+  it("holds approval back for a blocking defect or spec finding rejected for anything but its basis", () => {
+    const rejectedAs = (kind: FindingInput["basis_kind"]) => [
+      { finding: finding({ basis_kind: kind }), reason: "r", unfounded: false },
+    ]
     expect(chooseReviewEvent(base, [], rejectedAs("defect"), true)).toBe("REQUEST_CHANGES")
     expect(chooseReviewEvent(base, [], rejectedAs("spec"), true)).toBe("REQUEST_CHANGES")
+  })
+
+  it("never lets a blocking standard or test finding hold approval back, since validation rejects it for that grade", () => {
+    const blocking = [
+      finding({ basis_kind: "standard", basis: "Feature Envy" }),
+      finding({ basis_kind: "test", basis: "checkout has no test" }),
+    ]
+    for (const rejectedFinding of blocking) {
+      const { rejected } = validateFindings([rejectedFinding], commentable, true)
+      expect(rejected.map((r) => r.reason)).toEqual([BLOCKING_STANDARD_OR_TEST])
+      expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
+    }
+  })
+
+  it("approves an approve verdict when the only rejection is a spec finding on a pull request with no linked issue", () => {
+    const { rejected } = validateFindings([specFinding()], commentable, false)
+    expect(rejected).toEqual([{ finding: specFinding(), reason: NO_LINKED_ISSUE, unfounded: true }])
+    expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
+  })
+
+  it("requests changes when the only rejection is a blocking defect finding whose quote matches no line", () => {
+    const { rejected } = validateFindings([finding({ quote: "const c = 4;" })], commentable, false)
+    expect(rejected.map((r) => r.unfounded)).toEqual([false])
+    expect(chooseReviewEvent(base, [], rejected, true)).toBe("REQUEST_CHANGES")
   })
 
   it("requests changes while one of its blocking threads stays open, and approves once none does", () => {
@@ -498,7 +592,9 @@ describe("chooseReviewEvent", () => {
   })
 
   it("holds approval back for an open blocking thread even when the only rejected finding is a standard one", () => {
-    const standard = [{ finding: finding({ basis_kind: "standard" }), reason: BLOCKING_STANDARD_OR_TEST }]
+    const standard = [
+      { finding: finding({ basis_kind: "standard" }), reason: BLOCKING_STANDARD_OR_TEST, unfounded: true },
+    ]
     expect(chooseReviewEvent(base, [], standard, true, 1)).toBe("REQUEST_CHANGES")
     expect(chooseReviewEvent(base, [], standard, true, 0)).toBe("APPROVE")
   })
@@ -510,8 +606,16 @@ describe("renderReviewBody", () => {
       "REQUEST_CHANGES",
       [],
       [
-        { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
-        { finding: finding({ severity: "nitpick", title: "Rename b" }), reason: "quote matches 2 lines" },
+        {
+          finding: finding({ title: "Total is NaN for an empty cart" }),
+          reason: "quote matches 2 lines",
+          unfounded: false,
+        },
+        {
+          finding: finding({ severity: "nitpick", title: "Rename b" }),
+          reason: "quote matches 2 lines",
+          unfounded: false,
+        },
       ],
     )
     expect(body).toBe(
@@ -524,10 +628,15 @@ describe("renderReviewBody", () => {
       "REQUEST_CHANGES",
       [],
       [
-        { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
+        {
+          finding: finding({ title: "Total is NaN for an empty cart" }),
+          reason: "quote matches 2 lines",
+          unfounded: false,
+        },
         {
           finding: finding({ basis_kind: "standard", basis: "Feature Envy", title: "Move the total into Cart" }),
           reason: BLOCKING_STANDARD_OR_TEST,
+          unfounded: true,
         },
       ],
     )
@@ -536,11 +645,25 @@ describe("renderReviewBody", () => {
     )
   })
 
+  it("names a blocking defect finding rejected for its anchor and not a spec finding rejected for want of a linked issue", () => {
+    const { rejected } = validateFindings(
+      [
+        specFinding({ title: "Departs from #7" }),
+        finding({ title: "Total is NaN for an empty cart", quote: "const c = 4;" }),
+      ],
+      commentable,
+      false,
+    )
+    expect(renderReviewBody("REQUEST_CHANGES", [], rejected)).toBe(
+      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+    )
+  })
+
   it("follows the inline counts with them when other findings were posted", () => {
     const body = renderReviewBody(
       "REQUEST_CHANGES",
       [finding({ severity: "nitpick" })],
-      [{ finding: finding({ title: "Total is NaN" }), reason: "r" }],
+      [{ finding: finding({ title: "Total is NaN" }), reason: "r", unfounded: false }],
     )
     expect(body).toBe(
       "1 nitpick(s). Blocking findings are marked 🔴; the others are optional.\n\n1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
@@ -551,6 +674,7 @@ describe("renderReviewBody", () => {
     const rejected = Array.from({ length: 7 }, (_, i) => ({
       finding: finding({ title: `${i}`.repeat(300) }),
       reason: "r",
+      unfounded: false,
     }))
     const lines = renderReviewBody("REQUEST_CHANGES", [], rejected).split("\n")
     expect(lines[0]).toBe("7 blocking finding(s) couldn't be posted inline and hold approval back:")
