@@ -474,3 +474,15 @@ export function stricterMergeDanger(previous: MergeDangerInput | undefined, push
   if (previous === undefined) return push
   return previous.door === "one-way" && push.door === "two-way" ? previous : push
 }
+
+export function submissionFromRecord(
+  submission: ReviewSubmissionInput,
+  reviewed: ReviewedRecord,
+): ReviewSubmissionInput {
+  return {
+    ...submission,
+    summary: reviewed.summary,
+    walkthrough: reviewed.walkthrough,
+    merge_danger: reviewed.merge_danger ?? submission.merge_danger,
+  }
+}

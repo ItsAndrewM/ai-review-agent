@@ -20,6 +20,7 @@ describe("linkedIssueNumbers", () => {
   it("leaves out a bare mention when a closing keyword or the branch key names the spec, since a passing mention is no requirement", () => {
     expect(linkedIssueNumbers("Closes #12. Compare with #2.", "feature/x.GH-14")).toEqual([12, 14])
     expect(linkedIssueNumbers("See #3. Fixes #7", "main")).toEqual([7])
+    expect(linkedIssueNumbers("See #2", "feature/x.GH-14")).toEqual([14])
     expect(linkedIssueNumbers("Builds on #2", "feature/review-only-what-changed.24")).toEqual([24])
   })
 

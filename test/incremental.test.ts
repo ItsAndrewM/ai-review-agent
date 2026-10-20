@@ -12,6 +12,7 @@ import {
   coveredMap,
   findingRecords,
   nextReviewed,
+  submissionFromRecord,
   nothingToReview,
   openBlockingAfter,
   openBotThreads,
@@ -681,5 +682,39 @@ describe("nextReviewed", () => {
       { path: "b.ts", summary: "old b" },
       { path: "logo.png", summary: "adds a logo" },
     ])
+  })
+})
+
+describe("submissionFromRecord", () => {
+  const pushed: ReviewSubmissionInput = {
+    summary: "This push fixes the total.",
+    walkthrough: [{ path: "a.ts", summary: "new a" }],
+    findings: [],
+    verdict: "comment",
+    merge_danger: { door: "two-way", blast_radius: "the total" },
+  }
+  const record: ReviewedRecord = {
+    headSha: "aaa",
+    baseRef: "main",
+    at: 1,
+    mode: "incremental",
+    summary: "The whole PR.",
+    walkthrough: [
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+    ],
+  }
+
+  it("shows the record's summary, walkthrough and merge danger in place of the push's", () => {
+    const oneWay = { door: "one-way" as const, blast_radius: "the migration" }
+    const shown = submissionFromRecord(pushed, { ...record, merge_danger: oneWay })
+    expect(shown.summary).toBe("The whole PR.")
+    expect(shown.walkthrough).toHaveLength(2)
+    expect(shown.merge_danger).toEqual(oneWay)
+    expect(shown.findings).toEqual([])
+  })
+
+  it("keeps the push's merge danger when the record predates the field", () => {
+    expect(submissionFromRecord(pushed, record).merge_danger).toEqual(pushed.merge_danger)
   })
 })
