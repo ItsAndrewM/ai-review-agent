@@ -4,3 +4,7 @@ import { lastItem } from "../src/live-check.ts"
 it("returns the last item of a list", () => {
   expect(lastItem([1, 2, 3])).toBe(3)
 })
+
+it("returns undefined for an empty list", () => {
+  expect(lastItem([])).toBeUndefined()
+})
