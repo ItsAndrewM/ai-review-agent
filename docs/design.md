@@ -10,7 +10,7 @@ Status: phase 1, the walking skeleton, is built, deployed and reviewing this rep
 | --- | --- | --- |
 | Agent harness | Pi Durable through the Agents SDK's `PiHarness` | Every turn, tool call and piece of state is committed before it is shown; idempotent submissions by request id; hooks before and after tool calls; survives eviction. Smallest loop of the three options. |
 | Approval policy | Request changes on actionable findings, approve when they are resolved | CodeRabbit's request-changes workflow, which is the feature worth keeping. |
-| Plan | Workers Paid, since 17 Oct 2026 | Unlocks Workers AI's paid models, such as Kimi K2.7 Code, and Containers for the sandbox tier. Reviews still run on gpt-oss-120b until #2 compares models. |
+| Plan | Workers Paid, since 17 Oct 2026 | Unlocks Workers AI's paid models, such as Kimi K2.7 Code, and Containers for the sandbox tier. Reviews run on GLM-5.3 Flash since #2 compared models on 19 Oct 2026. |
 | Repos | Andrew's own repos, public and private, through one GitHub App named `andabot` | An App's approval counts toward required reviews like a person's. The default Actions token's does not without an org setting. |
 | State | One Durable Object per pull request | Memory per PR for chat follow-ups, the approval state machine and incremental review live where the PR does. |
 
@@ -175,7 +175,7 @@ Workers AI through the Pi AI provider, with AI Gateway for anything else. The ac
 
 | Role | First choice | Fallback | Why |
 | --- | --- | --- | --- |
-| Review, one pass (phase 1, live) | `@cf/openai/gpt-oss-120b` | | Reliable tool calls; #2 compares it with `@cf/moonshotai/kimi-k2.7-code` |
+| Review, one pass (phase 1, live) | `@cf/zai-org/glm-5.3-flash` | | On #2 it caught all five of #9's planted defects with no false positive and posted through the tool, for under a cent a review. gpt-oss-120b caught 4 or 5 and skipped the tool on #18 and #19, Gemma 4 26B caught 4 and leaned on the text fallback, and Qwen3.8-27B's stream died mid-review. No model has caught #38's defect yet |
 | Draft findings and walkthrough (phase 2) | `@cf/zai-org/glm-5.3-flash` | `@cf/zai-org/glm-4.7-flash` | Cheap per token, long context, good enough for candidates |
 | Verify findings, chat replies (phase 2) | `@cf/moonshotai/kimi-k2.7-code` | `@cf/openai/gpt-oss-120b` | Code-tuned, stronger reasoning, called on a small input |
 | Emergency fallback | OpenRouter `:free` models via AI Gateway | | 50 requests a day without a card; models rotate, so never primary |
