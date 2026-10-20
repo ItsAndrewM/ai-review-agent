@@ -63,6 +63,7 @@ import {
   openBlockingAfter,
   planThreads,
   promptFiles,
+  resolveThreads,
   ReviewedRecord,
   ReviewScope,
   StoredFinding,
@@ -271,8 +272,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     scope: ReviewScope,
     scoped: ScopedReview,
   ): Promise<string> {
-    const { resolve } = addressedThreads(submission.addressed_threads, scope.recheck)
-    const openBlocking = scope.mode === "fresh" ? undefined : openBlockingAfter(scope, resolve)
+    const resolved = await this.resolveAddressed(
+      pr,
+      addressedThreads(submission.addressed_threads, scope.recheck).resolve,
+    )
+    const openBlocking = scope.mode === "fresh" ? undefined : openBlockingAfter(scope, resolved)
     const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
     const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
     const key = await this.key()
@@ -285,7 +289,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       baseRef: pr.base.ref,
       at: Date.now(),
       submission,
-      resolved: resolve.length,
+      resolved: resolved.length,
     })
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
@@ -302,11 +306,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, scoped.accepted, scoped.rejected, coverageOf(scope, pr.head.sha, resolve.length)),
+      body: renderReviewBody(event, scoped.accepted, scoped.rejected, coverageOf(scope, pr.head.sha, resolved.length)),
       comments: scoped.accepted.map(toReviewComment),
     })
+    await this.replyFixed(pr, resolved)
     await this.storeFindings(pr, scoped.accepted, review.id)
-    await this.resolveAddressed(pr, resolve)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
     await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, {
       reviewId: review.id,
@@ -338,23 +342,35 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async resolveAddressed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<void> {
-    if (threads.length === 0) return
-    let resolved = 0
-    for (const thread of threads) if (await this.resolveThread(pr, thread)) resolved++
-    log("review.resolved", { number: pr.number, head: short(pr.head.sha), resolved, attempted: threads.length })
+  private async resolveAddressed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<OpenThread[]> {
+    if (threads.length === 0) return []
+    const { resolved, failed } = await resolveThreads(await this.github(), threads)
+    for (const { thread, error } of failed) {
+      logError("review.resolve_failed", { number: pr.number, thread: thread.handle, step: "resolve", error })
+    }
+    log("review.resolved", {
+      number: pr.number,
+      head: short(pr.head.sha),
+      resolved: resolved.length,
+      attempted: threads.length,
+    })
+    return resolved
   }
 
-  private async resolveThread(pr: PullRequestInfo, thread: OpenThread): Promise<boolean> {
-    try {
-      const key = await this.key()
-      const github = await this.github()
-      await github.replyToReviewComment(key, key.number, thread.firstCommentId, `Fixed in \`${short(pr.head.sha)}\`.`)
-      await github.resolveReviewThread(thread.threadId)
-      return true
-    } catch (error) {
-      logError("review.resolve_failed", { number: pr.number, thread: thread.handle, error: errorText(error) })
-      return false
+  private async replyFixed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<void> {
+    for (const thread of threads) {
+      try {
+        const key = await this.key()
+        const reply = `Fixed in \`${short(pr.head.sha)}\`.`
+        await (await this.github()).replyToReviewComment(key, key.number, thread.firstCommentId, reply)
+      } catch (error) {
+        logError("review.resolve_failed", {
+          number: pr.number,
+          thread: thread.handle,
+          step: "reply",
+          error: errorText(error),
+        })
+      }
     }
   }
 

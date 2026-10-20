@@ -16,6 +16,7 @@ import {
   openBotThreads,
   planThreads,
   promptFiles,
+  resolveThreads,
   threadLists,
   threadsToRecheck,
   type OpenThread,
@@ -408,6 +409,28 @@ describe("the review scope", () => {
     expect(openBlockingAfter(scope, [open("T1", { blocking: true }), open("T2")])).toBe(2)
     const unread = buildScope({ deliveryId: "d-1", mode: "full", from: undefined, covered, threads: undefined })
     expect(openBlockingAfter(unread, [])).toBe("unknown")
+  })
+})
+
+describe("resolveThreads", () => {
+  it("returns only the threads GitHub resolved, so a failed resolution still blocks approval", async () => {
+    const resolver = {
+      resolveReviewThread: (threadId: string): Promise<void> =>
+        threadId === "thread-T2" ? Promise.reject(new Error("GitHub GraphQL: 502")) : Promise.resolve(),
+    }
+    const fixed = open("T1", { blocking: true })
+    const stillOpen = open("T2", { blocking: true })
+    const attempt = await resolveThreads(resolver, [fixed, stillOpen])
+    expect(attempt.resolved).toEqual([fixed])
+    expect(attempt.failed).toEqual([{ thread: stillOpen, error: "Error: GitHub GraphQL: 502" }])
+    const scope = buildScope({
+      deliveryId: "d-1",
+      mode: "incremental",
+      from: "aaa",
+      covered: new Map(),
+      threads: { open: [fixed, stillOpen], recheck: [fixed, stillOpen] },
+    })
+    expect(openBlockingAfter(scope, attempt.resolved)).toBe(1)
   })
 })
 

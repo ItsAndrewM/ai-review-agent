@@ -8,6 +8,7 @@ import {
   type DeltaLines,
   type MarkedLines,
 } from "../github/diff.ts"
+import { errorText } from "../log.ts"
 import {
   SEVERITY_LABEL,
   Severity,
@@ -149,6 +150,20 @@ export interface ScopedReview {
 export interface AddressedThreads {
   resolve: OpenThread[]
   unknown: string[]
+}
+
+export interface ThreadResolver {
+  resolveReviewThread(threadId: string): Promise<void>
+}
+
+export interface FailedResolution {
+  thread: OpenThread
+  error: string
+}
+
+export interface ResolveAttempt {
+  resolved: OpenThread[]
+  failed: FailedResolution[]
 }
 
 const COMMENT_LABEL = /^\*\*(.+?): (.+?)\*\*/
@@ -314,6 +329,23 @@ export function addressedThreads(
     else unknown.push(handle)
   }
   return { resolve, unknown }
+}
+
+export async function resolveThreads(
+  resolver: ThreadResolver,
+  threads: readonly OpenThread[],
+): Promise<ResolveAttempt> {
+  const resolved: OpenThread[] = []
+  const failed: FailedResolution[] = []
+  for (const thread of threads) {
+    try {
+      await resolver.resolveReviewThread(thread.threadId)
+      resolved.push(thread)
+    } catch (error) {
+      failed.push({ thread, error: errorText(error) })
+    }
+  }
+  return { resolved, failed }
 }
 
 export function buildScope(input: ScopeInput): ReviewScope {
