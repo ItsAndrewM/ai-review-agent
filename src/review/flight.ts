@@ -9,6 +9,7 @@ export interface PendingReview {
   model?: string
   fingerprint?: string
   rejectionsReturned?: boolean
+  linkedIssues?: number[]
 }
 
 export const StoredPending = Type.Object({
@@ -20,6 +21,7 @@ export const StoredPending = Type.Object({
   model: Type.Optional(Type.String()),
   fingerprint: Type.Optional(Type.String()),
   rejectionsReturned: Type.Optional(Type.Boolean()),
+  linkedIssues: Type.Optional(Type.Array(Type.Integer())),
 })
 
 export type StoredPending = Static<typeof StoredPending>
@@ -38,4 +40,15 @@ export function decideFlight(pending: PendingReview | undefined, headSha: string
   if (pending.headSha !== headSha) return { kind: "replace", previous: pending, because: "superseded" }
   if (live) return { kind: "skip", reason: "in_progress" }
   return { kind: "replace", previous: pending, because: "dead" }
+}
+
+export type RunStanding = "in_flight" | "ended" | "replaced"
+
+export function runStanding(
+  pending: PendingReview | undefined,
+  deliveryId: string,
+  endedDelivery: string | undefined,
+): RunStanding {
+  if (pending?.deliveryId === deliveryId) return "in_flight"
+  return endedDelivery === deliveryId ? "ended" : "replaced"
 }

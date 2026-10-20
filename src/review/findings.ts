@@ -2,7 +2,13 @@ import { Type } from "@earendil-works/pi-ai"
 import type { Static } from "typebox"
 import { Value } from "typebox/value"
 import type { ReviewComment } from "../github/client.ts"
-import { comparableText, type CommentableLines, type Side } from "../github/diff.ts"
+import {
+  comparableText,
+  requiresWalkthrough,
+  type ChangedFile,
+  type CommentableLines,
+  type Side,
+} from "../github/diff.ts"
 import { errorText } from "../log.ts"
 
 export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
@@ -28,6 +34,18 @@ export const Finding = Type.Object({
     description:
       "The text of the line at `line`, copied exactly as the diff shows it after the anchor and the +, - or space. The host checks the anchor against it.",
   }),
+  basis_kind: Type.Union(
+    [Type.Literal("defect"), Type.Literal("spec"), Type.Literal("standard"), Type.Literal("test")],
+    {
+      description:
+        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. Grade a standard or test finding suggestion or nitpick.",
+    },
+  ),
+  basis: Type.String({
+    minLength: 1,
+    description:
+      "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names.",
+  }),
   severity: Severity,
   title: Type.String({ description: "One line, under 80 characters." }),
   body: Type.String({ description: "Why it is a problem and what to do instead. Markdown." }),
@@ -40,7 +58,7 @@ export const Finding = Type.Object({
 })
 
 export const Walkthrough = Type.Object({
-  path: Type.String(),
+  path: Type.String({ description: "Path of the changed file, exactly as listed." }),
   summary: Type.String({ description: "One sentence on what changed in this file." }),
 })
 
@@ -54,6 +72,15 @@ export const ReviewSubmission = Type.Object({
     description:
       "approve when nothing blocking remains and the change is sound; request_changes when any finding is blocking; comment otherwise.",
   }),
+  merge_danger: Type.Object(
+    {
+      door: Type.Union([Type.Literal("one-way"), Type.Literal("two-way")], {
+        description: "one-way when reverting the pull request cannot undo its effects, two-way when a revert can.",
+      }),
+      blast_radius: Type.String({ minLength: 1, description: "One line: who or what breaks if the change is wrong." }),
+    },
+    { description: "How hard the change is to walk back, and how far a failure reaches." },
+  ),
   addressed_threads: Type.Optional(
     Type.Array(
       Type.String({
@@ -283,7 +310,14 @@ function rangeProblem(finding: FindingInput, side: Side, lines: ReadonlyMap<numb
 function contentProblem(finding: FindingInput): string | undefined {
   if (finding.title.trim() === "" || finding.body.trim() === "") return "title and body are required"
   if (finding.body.length > MAX_BODY_CHARS) return `body longer than ${MAX_BODY_CHARS} characters`
-  return suggestionProblem(finding) ?? commentSizeProblem(finding)
+  return basisProblem(finding) ?? suggestionProblem(finding) ?? commentSizeProblem(finding)
+}
+
+function basisProblem(finding: FindingInput): string | undefined {
+  if (finding.basis.trim() === "") return "basis is required"
+  if (finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test"))
+    return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  return undefined
 }
 
 function suggestionProblem(finding: FindingInput): string | undefined {
@@ -299,6 +333,19 @@ function commentSizeProblem(finding: FindingInput): string | undefined {
   return `comment longer than ${MAX_COMMENT_CHARS} characters, GitHub's limit`
 }
 
+export function walkthroughPaths(files: readonly ChangedFile[]): string[] {
+  return files.filter((file) => requiresWalkthrough(file)).map((file) => file.filename)
+}
+
+export function missingWalkthrough(submission: ReviewSubmissionInput, needed: readonly string[]): string[] {
+  const covered = new Set(submission.walkthrough.map((row) => rowPath(row.path)))
+  return needed.filter((path) => !covered.has(path))
+}
+
+export function rowPath(path: string): string {
+  return path.trim().replace(/^\.\//, "")
+}
+
 export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
   suggestion: "🟡 Suggestion",
@@ -308,6 +355,7 @@ export const SEVERITY_LABEL = {
 export function toReviewComment(finding: FindingInput): ReviewComment {
   const side = finding.side ?? "RIGHT"
   let body = `**${SEVERITY_LABEL[finding.severity]}: ${finding.title.trim()}**\n\n${finding.body.trim()}`
+  body += `\n\n_Basis: ${finding.basis.trim()}_`
   if (finding.suggestion !== undefined) {
     body += `\n\n\`\`\`suggestion\n${finding.suggestion.replace(/\n$/, "")}\n\`\`\``
   }

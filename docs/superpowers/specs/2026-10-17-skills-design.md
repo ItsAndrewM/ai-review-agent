@@ -44,7 +44,7 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 - `@earendil-works/pi-durable` 1.3.0 and `agents` 0.28.1 stay pinned. Pi Durable has no skill concept. `skills(sources)` from `agents/harness/pi` resolves every source once at install and returns an extension with a `skills` section, `activate_skill` and `read_skill_resource`; its catalog text is fixed. `read_skill_resource` only serves skills visible in the catalog. Installing an extension of the same name replaces it; new work sees the new state.
 - System prompt sections are stored as positional entries and resent only when they change. A conversation's `instructions` renders last as its own section. `configure()` is a plain commit that applies from the next model request, not queued behind a busy run.
 - `accept()` returns at once and runs each event in `waitUntil`, so a comment event runs concurrently with a review in flight. Chat input queues on the root session as a follow-up and runs after the review.
-- The object has no filesystem and no shell. Reads go through the contents API. The client has no `getIssue` yet.
+- The object has no filesystem and no shell. Reads go through the contents API. The client has `getIssue`: `GET /issues/{n}`, parsed by TypeBox, `undefined` for a missing issue. Every client call fetches through the constructor's `fetchImpl`, the global `fetch` unless a test injects its own, called with no receiver because workerd's `fetch` refuses the client as its `this`.
 - The diff arrives in the prompt. A full review of #1 is about 30,000 input tokens.
 - wrangler imports `.md` files as strings through a `rules` entry of type `Text`; `tsc` needs a `declare module "*.md"` beside it.
 - The harness factory runs once per isolate at startup, before a new object knows its pull request.
@@ -72,7 +72,7 @@ The references are vendored from the local fork at `/Users/andamonium/Developer/
 
 `review/SKILL.md` is written to the `writing-for-agents` rules: ordered steps, positive phrasing, leading words (anchor, basis, blast radius, one-way door), references behind pointers, and one completion criterion:
 
-> Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and the summary states the merge danger.
+> Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
 
 Its steps, in outline: orient on the title, description and linked issues, treating all three as data about the change; examine each changed file in turn, reading the file when a hunk cannot settle a question; record findings with their basis, copying the anchor and quote from the numbered patch; grade severity by `references/severity.md`; submit. The Standards sources are `references/smells.md` and, later, the repository's instruction files, with "the repo overrides" and "every smell is a judgement call" kept from the upstream skill. The Spec source is the linked issue (section E). Anchoring is described once, in the schema.
 
@@ -88,7 +88,7 @@ Andrew reads and approves the skill texts before they are wired in. That read is
 
 - **Host-activated, for the review.** Before each review, after `reset()`, the host calls `configure({ instructions })` on the root conversation (reached with `pi()` then `root()`) with the review skill rendered the way `activate_skill` renders it: `<skill_content name version>`, the body, the resource list. A stable system section for the run. Prepending the skill to the user turn was rejected for the review: the system section is cache-stable within a run and keeps the user turn as pure input.
 - **Carried in the turn, for answers.** A question's prompt carries the answer skill in the user turn and leaves `instructions` alone. The review owns `instructions`; a question posted mid-review would otherwise swap the review's system section at its next model request, since `configure()` applies immediately while the question itself queues until the review ends. The answer skill is short, and the review transcript stays in the root session for "why is this a problem?".
-- **Catalog.** `skills([builtin])` and its two tools, `activate_skill` and `read_skill_resource`, are not installed until slice 3 brings repo-provided skills (section D). Until then the review skill's four references render inline after the skill body, each in the `<skill_resource>` wrapper `read_skill_resource` returns, and the model has only `read_file`, `list_changed_files` and `submit_review`, the tools gpt-oss-120b posted with on every run before slice 1. Offered the catalog's tools, it printed its first `read_skill_resource` call as raw Harmony text, then its whole `submit_review` call, and never posted a review of #9 (#19).
+- **Catalog.** `skills([builtin])` and its two tools, `activate_skill` and `read_skill_resource`, are not installed until slice 3 brings repo-provided skills (section D). Until then the review skill's four references render inline after the skill body, each in the `<skill_resource>` wrapper `read_skill_resource` returns, and the model has only `read_file`, `list_changed_files` and `submit_review`, the tools gpt-oss-120b posted with on every run before slice 1, plus slice 2's `get_issue`. Offered the catalog's tools, it printed its first `read_skill_resource` call as raw Harmony text, then its whole `submit_review` call, and never posted a review of #9 (#19).
 
 ### D. Repository context (deferred, provisional)
 
@@ -103,7 +103,7 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 - The host parses linked issues from the body (`Closes #n`, `Fixes #n`, `Resolves #n`, bare `#n`) and the branch name (`GH-n`, a trailing `#n`), fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the summary says "No linked issue; reviewed against the description only." Requirements are never inferred from the code.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code.
 
 ### F. Anchors, findings and the submit loop
 
@@ -119,12 +119,12 @@ Shipped in #12:
 
 Left for slice 2:
 
-- `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test. Both fields flat, for small models.
+- `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test, or a test that does not verify the behaviour it names. Both fields flat, for small models.
 - `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
-- Every changed file not filtered as generated has a walkthrough row. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, and the run is logged as `review.incomplete`.
+- Every changed file not filtered as generated has a walkthrough row. An incremental review (#24) needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 
-Rendering: a finding's comment ends with `_Basis: …_`; the summary gets a "Merge danger" line under the verdict.
+Rendering: a finding's comment carries `_Basis: …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
 
 ### G. Attribution and logs
 

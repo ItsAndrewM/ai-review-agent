@@ -1,6 +1,6 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { decideFlight, migratePending, StoredPending, type PendingReview } from "../src/review/flight.ts"
+import { decideFlight, migratePending, runStanding, StoredPending, type PendingReview } from "../src/review/flight.ts"
 
 const pending: PendingReview = {
   headSha: "aaa",
@@ -29,6 +29,24 @@ describe("decideFlight", () => {
   })
 })
 
+describe("runStanding", () => {
+  it("is in flight while its delivery holds the pending, even one an earlier run under that id ended, as when GitHub redelivers the event", () => {
+    expect(runStanding(pending, "d-1", undefined)).toBe("in_flight")
+    expect(runStanding(pending, "d-1", "d-1")).toBe("in_flight")
+  })
+
+  it("is replaced when another delivery holds the pending or none does, since a replacer deletes the record before it writes its own", () => {
+    expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", undefined)).toBe("replaced")
+    expect(runStanding(undefined, "d-1", undefined)).toBe("replaced")
+    expect(runStanding(undefined, "d-1", "d-0")).toBe("replaced")
+  })
+
+  it("is ended once its own review ended without posting, even after another delivery takes the pending", () => {
+    expect(runStanding(undefined, "d-1", "d-1")).toBe("ended")
+    expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", "d-1")).toBe("ended")
+  })
+})
+
 describe("migratePending", () => {
   it("fills the base's two-field record with the base's operation id and a start of 0", () => {
     const stored = { headSha: "aaa", deliveryId: "d-1" }
@@ -45,6 +63,13 @@ describe("migratePending", () => {
     const flagged = { ...pending, model: "@cf/openai/gpt-oss-120b", fingerprint: "798ffa29", rejectionsReturned: true }
     expect(Value.Check(StoredPending, flagged)).toBe(true)
     expect(migratePending(flagged)).toEqual(flagged)
+  })
+
+  it("keeps the linked issues the prompt was built with, which the summary footer reads back", () => {
+    const linked: PendingReview = { ...pending, linkedIssues: [12, 14] }
+    expect(Value.Check(StoredPending, linked)).toBe(true)
+    expect(migratePending(linked)).toEqual(linked)
+    expect(Value.Check(StoredPending, { ...pending, linkedIssues: ["#12"] })).toBe(false)
   })
 
   it("does not accept a record without its head and delivery id", () => {

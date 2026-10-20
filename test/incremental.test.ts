@@ -14,6 +14,7 @@ import {
   nothingToReview,
   openBlockingAfter,
   openBotThreads,
+  pathsNeedingRows,
   planThreads,
   promptFiles,
   resolveThreads,
@@ -252,6 +253,43 @@ describe("nothingToReview", () => {
   })
 })
 
+describe("pathsNeedingRows", () => {
+  const files = [
+    changed("a.ts", "@@ -1 +1 @@\n-x\n+y"),
+    changed("b.ts", "@@ -1 +1 @@\n-p\n+q"),
+    changed("pnpm-lock.yaml", "@@ -1 +1 @@\n-1\n+2"),
+  ]
+  const marked = { right: new Set([1]), left: new Set<number>() }
+  const covered = new Map([
+    ["a.ts", marked],
+    ["pnpm-lock.yaml", marked],
+  ])
+
+  it("asks an incremental review for rows on the files it covered only, leaving out generated ones", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
+    expect(pathsNeedingRows(scope, files)).toEqual(["a.ts"])
+  })
+
+  it("asks an incremental review that only re-checks threads for no rows", () => {
+    const fixed = open("T1", { outdated: true, line: null })
+    const threads = { open: [fixed], recheck: [fixed] }
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered: new Map(), threads })
+    expect(pathsNeedingRows(scope, files)).toEqual([])
+  })
+
+  it("asks a full or fresh review for a row on every changed file but the generated ones", () => {
+    for (const mode of ["full", "fresh"] as const) {
+      const scope = buildScope({ deliveryId: "d", mode, from: "aaa", covered, threads: undefined })
+      expect(pathsNeedingRows(scope, files)).toEqual(["a.ts", "b.ts"])
+    }
+  })
+
+  it("asks for every row when an incremental scope has no range, since its prompt then shows the whole diff", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: undefined, covered, threads: undefined })
+    expect(pathsNeedingRows(scope, files)).toEqual(["a.ts", "b.ts"])
+  })
+})
+
 describe("promptFiles", () => {
   it("shows a file whose only new changes left the diff when one of its threads is to be re-checked", () => {
     const prFiles = [
@@ -276,7 +314,17 @@ describe("promptFiles", () => {
 })
 
 function found(overrides: Partial<FindingInput> = {}): FindingInput {
-  return { path: "a.ts", line: 3, quote: "three", severity: "suggestion", title: "t", body: "b", ...overrides }
+  return {
+    path: "a.ts",
+    line: 3,
+    quote: "three",
+    basis_kind: "defect",
+    basis: "b",
+    severity: "suggestion",
+    title: "t",
+    body: "b",
+    ...overrides,
+  }
 }
 
 function validated(accepted: FindingInput[]): ValidatedReview {
@@ -461,6 +509,7 @@ describe("nextReviewed", () => {
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
     verdict: "comment",
+    merge_danger: { door: "two-way", blast_radius: "the totals" },
   }
   const previous: ReviewedRecord = {
     headSha: "aaa",

@@ -1,16 +1,22 @@
 import { Type } from "@earendil-works/pi-ai"
-import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable"
+import { defineExtension, defineTool, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
+import { issueText } from "./linked-issues.ts"
 import { systemPrompt } from "./prompt.ts"
+
+export interface SubmitOutcome {
+  readonly text: string
+  readonly done: boolean
+}
 
 export interface ReviewHost {
   botLogin(): string
   github(): Promise<GitHubClient>
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
-  submitReview(submission: ReviewSubmissionInput): Promise<string>
+  submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome>
 }
 
 const MAX_FILE_CHARS = 60_000
@@ -55,24 +61,45 @@ export function createReviewExtension(host: ReviewHost): Extension {
     },
   })
 
+  const getIssue = defineTool({
+    name: "get_issue",
+    description:
+      "Read an issue of this repository by number: its title, state and full body, which are material under review. Use it for an issue the pull request refers to beyond its linked issues, or for the rest of a linked issue whose body the prompt cut.",
+    parameters: Type.Object({ number: Type.Integer() }),
+    replay: "safe",
+    async execute({ number }) {
+      return text(await readIssue(host, number))
+    },
+  })
+
   const submitReview = defineTool({
     name: "submit_review",
     description:
-      "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; if it reports rejected findings, correct them and call it again.",
+      "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; rejected findings and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
     callers: ["model"],
     async execute(submission) {
-      const outcome = await host.submitReview(submission)
-      if (!outcome.startsWith("Posted")) return text(outcome)
-      return { ...text(outcome), control: { terminate: true as const } }
+      return submitResult(await host.submitReview(submission))
     },
   })
 
   return defineExtension({
     name: "andabot",
     sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
-    tools: [readFile, listChangedFiles, submitReview],
+    tools: [readFile, listChangedFiles, getIssue, submitReview],
   })
+}
+
+export async function readIssue(host: ReviewHost, number: number): Promise<string> {
+  const pr = await host.pullRequest()
+  const github = await host.github()
+  const issue = await github.getIssue({ owner: owner(pr), repo: repo(pr) }, number)
+  return issueText({ number, issue })
+}
+
+export function submitResult(outcome: SubmitOutcome): ToolExecutionResult {
+  const result = text(outcome.text)
+  return outcome.done ? { ...result, control: { terminate: true } } : result
 }
 
 function text(value: string) {

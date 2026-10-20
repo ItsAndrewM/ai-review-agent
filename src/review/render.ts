@@ -4,6 +4,7 @@ import {
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
+  rowPath,
   type WalkthroughInput,
   type WrittenReview,
 } from "./findings.ts"
@@ -20,6 +21,7 @@ export interface Coverage {
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
 const MOST_HELD_BACK_LISTED = 5
+const MOST_MISSING_LISTED = 10
 const MOST_LISTED_CHARS = 100
 
 export const VERDICT_LABEL = {
@@ -37,9 +39,11 @@ export function renderSummaryComment(input: {
   droppedCount: number
   model?: string | undefined
   skillsFingerprint?: string | undefined
+  linkedIssues: readonly number[]
   since?: SinceSection | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
+  const { door, blast_radius } = input.submission.merge_danger
   const walkthrough =
     input.submission.walkthrough.length === 0
       ? "_No per-file notes._"
@@ -50,13 +54,15 @@ export function renderSummaryComment(input: {
         ].join("\n")
   const dropped =
     input.droppedCount > 0
-      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they couldn't be posted inline, even after a retry.</sub>`
+      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they failed the host's checks, even after a retry.</sub>`
       : ""
   return [
     SUMMARY_MARKER,
     `## ${input.botLogin} review`,
     "",
     `**Head:** \`${input.headSha.slice(0, 7)}\` · **Verdict:** ${VERDICT_LABEL[input.event]} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`,
+    "",
+    `**Merge danger:** ${door} door · ${oneLine(blast_radius)}`,
     "",
     "### Summary",
     "",
@@ -69,6 +75,7 @@ export function renderSummaryComment(input: {
     ...sinceLines(input.since),
     "",
     ...reviewedBy(input.model, input.skillsFingerprint),
+    linkedIssuesLine(input.linkedIssues),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
 }
@@ -91,17 +98,28 @@ export function mergeWalkthrough(
   incoming: readonly WalkthroughInput[],
   covered: ReadonlySet<string>,
 ): WalkthroughInput[] {
-  const replacements = new Map(incoming.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
-  const known = new Set(stored.map((row) => row.path))
+  const kept = normalisedRows(stored)
+  const rows = normalisedRows(incoming)
+  const replacements = new Map(rows.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
+  const known = new Set(kept.map((row) => row.path))
   return [
-    ...stored.map((row) => replacements.get(row.path) ?? row),
+    ...kept.map((row) => replacements.get(row.path) ?? row),
     ...[...replacements.values()].filter((row) => !known.has(row.path)),
   ]
+}
+
+function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
+  return rows.map((row) => ({ ...row, path: rowPath(row.path) }))
 }
 
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+}
+
+function linkedIssuesLine(numbers: readonly number[]): string {
+  const listed = numbers.length === 0 ? "none" : numbers.map((number) => `#${number}`).join(", ")
+  return `<sub>Linked issues: ${listed}</sub>`
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {
@@ -113,6 +131,16 @@ export function renderUnpostedSummary(input: { botLogin: string; headSha: string
     "",
     input.note,
   ].join("\n")
+}
+
+export function incompleteNote(missing: readonly string[]): string {
+  const listed = missing
+    .slice(0, MOST_MISSING_LISTED)
+    .map((path) => `\`${path}\``)
+    .join(", ")
+  const unlisted = missing.length - MOST_MISSING_LISTED
+  const rest = unlisted > 0 ? ` and ${unlisted} more` : ""
+  return `_The review did not complete: no walkthrough row for ${listed}${rest}._`
 }
 
 export type RetryOutcome =
@@ -165,7 +193,7 @@ function plural(count: number, noun: string): string {
 }
 
 function heldBack(rejected: readonly Rejected[]): string | undefined {
-  const blocking = rejected.filter((r) => r.finding.severity === "blocking")
+  const blocking = rejected.filter(holdsApprovalBack)
   if (blocking.length === 0) return undefined
   return [
     `${blocking.length} blocking finding(s) couldn't be posted inline and hold approval back:`,
@@ -202,11 +230,15 @@ export function chooseReviewEvent(
   openBlocking?: number | "unknown",
 ): ReviewEvent {
   if (!requestChangesWorkflow) return "COMMENT"
-  if (countBySeverity([...accepted, ...rejected.map((r) => r.finding)]).blocking > 0) return "REQUEST_CHANGES"
+  if (countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)) return "REQUEST_CHANGES"
   if (openBlocking === "unknown") return "COMMENT"
   if ((openBlocking ?? 0) > 0) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
   return "COMMENT"
+}
+
+function holdsApprovalBack({ finding }: Rejected): boolean {
+  return finding.severity === "blocking" && (finding.basis_kind === "defect" || finding.basis_kind === "spec")
 }
 
 function oneLine(text: string): string {

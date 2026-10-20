@@ -13,6 +13,7 @@ import {
   SEVERITY_LABEL,
   Severity,
   Walkthrough,
+  walkthroughPaths,
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
@@ -369,6 +370,12 @@ export function freshScope(deliveryId: string): ReviewScope {
 
 export function nothingToReview(scope: ReviewScope): boolean {
   return scope.mode === "incremental" && scope.covered.length === 0 && scope.recheck.length === 0
+}
+
+export function pathsNeedingRows(scope: ReviewScope, files: readonly ChangedFile[]): string[] {
+  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(files)
+  const covered = new Set(scope.covered.map((file) => file.path))
+  return walkthroughPaths(files.filter((file) => covered.has(file.filename)))
 }
 
 export function promptFiles(

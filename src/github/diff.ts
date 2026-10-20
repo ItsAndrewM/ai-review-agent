@@ -145,6 +145,10 @@ export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
 }
 
+export function requiresWalkthrough(file: ChangedFile): boolean {
+  return !isGenerated(file.filename)
+}
+
 export function renderPatches(
   files: readonly ChangedFile[],
   maxCharsPerFile = 40_000,
