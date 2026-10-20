@@ -307,10 +307,10 @@ export class GitHubClient {
     for (let page = 1; page <= MOST_THREAD_PAGES; page++) {
       const { pageInfo, nodes } = await this.reviewThreadsPage(ref, number, cursor)
       threads.push(...nodes.flatMap(flattenThread))
-      if (!pageInfo.hasNextPage) break
+      if (!pageInfo.hasNextPage) return threads
       cursor = pageInfo.endCursor
     }
-    return threads
+    throw new Error(`GitHub GraphQL: more than ${MOST_THREAD_PAGES * PER_PAGE} review threads`)
   }
 
   private async reviewThreadsPage(ref: RepoRef, number: number, cursor: string | null): Promise<ThreadsPage> {

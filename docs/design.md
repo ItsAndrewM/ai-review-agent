@@ -151,7 +151,7 @@ The model names the threads it fixed in `addressed_threads`. Only the bot's own 
 
 - **Before the review is chosen,** the host resolves each named thread with `resolveReviewThread`, best effort, like the check-run calls. The event then counts only the threads that resolved.
 - **After the review posts,** it replies "Fixed in `def5678`." on each one that resolved. A publish retried after a failed `createReview` resolves again, which is harmless, but never replies twice.
-- **Approval.** Such a review never approves while one of the bot's blocking threads stays open, counting every open thread, not only those listed. If the threads couldn't be read, it never approves at all.
+- **Approval.** Such a review never approves while one of the bot's blocking threads stays open, counting every open thread, not only those listed. If the threads couldn't be read, it never approves at all. Neither does it when a pull request has more than the 500 threads the query pages through, since an incomplete count could miss a blocker.
 
 The summary comment keeps the last full review's summary and walkthrough. An incremental review replaces the walkthrough rows of the files it covered and adds a "Since `abc1234`" section. The review's body says what it covered: "Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved." or "Full review.". `review.start` logs `mode`, `since`, `covered` and `recheck`; `review.resolved` and `review.skip` (`no_new_changes`) say what happened.
 

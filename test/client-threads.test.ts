@@ -160,6 +160,13 @@ describe("GitHubClient review threads", () => {
     })
   })
 
+  it("throws rather than return a thread list it had to cut short, so the review counts the threads as unknown", async () => {
+    for (let page = 1; page <= 5; page++) {
+      reply(200, threadsPage(true, `c${page}`, [threadNode(`t${page}`, { login: "andabot", __typename: "Bot" })]))
+    }
+    await expect(client().listReviewThreads(ref, 5)).rejects.toThrow("more than 500 review threads")
+  })
+
   it("resolves a thread with the GraphQL mutation and throws on GraphQL errors", async () => {
     reply(200, { data: { resolveReviewThread: { thread: { id: "t1", isResolved: true } } } })
     await expect(client().resolveReviewThread("t1")).resolves.toBeUndefined()
