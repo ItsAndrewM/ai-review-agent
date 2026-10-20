@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
 import type { Incoming, PullRequestKey } from "./pull-request.ts"
+import { REVIEW_AGAIN } from "./review/check.ts"
 
 const Account = Type.Object({ login: Type.String() })
 
@@ -24,6 +25,7 @@ export const WebhookPayload = Type.Object({
   comment: Type.Optional(Type.Object({ body: Type.String(), user: Type.Union([Account, Type.Null()]) })),
   check_run: Type.Optional(CheckTarget),
   check_suite: Type.Optional(CheckTarget),
+  requested_action: Type.Optional(Type.Object({ identifier: Type.String() })),
 })
 
 export type WebhookPayload = Static<typeof WebhookPayload>
@@ -58,7 +60,9 @@ function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delive
     return routeComment(payload.issue, payload.comment, delivery, botLogin)
   }
   const target = checkTarget(eventName, payload)
-  if (target) return routeCheck(eventName, target, delivery, payload.sender?.login)
+  if (target) {
+    return routeCheck(eventName, target, delivery, payload.sender?.login, payload.requested_action?.identifier)
+  }
   return ignore(`event ${eventName}`)
 }
 
@@ -121,8 +125,11 @@ function routeCheck(
   target: CheckTarget,
   delivery: Delivery,
   requestedBy: string | undefined,
+  button: string | undefined,
 ): Routed {
-  if (delivery.action !== "rerequested") return ignore(`${eventName} ${delivery.action ?? ""}`)
+  if (!asksForReview(delivery.action, button)) {
+    return ignore(`${eventName} ${delivery.action ?? ""}${button === undefined ? "" : ` ${button}`}`)
+  }
   if (target.pull_requests.length === 0) return ignore("check with no pull request")
   const incoming = target.pull_requests.map(({ number }) => {
     const review: ReviewIncoming = {
@@ -136,6 +143,11 @@ function routeCheck(
     return review
   })
   return { kind: "handle", incoming }
+}
+
+function asksForReview(action: string | undefined, button: string | undefined): boolean {
+  if (action === "rerequested") return true
+  return action === "requested_action" && button === REVIEW_AGAIN.identifier
 }
 
 function ignore(reason: string): Routed {

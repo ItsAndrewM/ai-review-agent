@@ -148,7 +148,7 @@ describe("routeWebhook", () => {
 const checkTarget = { head_sha: "abc", pull_requests: [{ number: 3 }, { number: 4 }] }
 
 describe("routeWebhook for checks", () => {
-  it("turns a re-run into a full review of each listed pull request", () => {
+  it("turns a re-run or the Review again button into a full review of each listed pull request", () => {
     const expected = {
       kind: "handle",
       incoming: [3, 4].map((number) => ({
@@ -166,6 +166,30 @@ describe("routeWebhook for checks", () => {
     expect(
       routeWebhook("check_suite", { ...base, action: "rerequested", check_suite: checkTarget }, "d2", "andabot"),
     ).toEqual(expected)
+    expect(
+      routeWebhook(
+        "check_run",
+        {
+          ...base,
+          action: "requested_action",
+          check_run: checkTarget,
+          requested_action: { identifier: "review_again" },
+        },
+        "d2",
+        "andabot",
+      ),
+    ).toEqual(expected)
+  })
+
+  it("ignores a button it didn't put on the run", () => {
+    expect(
+      routeWebhook(
+        "check_run",
+        { ...base, action: "requested_action", check_run: checkTarget, requested_action: { identifier: "fix_it" } },
+        "d",
+        "andabot",
+      ),
+    ).toEqual({ kind: "ignore", reason: "check_run requested_action fix_it" })
   })
 
   it("ignores check events with no pull request, other check actions, and the suite GitHub requests on every push", () => {

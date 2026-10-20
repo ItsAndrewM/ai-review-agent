@@ -53,6 +53,7 @@ Events the App subscribes to:
 | `pull_request_review_comment` | created | reply in thread, with file and line context |
 | `pull_request_review_thread` | resolved, unresolved | re-evaluate approval |
 | `check_run` / `check_suite` | rerequested | full review of each listed pull request |
+| `check_run` | requested_action `review_again` | full review of each listed pull request; other buttons ignored |
 | `check_suite` | requested | ignored: the pull request event starts the review |
 | `check_suite` / `check_run` | completed | re-evaluate approval (skipping andabot's own suite) |
 
@@ -125,12 +126,12 @@ The review procedure, with its severity rubric and references, and the rules for
 1. Gather: changed files, patches, PR body, the repo's config file, and the instruction files the repo already keeps for agents (`CLAUDE.md`, `AGENTS.md`, `REVIEW.md`) as path-scoped guidance.
 2. Draft: one pass over the diff, in chunks sized to the model's context, producing candidate findings and a per-file walkthrough.
 3. Verify: a second pass takes each candidate with the exact lines it cites and the surrounding file, and keeps it only if the problem is real on those lines. This is what makes cheaper models usable; unverifiable findings are the noise people leave CodeRabbit over.
-4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it.
+4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it. A run that ends a review of its head, posted, failed or with nothing new to review, carries a "Review again" button, because GitHub shows no Re-run button on andabot's runs even though their suite is rerequestable (checked on #44 in October 2026). A superseded or replaced run carries none, since its head is no longer the one under review.
 5. Record: `reviewed`, a `finding:<commentId>` per inline comment, the review id.
 
 Reviews follow CodeRabbit's model (#24). A push reviews only what changed since the last review. A push never repeats an open thread, and it resolves the threads it fixed. `full review` starts over. Each review runs in one of three modes, chosen before the prompt:
 
-- **`fresh`**, on `@andabot full review` or a check Re-run, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
+- **`fresh`**, on `@andabot full review`, a check Re-run or the run's "Review again" button, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
 - **`full`**, on a push with no `reviewed` record, a retargeted base, a failed compare, or any compare status but `ahead` or `identical`, is the whole pull request too, but it never repeats an open thread. `diverged` and `behind` mean rewritten history. The first push to each pull request after this shipped is `full`, so it doesn't repost every existing finding.
 - **`incremental`** reviews what changed since the last review. It covers the pull request's files whose own changed lines the compare `reviewed...head` also changed, so a merge from the base branch drags nothing in.
 

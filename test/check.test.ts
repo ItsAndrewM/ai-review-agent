@@ -6,6 +6,7 @@ import {
   MAX_CHECK_SUMMARY_CHARS,
   postedCheckRun,
   replacedCheckRun,
+  REVIEW_AGAIN,
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
@@ -22,6 +23,15 @@ describe("unchangedCheckRun", () => {
     expect(update.output.summary).toBe(
       "The commits since `abc1234` add no line to the pull request's diff and touch none of its open threads, so there was nothing new to review.",
     )
+    expect(update.actions).toEqual([REVIEW_AGAIN])
+  })
+})
+
+describe("REVIEW_AGAIN", () => {
+  it("fits GitHub's limits for a check run button: label 20, description 40, identifier 20", () => {
+    expect(REVIEW_AGAIN.label.length).toBeLessThanOrEqual(20)
+    expect(REVIEW_AGAIN.description.length).toBeLessThanOrEqual(40)
+    expect(REVIEW_AGAIN.identifier.length).toBeLessThanOrEqual(20)
   })
 })
 
@@ -92,7 +102,7 @@ describe("startedCheckRun", () => {
 })
 
 describe("postedCheckRun", () => {
-  it("completes with success, the verdict title, the summary and the comment as details", () => {
+  it("completes with success, the verdict title, the summary, the comment as details and a button to review again, since GitHub shows no Re-run for the App's runs", () => {
     const update = postedCheckRun(
       "REQUEST_CHANGES",
       [finding("blocking")],
@@ -105,6 +115,7 @@ describe("postedCheckRun", () => {
       completed_at: "2026-10-17T20:36:38Z",
       details_url: "https://github.com/o/r/pull/5#issuecomment-1",
       output: { title: "Changes requested: 1 blocking", summary: "## andabot review" },
+      actions: [REVIEW_AGAIN],
     })
   })
 
@@ -124,18 +135,19 @@ describe("postedCheckRun", () => {
 })
 
 describe("failedCheckRun", () => {
-  it("completes with failure and the reason, with details only when there is a comment", () => {
+  it("completes with failure, the reason and a button to review again, with details only when there is a comment", () => {
     expect(failedCheckRun("timeout: the model did not answer", undefined, at)).toEqual({
       conclusion: "failure",
       completed_at: "2026-10-17T20:36:38Z",
       output: { title: "Review did not complete", summary: "timeout: the model did not answer" },
+      actions: [REVIEW_AGAIN],
     })
     expect(failedCheckRun("x", "https://example.test", at).details_url).toBe("https://example.test")
   })
 })
 
 describe("supersededCheckRun", () => {
-  it("completes as cancelled, naming the new head", () => {
+  it("completes as cancelled, naming the new head, with no button to review a head that is no longer current", () => {
     expect(supersededCheckRun("def5678abcdef", at)).toEqual({
       conclusion: "cancelled",
       completed_at: "2026-10-17T20:36:38Z",

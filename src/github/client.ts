@@ -184,11 +184,18 @@ export interface CreateCheckRun {
   output: CheckRunOutput
 }
 
+export interface CheckRunAction {
+  label: string
+  description: string
+  identifier: string
+}
+
 export interface UpdateCheckRun {
   conclusion: CheckRunConclusion
   completed_at: string
   output: CheckRunOutput
   details_url?: string
+  actions?: CheckRunAction[]
 }
 
 const PER_PAGE = 100

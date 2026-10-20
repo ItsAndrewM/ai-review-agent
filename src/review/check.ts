@@ -1,4 +1,5 @@
 import type {
+  CheckRunAction,
   CheckRunConclusion,
   CheckRunOutput,
   CreateCheckRun,
@@ -12,6 +13,12 @@ import { VERDICT_LABEL } from "./render.ts"
 export const MAX_CHECK_SUMMARY_CHARS = 65_535
 
 const TRAILING_HIGH_SURROGATE = /[\ud800-\udbff]$/
+
+export const REVIEW_AGAIN = {
+  label: "Review again",
+  description: "Start a full review of this head",
+  identifier: "review_again",
+} as const satisfies CheckRunAction
 
 export interface CheckRunStart {
   name: string
@@ -44,11 +51,15 @@ export function postedCheckRun(
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  return completedCheckRun("success", checkOutput(checkRunTitle(event, accepted), summary), detailsUrl, completedAt)
+  return reviewable(
+    completedCheckRun("success", checkOutput(checkRunTitle(event, accepted), summary), detailsUrl, completedAt),
+  )
 }
 
 export function failedCheckRun(reason: string, detailsUrl: string | undefined, completedAt: number): UpdateCheckRun {
-  return completedCheckRun("failure", checkOutput("Review did not complete", reason), detailsUrl, completedAt)
+  return reviewable(
+    completedCheckRun("failure", checkOutput("Review did not complete", reason), detailsUrl, completedAt),
+  )
 }
 
 export function supersededCheckRun(newHeadSha: string, completedAt: number): UpdateCheckRun {
@@ -63,7 +74,7 @@ export function unchangedCheckRun(sinceSha: string, completedAt: number): Update
     `No changes to review since \`${since}\``,
     `The commits since \`${since}\` add no line to the pull request's diff and touch none of its open threads, so there was nothing new to review.`,
   )
-  return completedCheckRun("success", output, undefined, completedAt)
+  return reviewable(completedCheckRun("success", output, undefined, completedAt))
 }
 
 export function replacedCheckRun(completedAt: number): UpdateCheckRun {
@@ -98,6 +109,10 @@ function completedCheckRun(
   const update: UpdateCheckRun = { conclusion, completed_at: isoSeconds(completedAt), output }
   if (detailsUrl !== undefined) update.details_url = detailsUrl
   return update
+}
+
+function reviewable(update: UpdateCheckRun): UpdateCheckRun {
+  return { ...update, actions: [REVIEW_AGAIN] }
 }
 
 function checkOutput(title: string, summary: string): CheckRunOutput {
