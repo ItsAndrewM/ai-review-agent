@@ -210,6 +210,74 @@ describe("quote verification", () => {
     expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus, true).accepted[0]?.quote).toBe("+x")
     expect(validateFindings([finding({ quote: "-const b = 3;" })], files, true).accepted).toEqual([])
   })
+
+  describe("a quote that carries the diff's anchor or marker", () => {
+    const carried = new Map([
+      [
+        "src/carried.ts",
+        commentableLines(["@@ -11,1 +11,4 @@", " keep", "+const x = 1", "++ item", "+item"].join("\n")),
+      ],
+    ])
+    const carriedAt = (line: number, quote: string) =>
+      validateFindings([finding({ path: "src/carried.ts", line, quote })], carried, true)
+
+    it.each([
+      "+ const x = 1",
+      "+const x = 1",
+      "R12 const x = 1",
+      "R12 + const x = 1",
+      "R12 +const x = 1",
+      "R12*   +const x = 1",
+      "* const x = 1",
+    ])("anchors the quote %j on its line without moving it", (quote) => {
+      const result = carriedAt(12, quote)
+      expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[12, "const x = 1"]])
+      expect(result.relocated).toBe(0)
+    })
+
+    it("anchors a LEFT quote that carries its anchor, its star and its minus", () => {
+      const result = validateFindings([finding({ side: "LEFT", quote: "L2*    -const b = 2;" })], files, true)
+      expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "const b = 2;"]])
+      expect(result.relocated).toBe(0)
+    })
+
+    it("moves a miscounted finding to the one line its quote matches once the anchor and marker are stripped", () => {
+      const result = validateFindings([finding({ line: 3, quote: "R2 +const b = 3;" })], files, true)
+      expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "const b = 3;"]])
+      expect(result.relocated).toBe(1)
+    })
+
+    it("anchors a quote as written when it matches its line, even where it begins like a marker", () => {
+      const result = carriedAt(13, "+ item")
+      expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[13, "+ item"]])
+      expect(result.relocated).toBe(0)
+    })
+
+    it("tries the quote as written before any stripped reading, so a line that starts with a star keeps its quote", () => {
+      const stars = new Map([["src/stars.ts", commentableLines(["@@ -1 +1,2 @@", " a", "+ * item"].join("\n"))]])
+      const result = validateFindings([finding({ path: "src/stars.ts", quote: "* item" })], stars, true)
+      expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "* item"]])
+    })
+
+    it("refuses to move a finding when the quote as written and without its anchor match different lines", () => {
+      const anchors = new Map([
+        ["src/anchors.ts", commentableLines(["@@ -0,0 +1,3 @@", "+R2 total", "+total", "+other"].join("\n"))],
+      ])
+      const result = validateFindings([finding({ path: "src/anchors.ts", line: 3, quote: "R2 total" })], anchors, true)
+      expect(result.accepted).toEqual([])
+      expect(result.rejected.map((r) => r.reason)).toEqual([
+        "quote matches 2 lines in src/anchors.ts; anchor the right one",
+      ])
+    })
+
+    it("rejects a quote that matches nothing even once its anchor and marker are stripped, with the usual reason", () => {
+      const result = carriedAt(12, "R12 + const y = 2")
+      expect(result.accepted).toEqual([])
+      expect(result.rejected.map((r) => r.reason)).toEqual([
+        "quote does not match line 12 (RIGHT) and no other line in src/carried.ts matches; quote the line's own text, without its anchor or the diff's + or - marker",
+      ])
+    })
+  })
 })
 
 describe("suggestions", () => {

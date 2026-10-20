@@ -186,6 +186,8 @@ const BRACKETS = [
 ] as const
 
 const DIFF_MARKER = { RIGHT: "+", LEFT: "-" } satisfies Record<Side, string>
+const INCREMENTAL_MARK = "*"
+const ANCHOR_TOKEN = /^[RL]\d+\*?\s+/
 
 export function validateFindings(
   findings: readonly FindingInput[],
@@ -251,7 +253,7 @@ function refused(reason: string): Checked {
 function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Anchored {
   const text = lines.get(finding.line)
   if (text === undefined) return { reason: `line ${finding.line} (${side}) is not in the diff of ${finding.path}` }
-  const readings = quoteReadings(finding.quote, side)
+  const readings = [finding.quote, ...quoteVariants(finding.quote, side)]
   const exact = readings.find((quote) => comparableText(quote) === comparableText(text))
   if (exact !== undefined) return { finding: { ...finding, quote: exact }, relocated: false }
   return relocateByQuote(finding, side, readings, lines)
@@ -279,9 +281,16 @@ function relocateByQuote(
   return { finding: moveTo({ ...finding, quote: only.quote }, only.line), relocated: true }
 }
 
-function quoteReadings(quote: string, side: Side): string[] {
-  const trimmed = quote.trimStart()
-  return trimmed.startsWith(DIFF_MARKER[side]) ? [quote, trimmed.slice(1).trimStart()] : [quote]
+function quoteVariants(quote: string, side: Side): string[] {
+  const withoutAnchor = quote.trimStart().replace(ANCHOR_TOKEN, "")
+  const variants = [withoutAnchor, withoutMarker(quote, side), withoutMarker(withoutAnchor, side)].map(comparableText)
+  return [...new Set(variants)].filter((variant) => variant !== comparableText(quote))
+}
+
+function withoutMarker(text: string, side: Side): string {
+  const trimmed = text.trimStart()
+  const marker = [DIFF_MARKER[side], INCREMENTAL_MARK].find((mark) => trimmed.startsWith(mark))
+  return marker === undefined ? trimmed : trimmed.slice(marker.length)
 }
 
 function moveTo({ start_line, suggestion, ...finding }: FindingInput, line: number): FindingInput {
