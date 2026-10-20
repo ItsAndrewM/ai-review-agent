@@ -75,7 +75,7 @@ export const MergeDanger = Type.Object(
 export const ReviewSubmission = Type.Object({
   summary: Type.String({
     description:
-      "Two to five sentences on what the pull request does and how it does it, naming each linked-issue requirement the diff leaves out. Markdown.",
+      "Two to five sentences on what the pull request does and how it does it, naming each linked-issue requirement the diff leaves out, in the issue's words. Markdown.",
   }),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
