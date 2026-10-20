@@ -596,6 +596,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
+          seconds: Math.round((Date.now() - run.started) / 1000),
         })
       }
       await this.releasePending(run.deliveryId)
