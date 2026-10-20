@@ -1,5 +1,6 @@
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderChanges, renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
+import { shortSha } from "../sha.ts"
 import type { Rejected } from "./findings.ts"
 import type { OpenThread, ThreadLists } from "./incremental.ts"
 import type { LinkedIssue } from "./linked-issues.ts"
@@ -63,7 +64,7 @@ export function fullPrompt(
 
 export function incrementalPrompt(pr: PullRequestInfo, input: IncrementalPromptInput): string {
   return [
-    `Review the changes since your last review of this pull request, \`${short(input.from)}..${short(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE}`,
+    `Review the changes since your last review of this pull request, \`${shortSha(input.from)}..${shortSha(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE}`,
     MARK_LEGEND,
     dataBlock([
       pullRequestData(pr, input.issues),
@@ -103,7 +104,7 @@ function pullRequestText(pr: PullRequestInfo, issues: readonly LinkedIssue[]): s
   const labels = pr.labels.length ? pr.labels.map((l) => l.name).join(", ") : "none"
   return `# Pull request #${pr.number}: ${pr.title}
 Author: ${pr.user.login}
-Base: ${pr.base.ref} (${short(pr.base.sha)}) ← Head: ${pr.head.ref} (${short(pr.head.sha)})
+Base: ${pr.base.ref} (${shortSha(pr.base.sha)}) ← Head: ${pr.head.ref} (${shortSha(pr.head.sha)})
 Labels: ${labels}
 Changed files: ${pr.changed_files}, +${pr.additions} -${pr.deletions}
 
@@ -157,10 +158,6 @@ function threadLine(thread: OpenThread): string {
 
 function neutraliseClosingTag(text: string): string {
   return text.replaceAll(CLOSING_TAG, INERT_CLOSING_TAG)
-}
-
-function short(sha: string): string {
-  return sha.slice(0, 7)
 }
 
 export function rejectionsText(rejected: readonly Rejected[]): string {

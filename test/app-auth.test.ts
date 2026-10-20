@@ -1,5 +1,19 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { createAppJwt, fromBase64, unwrapPkcs8ToPkcs1, wrapPkcs1InPkcs8 } from "../src/github/app-auth.ts"
+import {
+  createAppJwt,
+  fromBase64,
+  InstallationToken,
+  unwrapPkcs8ToPkcs1,
+  wrapPkcs1InPkcs8,
+} from "../src/github/app-auth.ts"
+
+describe("InstallationToken", () => {
+  it("accepts the token the object caches and rejects one without its expiry, which would never be refreshed", () => {
+    expect(Value.Check(InstallationToken, { token: "ghs_x", expiresAt: 1792522915699 })).toBe(true)
+    expect(Value.Check(InstallationToken, { token: "ghs_x" })).toBe(false)
+  })
+})
 
 async function generateKeyPair(): Promise<CryptoKeyPair> {
   const generated = await crypto.subtle.generateKey(
