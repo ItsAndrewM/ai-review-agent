@@ -550,10 +550,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     refusal: string | undefined,
     run: ReviewRun,
   ): Promise<ReviewSource | undefined> {
+    const rowsNeeded = refusal === undefined ? walkthroughPaths(await this.changedFiles()) : []
     if (await this.headMoved(pr, run)) return undefined
     if (await this.replaced(pr, run)) return undefined
     await this.restartGrace(run.deliveryId)
-    const rowsNeeded = walkthroughPaths(await this.changedFiles())
     const retry = await this.harness.prompt(resubmitPrompt(refusal, rowsNeeded), {
       operationId: `${run.operationId}:retry`,
     })
