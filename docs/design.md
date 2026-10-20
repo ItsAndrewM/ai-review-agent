@@ -62,7 +62,7 @@ App permissions: Pull requests write, Contents read, Issues write, Checks write 
 
 State in its SQLite, beside Pi's `pi_` tables:
 
-- `reviewed`: the head of the last review, the base branch's name, the mode it ran in, and the last full review's summary and walkthrough, with a `since` section from the latest incremental one. The next push diffs against that head, and a different base branch (a retargeted pull request) means a full review.
+- `reviewed`: the head of the last review, the base branch's name, the mode it ran in, the last full review's summary and walkthrough, and the merge danger the summary shows, which an incremental review updates to the stricter door, with a `since` section from the latest incremental one. The next push diffs against that head, and a different base branch (a retargeted pull request) means a full review.
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
 - `finding:<commentId>`: the severity, title and quoted line of each inline comment the bot posted. Thread state isn't stored. Whether a thread is resolved or outdated, and where it sits now, is read live from GitHub on each review, so a thread a person resolved is always seen as resolved. These records only supply what GitHub doesn't: the quote to catch a repeat, and the severity that gates approval.
 - `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, and the threads to re-check. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
@@ -156,7 +156,7 @@ The model names the threads it fixed in `addressed_threads`. Only the bot's own 
 - **After the review posts,** it replies "Fixed in `def5678`." on each one that resolved. A publish retried after a failed `createReview` resolves again, which is harmless, but never replies twice.
 - **Approval.** Such a review never approves while one of the bot's blocking threads stays open, counting every open thread, not only those listed. If the threads couldn't be read, it never approves at all. Neither does it when a pull request has more than the 500 threads the query pages through, since an incomplete count could miss a blocker.
 
-The summary comment keeps the last full review's summary and walkthrough. An incremental review replaces the walkthrough rows of the files it covered and adds a "Since `abc1234`" section. The review's body says what it covered: "Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved." or "Full review.". `review.start` logs `mode`, `since`, `covered` and `recheck`; `review.resolved` and `review.skip` (`no_new_changes`) say what happened.
+The summary comment keeps the last full review's summary and walkthrough. An incremental review replaces the walkthrough rows of the files it covered and adds a "Since `abc1234`" section. The merge danger under the verdict carries across too: it shows the stricter door of the stored judgement and the push's, the push's when they are equal, so a push that judges a two-way door doesn't soften a one-way one. The review's body says what it covered: "Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved." or "Full review.". `review.start` logs `mode`, `since`, `covered` and `recheck`; `review.resolved` and `review.skip` (`no_new_changes`) say what happened.
 
 ### Approval state machine
 

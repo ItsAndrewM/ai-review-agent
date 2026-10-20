@@ -343,7 +343,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
       event,
-      submission: { ...submission, summary: reviewed.summary, walkthrough: reviewed.walkthrough },
+      submission: {
+        ...submission,
+        summary: reviewed.summary,
+        walkthrough: reviewed.walkthrough,
+        merge_danger: reviewed.merge_danger ?? submission.merge_danger,
+      },
       accepted: scoped.accepted,
       droppedCount: scoped.rejected.length,
       model: attribution?.model,

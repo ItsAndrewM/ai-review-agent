@@ -62,6 +62,16 @@ export const Walkthrough = Type.Object({
   summary: Type.String({ description: "One sentence on what changed in this file." }),
 })
 
+export const MergeDanger = Type.Object(
+  {
+    door: Type.Union([Type.Literal("one-way"), Type.Literal("two-way")], {
+      description: "one-way when reverting the pull request cannot undo its effects, two-way when a revert can.",
+    }),
+    blast_radius: Type.String({ minLength: 1, description: "One line: who or what breaks if the change is wrong." }),
+  },
+  { description: "How hard the change is to walk back, and how far a failure reaches." },
+)
+
 export const ReviewSubmission = Type.Object({
   summary: Type.String({
     description: "Two to five sentences on what the pull request does and how it does it. Markdown.",
@@ -72,15 +82,7 @@ export const ReviewSubmission = Type.Object({
     description:
       "approve when nothing blocking remains and the change is sound; request_changes when any finding is blocking; comment otherwise.",
   }),
-  merge_danger: Type.Object(
-    {
-      door: Type.Union([Type.Literal("one-way"), Type.Literal("two-way")], {
-        description: "one-way when reverting the pull request cannot undo its effects, two-way when a revert can.",
-      }),
-      blast_radius: Type.String({ minLength: 1, description: "One line: who or what breaks if the change is wrong." }),
-    },
-    { description: "How hard the change is to walk back, and how far a failure reaches." },
-  ),
+  merge_danger: MergeDanger,
   addressed_threads: Type.Optional(
     Type.Array(
       Type.String({
@@ -92,6 +94,7 @@ export const ReviewSubmission = Type.Object({
 
 export type FindingInput = Static<typeof Finding>
 export type WalkthroughInput = Static<typeof Walkthrough>
+export type MergeDangerInput = Static<typeof MergeDanger>
 export type ReviewSubmissionInput = Static<typeof ReviewSubmission>
 
 export type WrittenReview =

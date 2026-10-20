@@ -1,7 +1,8 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
 import type { ChangedFile } from "../src/github/diff.ts"
-import type { FindingInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
+import type { FindingInput, MergeDangerInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
 import {
   addressedThreads,
   applyDeltaPolicy,
@@ -19,10 +20,12 @@ import {
   planThreads,
   promptFiles,
   resolveThreads,
+  ReviewedRecord,
+  stricterMergeDanger,
   threadLists,
   threadsToRecheck,
   type OpenThread,
-  type ReviewedRecord,
+  type ReviewScope,
   type StoredFinding,
 } from "../src/review/incremental.ts"
 
@@ -533,13 +536,54 @@ describe("findingRecords", () => {
   })
 })
 
+const oneWay = { door: "one-way", blast_radius: "every invoice" } satisfies MergeDangerInput
+const twoWay = { door: "two-way", blast_radius: "the totals" } satisfies MergeDangerInput
+
+describe("stricterMergeDanger", () => {
+  it("keeps the previous one-way judgement when the push judges a two-way door", () => {
+    expect(stricterMergeDanger(oneWay, twoWay)).toEqual(oneWay)
+  })
+
+  it("takes the push's one-way judgement over a previous two-way door", () => {
+    expect(stricterMergeDanger(twoWay, oneWay)).toEqual(oneWay)
+  })
+
+  it("takes the push's judgement when both doors are two-way, or both are one-way", () => {
+    const later = { door: "two-way", blast_radius: "the cart page" } satisfies MergeDangerInput
+    const laterOneWay = { door: "one-way", blast_radius: "the ledger" } satisfies MergeDangerInput
+    expect(stricterMergeDanger(twoWay, later)).toEqual(later)
+    expect(stricterMergeDanger(oneWay, laterOneWay)).toEqual(laterOneWay)
+  })
+
+  it("takes the push's judgement when there is no previous one", () => {
+    expect(stricterMergeDanger(undefined, twoWay)).toEqual(twoWay)
+    expect(stricterMergeDanger(undefined, oneWay)).toEqual(oneWay)
+  })
+})
+
+describe("ReviewedRecord", () => {
+  const stored = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
+
+  it("accepts a stored record from before it kept the merge danger", () => {
+    expect(Value.Check(ReviewedRecord, stored)).toBe(true)
+  })
+
+  it("accepts a merge danger and refuses a malformed one", () => {
+    expect(Value.Check(ReviewedRecord, { ...stored, merge_danger: oneWay })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, merge_danger: { door: "sideways", blast_radius: "x" } })).toBe(
+      false,
+    )
+    expect(Value.Check(ReviewedRecord, { ...stored, merge_danger: { door: "one-way", blast_radius: "" } })).toBe(false)
+  })
+})
+
 describe("nextReviewed", () => {
   const submission: ReviewSubmissionInput = {
     summary: "This push fixes the total.",
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
     verdict: "comment",
-    merge_danger: { door: "two-way", blast_radius: "the totals" },
+    merge_danger: twoWay,
   }
   const previous: ReviewedRecord = {
     headSha: "aaa",
@@ -553,22 +597,36 @@ describe("nextReviewed", () => {
     ],
   }
   const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+  const incremental = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
+  const reviewedAfter = (before: ReviewedRecord, scope: ReviewScope, pushed: ReviewSubmissionInput = submission) =>
+    nextReviewed({ previous: before, scope, headSha: "bbb", baseRef: "main", at: 2, submission: pushed, resolved: 1 })
 
-  it("starts over from a full review's summary and walkthrough", () => {
+  it("starts over from a full review's summary, walkthrough and merge danger", () => {
     const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
-    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 0 })).toEqual({
+    expect(reviewedAfter({ ...previous, merge_danger: oneWay }, scope)).toEqual({
       headSha: "bbb",
       baseRef: "main",
       at: 2,
       mode: "full",
       summary: "This push fixes the total.",
       walkthrough: [{ path: "a.ts", summary: "new a" }],
+      merge_danger: twoWay,
     })
   })
 
+  it("stores the submission's merge danger on a fresh review, whatever the last review judged", () => {
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "fresh",
+      from: undefined,
+      covered: new Map(),
+      threads: undefined,
+    })
+    expect(reviewedAfter({ ...previous, merge_danger: oneWay }, scope).merge_danger).toEqual(twoWay)
+  })
+
   it("keeps the last full summary and adds a since section on an incremental review", () => {
-    const scope = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
-    expect(nextReviewed({ previous, scope, headSha: "bbb", baseRef: "main", at: 2, submission, resolved: 1 })).toEqual({
+    expect(reviewedAfter(previous, incremental)).toEqual({
       headSha: "bbb",
       baseRef: "main",
       at: 2,
@@ -578,8 +636,22 @@ describe("nextReviewed", () => {
         { path: "a.ts", summary: "new a" },
         { path: "b.ts", summary: "old b" },
       ],
+      merge_danger: twoWay,
       since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
     })
+  })
+
+  it("keeps a one-way door across an incremental review that judges a two-way one", () => {
+    expect(reviewedAfter({ ...previous, merge_danger: oneWay }, incremental).merge_danger).toEqual(oneWay)
+  })
+
+  it("takes the push's one-way door across an incremental review that follows a two-way one", () => {
+    const pushed = { ...submission, merge_danger: oneWay }
+    expect(reviewedAfter({ ...previous, merge_danger: twoWay }, incremental, pushed).merge_danger).toEqual(oneWay)
+  })
+
+  it("takes the push's merge danger when the stored record predates it", () => {
+    expect(reviewedAfter(previous, incremental).merge_danger).toEqual(twoWay)
   })
 
   it("keeps the row the model wrote for a file the push changed without a marked line", () => {

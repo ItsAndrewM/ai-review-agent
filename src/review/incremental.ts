@@ -10,11 +10,13 @@ import {
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import {
+  MergeDanger,
   SEVERITY_LABEL,
   Severity,
   Walkthrough,
   walkthroughPaths,
   type FindingInput,
+  type MergeDangerInput,
   type Rejected,
   type ReviewSubmissionInput,
   type ValidatedReview,
@@ -44,6 +46,7 @@ export const ReviewedRecord = Type.Object({
   mode: Mode,
   summary: Type.String(),
   walkthrough: Type.Array(Walkthrough),
+  merge_danger: Type.Optional(MergeDanger),
   since: Type.Optional(SinceSection),
 })
 
@@ -443,7 +446,15 @@ export function findingRecords(
 export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
   const { previous, scope, headSha, baseRef, at, submission, resolved } = input
   if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {
-    return { headSha, baseRef, at, mode: scope.mode, summary: submission.summary, walkthrough: submission.walkthrough }
+    return {
+      headSha,
+      baseRef,
+      at,
+      mode: scope.mode,
+      summary: submission.summary,
+      walkthrough: submission.walkthrough,
+      merge_danger: submission.merge_danger,
+    }
   }
   const covered = new Set(scope.covered.map((file) => file.path))
   const rowsTaken = new Set([...covered, ...(scope.changed ?? [])])
@@ -454,6 +465,12 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     mode: "incremental",
     summary: previous.summary,
     walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
+    merge_danger: stricterMergeDanger(previous.merge_danger, submission.merge_danger),
     since: { from: scope.from, to: headSha, summary: submission.summary, files: [...covered], resolved },
   }
+}
+
+export function stricterMergeDanger(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {
+  if (previous === undefined) return push
+  return previous.door === "one-way" && push.door === "two-way" ? previous : push
 }

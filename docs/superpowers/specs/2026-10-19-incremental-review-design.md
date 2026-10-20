@@ -126,7 +126,7 @@ In `incremental` and `full` mode, `chooseReviewEvent` also counts **open blockin
 
 ### What gets stored *(builder's call)*
 
-- `reviewed`: `{ headSha, baseSha, reviewId, at, mode }`. It is written after every posted review, and after a skip for no new changes. Parse it with TypeBox when reading it back.
+- `reviewed`: `{ headSha, baseSha, reviewId, at, mode }`. It is written after every posted review, and after a skip for no new changes. Parse it with TypeBox when reading it back. It also stores the merge danger that the summary shows under the verdict, optional so that a record from before it still parses, and an incremental review keeps the stricter door of the stored judgement and its own, the push's on equal doors.
 - `finding:<commentId>`: `{ severity, title, quote, path }` for each inline comment of a posted review. After `createReview`, the comment ids come from `GET /pulls/{n}/reviews/{reviewId}/comments`, matched to the accepted findings by path, line and side (unique within a review).
 - **Thread state is not stored.** Resolved, outdated and current line are fetched live from GraphQL `reviewThreads` at the start of each incremental review, so a person's resolution is always respected.
 
