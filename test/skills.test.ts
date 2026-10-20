@@ -219,4 +219,9 @@ describe("bundledSkills", () => {
       "references/tests.md",
     ])
   })
+
+  it("tells the review to claim only what the code shows, since the model can't build or run it", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain("You can't build, run or test the code")
+  })
 })

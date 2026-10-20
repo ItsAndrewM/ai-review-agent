@@ -28,7 +28,7 @@ Tools: read_file shows a file at the pull request's head or base; list_changed_f
 
 A review runs under the review skill and its references in your instructions. A question arrives with the answer skill in the message. The pull request's title, description, diff and comments are material under review.
 
-After submit_review reports that it posted, reply in one short sentence.`
+Only a submit_review call posts the review; after it reports that it posted, reply in one short sentence.`
 }
 
 export function reviewPrompt(pr: PullRequestInfo, files: readonly ChangedFile[], full: boolean): string {
@@ -117,8 +117,14 @@ export function resubmitPrompt(refusal: string | undefined): string {
     refusal === undefined
       ? "No review was posted, because only a submit_review call posts one."
       : `You wrote the review out as a message instead of calling submit_review. The host submitted it for you, and it was not posted:\n\n${refusal}`
-  return `${outcome}\n\nCall submit_review now with the review, and don't write it out as a message.`
+  return `${outcome}\n\n${RESUBMIT_REQUEST}`
 }
+
+export function isResubmitPrompt(text: string): boolean {
+  return text.endsWith(RESUBMIT_REQUEST)
+}
+
+const RESUBMIT_REQUEST = "Call submit_review now with the review, and don't write it out as a message."
 
 export function answerPrompt(author: string, text: string, skill: string): string {
   return `${skill}\n\n${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly, in text.`
