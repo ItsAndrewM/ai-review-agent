@@ -5,7 +5,6 @@ export interface LineItem {
 }
 
 export function cartTotal(items: LineItem[], apiKey: string): number {
-  console.log("charging cart with key", apiKey)
   let sum = 0
   for (let i = 0; i < items.length; i++) {
     sum += items[i].price * items[i].quantity
