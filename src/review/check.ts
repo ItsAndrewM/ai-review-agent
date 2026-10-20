@@ -1,13 +1,6 @@
-import type {
-  CheckRunConclusion,
-  CheckRunOutput,
-  CreateCheckRun,
-  RepoRef,
-  ReviewEvent,
-  UpdateCheckRun,
-} from "../github/client.ts"
+import type { CheckRunConclusion, CheckRunOutput, CreateCheckRun, RepoRef, UpdateCheckRun } from "../github/client.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
-import { VERDICT_LABEL } from "./render.ts"
+import { VERDICT_LABEL, type Verdict } from "./render.ts"
 
 export const MAX_CHECK_SUMMARY_CHARS = 65_535
 
@@ -38,7 +31,7 @@ export function startedCheckRun(start: CheckRunStart): CreateCheckRun {
 }
 
 export function postedCheckRun(
-  event: ReviewEvent,
+  event: Verdict,
   accepted: readonly FindingInput[],
   summary: string,
   detailsUrl: string | undefined,
@@ -71,7 +64,7 @@ export function replacedCheckRun(completedAt: number): UpdateCheckRun {
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
-export function checkRunTitle(event: ReviewEvent, accepted: readonly FindingInput[]): string {
+export function checkRunTitle(event: Verdict, accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking`)

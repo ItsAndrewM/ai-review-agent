@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
 import { countBySeverity, type FindingInput, type Rejected, type ReviewSubmissionInput } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
-import { holdsApprovalBack } from "./render.ts"
+import { holdsApprovalBack, type Verdict } from "./render.ts"
 
 export const LastReview = Type.Object({
   reviewId: Type.Integer(),
@@ -135,6 +135,10 @@ export function lastReviewOf(facts: ReviewFacts): LastReview {
     heldBack: facts.rejected.filter(holdsApprovalBack).length,
     at: facts.at,
   }
+}
+
+export function verdictAfterChecks(event: ReviewEvent, checks: ChecksState | undefined): Verdict {
+  return event === "APPROVE" && checks !== "passing" ? "AWAITING_CHECKS" : event
 }
 
 export function evaluatesAfterReview(event: ReviewEvent, accepted: readonly FindingInput[]): boolean {

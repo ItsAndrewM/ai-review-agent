@@ -37,6 +37,13 @@ describe("checkRunTitle", () => {
     expect(checkRunTitle("COMMENT", [])).toBe("Commented")
   })
 
+  it("labels a clean review whose approval waits for the checks", () => {
+    expect(checkRunTitle("AWAITING_CHECKS", [])).toBe("Approval waits for the checks")
+    expect(checkRunTitle("AWAITING_CHECKS", [finding("suggestion")])).toBe(
+      "Approval waits for the checks: 1 suggestion",
+    )
+  })
+
   it("appends the non-zero counts, singular and plural, blocking first", () => {
     expect(checkRunTitle("APPROVE", [finding("suggestion"), finding("suggestion")])).toBe("Approved: 2 suggestions")
     expect(checkRunTitle("REQUEST_CHANGES", [finding("suggestion"), finding("blocking"), finding("suggestion")])).toBe(

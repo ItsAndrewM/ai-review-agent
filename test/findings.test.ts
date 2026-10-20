@@ -13,6 +13,7 @@ import {
   type ReviewSubmissionInput,
 } from "../src/review/findings.ts"
 import {
+  approvalBody,
   chooseReviewEvent,
   incompleteNote,
   mergeWalkthrough,
@@ -20,7 +21,9 @@ import {
   renderSummaryComment,
   renderUnpostedNote,
   renderUnpostedSummary,
+  reviewEventOf,
   SUMMARY_MARKER,
+  withApprovedVerdict,
 } from "../src/review/render.ts"
 
 const patch = ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " export { a, b };"].join("\n")
@@ -921,6 +924,86 @@ describe("renderSummaryComment", () => {
       linkedIssues: [12, 14],
     })
     expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: #12, #14</sub>\n<sub>Commands:")
+  })
+
+  it("shows the wait as the verdict", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "AWAITING_CHECKS",
+      submission: base,
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+    })
+    expect(text).toContain("`0123456` · **Verdict:** Approval waits for the checks · 🔴 0 blocking")
+  })
+})
+
+describe("renderReviewBody when approval waits for the checks", () => {
+  it("says a clean review approves once the checks pass", () => {
+    expect(renderReviewBody("AWAITING_CHECKS", [], [])).toBe(
+      "No findings. The change looks sound to me; I'll approve once the head's checks pass, and a human review is still required to merge.",
+    )
+  })
+
+  it("keeps the findings line and adds the wait", () => {
+    expect(renderReviewBody("AWAITING_CHECKS", [finding({ severity: "suggestion" })], [])).toBe(
+      "1 suggestion(s). Blocking findings are marked 🔴; the others are optional. I'll approve once the head's checks pass.",
+    )
+  })
+})
+
+describe("withApprovedVerdict", () => {
+  const requested = renderSummaryComment({
+    botLogin: "andabot",
+    headSha: "0123456789abcdef",
+    event: "REQUEST_CHANGES",
+    submission: { ...base, verdict: "request_changes" },
+    accepted: [finding()],
+    droppedCount: 0,
+    linkedIssues: [],
+  })
+
+  it("rewrites a request for changes as the approval of its head and keeps the rest of the line", () => {
+    const rewritten = withApprovedVerdict(requested, "def5678901")
+    expect(rewritten).toContain("`0123456` · **Verdict:** Approved at `def5678` · 🔴 1 blocking · 🟡 0 suggestions")
+    expect(rewritten?.replace("Approved at `def5678`", "Changes requested")).toBe(requested)
+  })
+
+  it("replaces an earlier approval's verdict", () => {
+    const twice = withApprovedVerdict(withApprovedVerdict(requested, "def5678901") ?? "", "fedcba9876")
+    expect(twice).toContain("**Verdict:** Approved at `fedcba9` · 🔴 1 blocking")
+    expect(twice).not.toContain("def5678")
+  })
+
+  it("leaves an unposted review's summary alone", () => {
+    const unposted = renderUnpostedSummary({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      note: "_The review did not complete._",
+    })
+    expect(withApprovedVerdict(unposted, "def5678901")).toBeUndefined()
+  })
+
+  it("leaves a comment that isn't the summary alone", () => {
+    expect(withApprovedVerdict("**Verdict:** Changes requested", "def5678901")).toBeUndefined()
+  })
+})
+
+describe("approvalBody", () => {
+  it("names the approved head and why it was approved", () => {
+    expect(approvalBody("def5678abcdef")).toBe(
+      "Approved at `def5678`: none of my blocking threads is open, and the checks pass. A human review is still required to merge.",
+    )
+  })
+})
+
+describe("reviewEventOf", () => {
+  it("posts a wait for the checks as a comment and every other verdict as itself", () => {
+    expect(reviewEventOf("AWAITING_CHECKS")).toBe("COMMENT")
+    expect(reviewEventOf("APPROVE")).toBe("APPROVE")
+    expect(reviewEventOf("REQUEST_CHANGES")).toBe("REQUEST_CHANGES")
   })
 })
 

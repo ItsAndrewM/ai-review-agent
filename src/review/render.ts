@@ -24,16 +24,36 @@ const MOST_HELD_BACK_LISTED = 5
 const MOST_MISSING_LISTED = 10
 const MOST_LISTED_CHARS = 100
 
+export type Verdict = ReviewEvent | "AWAITING_CHECKS"
+
 export const VERDICT_LABEL = {
   APPROVE: "Approved",
   REQUEST_CHANGES: "Changes requested",
   COMMENT: "Commented",
-} satisfies Record<ReviewEvent, string>
+  AWAITING_CHECKS: "Approval waits for the checks",
+} satisfies Record<Verdict, string>
+
+const AWAITING_CHECKS_NOTE = "I'll approve once the head's checks pass"
+
+const VERDICT_SEGMENT = /\*\*Verdict:\*\* [^\n]*?(?= · |$)/m
+
+export function reviewEventOf(verdict: Verdict): ReviewEvent {
+  return verdict === "AWAITING_CHECKS" ? "COMMENT" : verdict
+}
+
+export function approvalBody(headSha: string): string {
+  return `Approved at \`${headSha.slice(0, 7)}\`: none of my blocking threads is open, and the checks pass. A human review is still required to merge.`
+}
+
+export function withApprovedVerdict(body: string, headSha: string): string | undefined {
+  if (!body.startsWith(SUMMARY_MARKER) || !VERDICT_SEGMENT.test(body)) return undefined
+  return body.replace(VERDICT_SEGMENT, `**Verdict:** Approved at \`${headSha.slice(0, 7)}\``)
+}
 
 export function renderSummaryComment(input: {
   botLogin: string
   headSha: string
-  event: ReviewEvent
+  event: Verdict
   submission: ReviewSubmissionInput
   accepted: readonly FindingInput[]
   droppedCount: number
@@ -165,7 +185,7 @@ function askedAgain(retry: RetryOutcome): string {
 }
 
 export function renderReviewBody(
-  event: ReviewEvent,
+  event: Verdict,
   accepted: readonly FindingInput[],
   rejected: readonly Rejected[],
   coverage?: Coverage,
@@ -175,7 +195,7 @@ export function renderReviewBody(
   return covered === undefined ? body : `${body}\n\n${covered}`
 }
 
-function findingsLines(event: ReviewEvent, accepted: readonly FindingInput[], rejected: readonly Rejected[]): string {
+function findingsLines(event: Verdict, accepted: readonly FindingInput[], rejected: readonly Rejected[]): string {
   const held = heldBack(rejected)
   if (held === undefined) return inlineSummary(event, accepted)
   return accepted.length === 0 ? held : `${inlineSummary(event, accepted)}\n\n${held}`
@@ -208,13 +228,23 @@ function clipped(text: string): string {
   return flat.length > MOST_LISTED_CHARS ? `${flat.slice(0, MOST_LISTED_CHARS)}…` : flat
 }
 
-function inlineSummary(event: ReviewEvent, accepted: readonly FindingInput[]): string {
-  const counts = countBySeverity(accepted)
-  if (accepted.length === 0) {
-    return event === "APPROVE"
-      ? "No findings. The change looks sound to me; a human review is still required to merge."
-      : "No findings to anchor to the diff. See the summary comment."
+function inlineSummary(event: Verdict, accepted: readonly FindingInput[]): string {
+  if (accepted.length === 0) return noFindings(event)
+  const line = countsLine(accepted)
+  return event === "AWAITING_CHECKS" ? `${line} ${AWAITING_CHECKS_NOTE}.` : line
+}
+
+function noFindings(event: Verdict): string {
+  if (event === "APPROVE")
+    return "No findings. The change looks sound to me; a human review is still required to merge."
+  if (event === "AWAITING_CHECKS") {
+    return `No findings. The change looks sound to me; ${AWAITING_CHECKS_NOTE}, and a human review is still required to merge.`
   }
+  return "No findings to anchor to the diff. See the summary comment."
+}
+
+function countsLine(accepted: readonly FindingInput[]): string {
+  const counts = countBySeverity(accepted)
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking finding(s) to address before approval`)
   if (counts.suggestion > 0) parts.push(`${counts.suggestion} suggestion(s)`)

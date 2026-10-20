@@ -7,6 +7,7 @@ import {
   evaluatesAfterReview,
   lastReviewOf,
   openBlockingIn,
+  verdictAfterChecks,
   type ApprovalState,
   type LastReview,
 } from "../src/review/approval.ts"
@@ -207,6 +208,20 @@ describe("lastReviewOf", () => {
         at: 5,
       }),
     ).toEqual({ reviewId: 9, event: "REQUEST_CHANGES", headSha: "bbb", verdict: "request_changes", heldBack: 1, at: 5 })
+  })
+})
+
+describe("verdictAfterChecks", () => {
+  it("holds a clean review's approval until the checks pass", () => {
+    expect(verdictAfterChecks("APPROVE", "passing")).toBe("APPROVE")
+    for (const checks of ["pending", "failing", "unknown"] as const) {
+      expect(verdictAfterChecks("APPROVE", checks)).toBe("AWAITING_CHECKS")
+    }
+  })
+
+  it("leaves a request for changes and a comment as they are", () => {
+    expect(verdictAfterChecks("REQUEST_CHANGES", undefined)).toBe("REQUEST_CHANGES")
+    expect(verdictAfterChecks("COMMENT", "failing")).toBe("COMMENT")
   })
 })
 
