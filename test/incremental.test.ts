@@ -480,6 +480,18 @@ describe("the review scope", () => {
     expect(openBlockingAfter(scope, [])).toBe(31)
   })
 
+  it("keeps a fresh review's open threads with none to re-check, so its event counts the blocking ones", () => {
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "fresh",
+      from: undefined,
+      covered: new Map(),
+      threads: { open: [open("T1", { blocking: true }), open("T2")], recheck: [] },
+    })
+    expect(scope).toMatchObject({ threadsKnown: true, recheck: [] })
+    expect(openBlockingAfter(scope, [])).toBe(1)
+  })
+
   it("round-trips its covered lines through the stored record", () => {
     const scope = buildScope({ deliveryId: "d-1", mode: "incremental", from: "aaa", covered, threads })
     expect(coveredMap(scope)).toEqual(covered)

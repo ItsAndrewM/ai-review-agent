@@ -25,8 +25,11 @@ import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputL
 import {
   checksState,
   decideApproval,
+  evaluatesAfterReview,
   LastReview,
+  lastReviewOf,
   openBlockingIn,
+  verdictAfterChecks,
   type ApprovalState,
   type ApprovalTrigger,
   type ChecksState,
@@ -107,10 +110,12 @@ import {
   renderSummaryComment,
   renderUnpostedNote,
   renderUnpostedSummary,
+  reviewEventOf,
   SUMMARY_MARKER,
   withApprovedVerdict,
   type Coverage,
   type RetryOutcome,
+  type Verdict,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
@@ -353,9 +358,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       pr,
       addressedThreads(submission.addressed_threads, scope.recheck).resolve,
     )
-    const openBlocking = scope.mode === "fresh" ? undefined : openBlockingAfter(scope, resolved)
-    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
-    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
+    const verdict = await this.reviewVerdict(pr, submission, scoped, openBlockingAfter(scope, resolved))
+    const event = reviewEventOf(verdict)
     const key = await this.key()
     const github = await this.github()
     const attribution = attributionOf(pending)
@@ -371,7 +375,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
-      event,
+      event: verdict,
       submission: submissionFromRecord(submission, reviewed),
       accepted: scoped.accepted,
       droppedCount: scoped.rejected.length,
@@ -384,9 +388,25 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, scoped.accepted, scoped.rejected, coverageOf(scope, pr.head.sha, resolved.length)),
+      body: renderReviewBody(
+        verdict,
+        scoped.accepted,
+        scoped.rejected,
+        coverageOf(scope, pr.head.sha, resolved.length),
+      ),
       comments: scoped.accepted.map(toReviewComment),
     })
+    await this.ctx.storage.put<LastReview>(
+      "lastReview",
+      lastReviewOf({
+        reviewId: review.id,
+        event,
+        headSha: pr.head.sha,
+        verdict: submission.verdict,
+        rejected: scoped.rejected,
+        at: Date.now(),
+      }),
+    )
     await this.replyFixed(pr, resolved)
     await this.storeFindings(pr, scoped.accepted, review.id)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
@@ -398,9 +418,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     await this.completeOwnRun(
       pending.deliveryId,
-      postedCheckRun(event, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
+      postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
     )
     await this.releasePending(pending.deliveryId)
+    if (evaluatesAfterReview(event, scoped.accepted)) {
+      this.ctx.waitUntil(this.evaluateApproval("review", pending.deliveryId))
+    }
     const dropped =
       scoped.rejected.length > 0
         ? ` ${scoped.rejected.length} finding(s) that still failed the checks were dropped.`
@@ -409,6 +432,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       text: `Posted review ${review.id} (${event}) with ${scoped.accepted.length} inline comment(s).${dropped}`,
       done: true,
     }
+  }
+
+  private async reviewVerdict(
+    pr: PullRequestInfo,
+    submission: ReviewSubmissionInput,
+    scoped: ScopedReview,
+    openBlocking: number | "unknown",
+  ): Promise<Verdict> {
+    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
+    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
+    const checks = event === "APPROVE" ? await this.checksOn(pr.head.sha) : undefined
+    return verdictAfterChecks(event, checks)
   }
 
   private async storeFindings(pr: PullRequestInfo, accepted: readonly FindingInput[], reviewId: number): Promise<void> {
@@ -650,7 +685,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const mode = chooseMode({ full: incoming.full, reviewed, baseRef: pr.base.ref, compareStatus: comparison?.status })
     const since = mode === "incremental" ? (comparison?.files ?? []) : []
     const covered = coveredFiles(files, since)
-    const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered, since)
+    const threads = await this.threadPlan(pr, mode, covered, since)
     const changed = pathsChangedSince(files, since)
     const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads, changed })
     if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
