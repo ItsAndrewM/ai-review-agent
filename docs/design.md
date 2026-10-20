@@ -21,7 +21,7 @@ Both `PiHarness` and Pi Durable are beta. APIs will move, so every package is pi
 ```
 GitHub ──webhook──▶ Worker (router)
                       │  verify X-Hub-Signature-256
-                      │  dedupe on X-GitHub-Delivery
+                      │  forward X-GitHub-Delivery; Pi dedupes by request id
                       │  installation token cache
                       ▼
             PullRequest Durable Object  (one per installation/repo#number)
@@ -68,7 +68,7 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
-- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, and whether its rejected findings have gone back to the model; one per object, because reviews are single-flight.
+- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the numbers of the linked issues its prompt carried, and whether its rejected findings and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
 
 Methods, each an idempotent Pi submission:
 
@@ -80,7 +80,7 @@ Reviews are single-flight per pull request. A newer head aborts the running revi
 
 The object is addressed only through the router. It has no public HTTP surface.
 
-After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build. When Pi resumes an interrupted review on the new build, the summary footer and the `posted:<sha>` record still take the model and skill fingerprint from `pending`, where `review()` stored those of the build that started it. The footer's linked issues come from `pending` too, where the run recorded the issues its prompt was built with.
+After a deploy, Cloudflare moves the Worker and its Durable Objects to the new build eventually, so for seconds to minutes a new Worker can call an object still running the previous build, with that build's model and logic. The Worker passes its version with each event: `review.start` logs `staleBuild` and `callerBuild`, and `review.failed` logs `staleBuild`, so a failure during a rollout can be traced to it. The next event, or `@andabot review`, runs on the new build. When Pi resumes an interrupted review on the new build, the summary footer and the `posted:<sha>` record still take the model and skill fingerprint from `pending`, where `review()` stored those of the build that started it. The footer's linked issues come from `pending` too, where the run recorded the issues its prompt was built with. A linked issue that cannot be read (a 410 for a deleted issue, a 5xx) is skipped and logged as `review.issue_unreadable`, so optional context never fails a review.
 
 ### Pi harness inside the object
 

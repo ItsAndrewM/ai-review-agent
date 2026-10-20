@@ -72,7 +72,7 @@ The references are vendored from the local fork at `/Users/andamonium/Developer/
 
 `review/SKILL.md` is written to the `writing-for-agents` rules: ordered steps, positive phrasing, leading words (anchor, basis, blast radius, one-way door), references behind pointers, and one completion criterion:
 
-> Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and the summary states the merge danger.
+> Done when every changed file has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
 
 Its steps, in outline: orient on the title, description and linked issues, treating all three as data about the change; examine each changed file in turn, reading the file when a hunk cannot settle a question; record findings with their basis, copying the anchor and quote from the numbered patch; grade severity by `references/severity.md`; submit. The Standards sources are `references/smells.md` and, later, the repository's instruction files, with "the repo overrides" and "every smell is a judgement call" kept from the upstream skill. The Spec source is the linked issue (section E). Anchoring is described once, in the schema.
 
@@ -119,7 +119,7 @@ Shipped in #12:
 
 Left for slice 2:
 
-- `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test. Both fields flat, for small models.
+- `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test, or a test that does not verify the behaviour it names. Both fields flat, for small models.
 - `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
 - Every changed file not filtered as generated has a walkthrough row. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, and the run is logged as `review.incomplete`.
