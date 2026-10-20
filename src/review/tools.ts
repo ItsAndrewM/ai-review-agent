@@ -1,5 +1,5 @@
 import { Type } from "@earendil-works/pi-ai"
-import { defineExtension, defineTool, type Extension } from "@earendil-works/pi-durable"
+import { defineExtension, defineTool, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
@@ -68,10 +68,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: Type.Object({ number: Type.Integer() }),
     replay: "safe",
     async execute({ number }) {
-      const pr = await host.pullRequest()
-      const github = await host.github()
-      const issue = await github.getIssue({ owner: owner(pr), repo: repo(pr) }, number)
-      return text(issueText({ number, issue }))
+      return text(await readIssue(host, number))
     },
   })
 
@@ -82,9 +79,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: ReviewSubmission,
     callers: ["model"],
     async execute(submission) {
-      const outcome = await host.submitReview(submission)
-      if (!outcome.done) return text(outcome.text)
-      return { ...text(outcome.text), control: { terminate: true as const } }
+      return submitResult(await host.submitReview(submission))
     },
   })
 
@@ -93,6 +88,18 @@ export function createReviewExtension(host: ReviewHost): Extension {
     sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
     tools: [readFile, listChangedFiles, getIssue, submitReview],
   })
+}
+
+export async function readIssue(host: ReviewHost, number: number): Promise<string> {
+  const pr = await host.pullRequest()
+  const github = await host.github()
+  const issue = await github.getIssue({ owner: owner(pr), repo: repo(pr) }, number)
+  return issueText({ number, issue })
+}
+
+export function submitResult(outcome: SubmitOutcome): ToolExecutionResult {
+  const result = text(outcome.text)
+  return outcome.done ? { ...result, control: { terminate: true } } : result
 }
 
 function text(value: string) {

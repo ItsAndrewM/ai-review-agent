@@ -36,6 +36,7 @@ import {
   parseWrittenReview,
   toReviewComment,
   validateFindings,
+  walkthroughPaths,
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
@@ -53,6 +54,7 @@ import { linkedIssueNumbers, linkedIssuesFrom, readLinkedIssues, type LinkedIssu
 import { answerPrompt, problemsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
 import {
   chooseReviewEvent,
+  incompleteNote,
   renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
@@ -264,14 +266,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pending: PendingReview,
     missing: readonly string[],
   ): Promise<SubmitOutcome> {
-    const paths = missing.join(", ")
     log("review.incomplete", { number: pr.number, head: short(pr.head.sha), missing: missing.length })
-    const note = `_The review did not complete: no walkthrough row for ${paths}._`
+    const note = incompleteNote(missing)
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
     await this.failOwnRun(pending.deliveryId, note)
     this.#incompleteDelivery = pending.deliveryId
     await this.releasePending(pending.deliveryId)
-    return { text: `Not posted: no walkthrough row for ${paths}. The review ends here.`, done: true }
+    return { text: `Not posted: no walkthrough row for ${missing.join(", ")}. The review ends here.`, done: true }
   }
 
   private async publishReview(
@@ -552,7 +553,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (await this.headMoved(pr, run)) return undefined
     if (await this.replaced(pr, run)) return undefined
     await this.restartGrace(run.deliveryId)
-    const retry = await this.harness.prompt(resubmitPrompt(refusal), { operationId: `${run.operationId}:retry` })
+    const rowsNeeded = walkthroughPaths(await this.changedFiles())
+    const retry = await this.harness.prompt(resubmitPrompt(refusal, rowsNeeded), {
+      operationId: `${run.operationId}:retry`,
+    })
     logTranscript(pr, "retry", retry)
     await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"

@@ -10,6 +10,7 @@ import {
 export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
 const MOST_HELD_BACK_LISTED = 5
+const MOST_MISSING_LISTED = 10
 const MOST_LISTED_CHARS = 100
 
 export const VERDICT_LABEL = {
@@ -85,6 +86,16 @@ export function renderUnpostedSummary(input: { botLogin: string; headSha: string
     "",
     input.note,
   ].join("\n")
+}
+
+export function incompleteNote(missing: readonly string[]): string {
+  const listed = missing
+    .slice(0, MOST_MISSING_LISTED)
+    .map((path) => `\`${path}\``)
+    .join(", ")
+  const unlisted = missing.length - MOST_MISSING_LISTED
+  const rest = unlisted > 0 ? ` and ${unlisted} more` : ""
+  return `_The review did not complete: no walkthrough row for ${listed}${rest}._`
 }
 
 export type RetryOutcome =

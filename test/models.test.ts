@@ -83,13 +83,14 @@ describe("withForcedResubmission", () => {
   it.each([undefined, "Error: GitHub POST /repos/o/r/pulls/5/reviews: 502"])(
     "holds the retry after a prose review to a submit_review call or the review as JSON, since Workers AI ignores tool_choice (refusal %s)",
     async (refusal) => {
-      const options = await optionsSentFor([reviewRequest, proseReview, user(resubmitPrompt(refusal))])
+      const options = await optionsSentFor([reviewRequest, proseReview, user(resubmitPrompt(refusal, ["src/x.ts"]))])
       expect(options?.samplingParams?.["response_format"]).toEqual(reviewAsJson)
     },
   )
 
   it("holds the retry to JSON when it arrives as text parts", async () => {
-    const options = await optionsSentFor([reviewRequest, proseReview, user([fauxText(resubmitPrompt(undefined))])])
+    const retry = user([fauxText(resubmitPrompt(undefined, ["src/x.ts"]))])
+    const options = await optionsSentFor([reviewRequest, proseReview, retry])
     expect(options?.samplingParams?.["response_format"]).toEqual(reviewAsJson)
   })
 
@@ -125,7 +126,7 @@ describe("withForcedResubmission", () => {
     const options = await optionsSentFor([
       reviewRequest,
       proseReview,
-      user(resubmitPrompt(undefined)),
+      user(resubmitPrompt(undefined, ["src/x.ts"])),
       submitted,
       posted,
     ])

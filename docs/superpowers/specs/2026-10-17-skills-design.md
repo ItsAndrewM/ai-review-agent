@@ -103,7 +103,7 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 - The host parses linked issues from the body (`Closes #n`, `Fixes #n`, `Resolves #n`, bare `#n`) and the branch name (`GH-n`, a trailing `#n`), fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the summary says "No linked issue; reviewed against the description only." Requirements are never inferred from the code.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code.
 
 ### F. Anchors, findings and the submit loop
 
@@ -122,9 +122,9 @@ Left for slice 2:
 - `Finding` gains `basis_kind` (`defect`, `spec`, `standard` or `test`) and `basis`: for a defect, the failure scenario as input or state, what the anchored line does, what was expected; for spec, the quoted issue line; for standard, the file and rule or the smell's name; for test, the new behaviour without a test, or a test that does not verify the behaviour it names. Both fields flat, for small models.
 - `basis` must be non-empty. A `standard` or `test` finding cannot be `blocking`.
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required.
-- Every changed file not filtered as generated has a walkthrough row. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, and the run is logged as `review.incomplete`.
+- Every changed file not filtered as generated has a walkthrough row. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 
-Rendering: a finding's comment ends with `_Basis: …_`; the summary gets a "Merge danger" line under the verdict.
+Rendering: a finding's comment carries `_Basis: …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
 
 ### G. Attribution and logs
 

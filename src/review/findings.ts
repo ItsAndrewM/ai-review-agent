@@ -36,6 +36,7 @@ export const Finding = Type.Object({
     },
   ),
   basis: Type.String({
+    minLength: 1,
     description:
       "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names.",
   }),
@@ -51,7 +52,7 @@ export const Finding = Type.Object({
 })
 
 export const Walkthrough = Type.Object({
-  path: Type.String(),
+  path: Type.String({ description: "Path of the changed file, exactly as listed." }),
   summary: Type.String({ description: "One sentence on what changed in this file." }),
 })
 
@@ -305,7 +306,7 @@ function contentProblem(finding: FindingInput): string | undefined {
 function basisProblem(finding: FindingInput): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
   if (finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test"))
-    return "a standard or test finding cannot be blocking; grade it suggestion or nitpick"
+    return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
   return undefined
 }
 
@@ -322,9 +323,13 @@ function commentSizeProblem(finding: FindingInput): string | undefined {
   return `comment longer than ${MAX_COMMENT_CHARS} characters, GitHub's limit`
 }
 
+export function walkthroughPaths(files: readonly ChangedFile[]): string[] {
+  return files.filter((file) => requiresWalkthrough(file)).map((file) => file.filename)
+}
+
 export function missingWalkthrough(submission: ReviewSubmissionInput, files: readonly ChangedFile[]): string[] {
   const covered = new Set(submission.walkthrough.map((row) => rowPath(row.path)))
-  return files.filter((file) => requiresWalkthrough(file) && !covered.has(file.filename)).map((file) => file.filename)
+  return walkthroughPaths(files).filter((path) => !covered.has(path))
 }
 
 function rowPath(path: string): string {

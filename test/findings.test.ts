@@ -1,16 +1,20 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { commentableLines } from "../src/github/diff.ts"
 import {
   MAX_FINDINGS,
   missingWalkthrough,
   parseWrittenReview,
+  ReviewSubmission,
   toReviewComment,
   validateFindings,
+  walkthroughPaths,
   type FindingInput,
   type ReviewSubmissionInput,
 } from "../src/review/findings.ts"
 import {
   chooseReviewEvent,
+  incompleteNote,
   renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
@@ -42,6 +46,9 @@ function finding(overrides: Partial<FindingInput> = {}): FindingInput {
     ...overrides,
   }
 }
+
+const BLOCKING_STANDARD_OR_TEST =
+  "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
 
 describe("validateFindings", () => {
   it("accepts a finding on an added line and one on a deleted line", () => {
@@ -268,9 +275,19 @@ describe("basis", () => {
     )
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "basis is required",
-      "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
-      "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
+      BLOCKING_STANDARD_OR_TEST,
+      BLOCKING_STANDARD_OR_TEST,
     ])
+  })
+
+  it("fails the schema for an empty basis, so a tool call and written JSON alike come back for a fix", () => {
+    const submission = {
+      ...base,
+      walkthrough: [{ path: "src/x.ts", summary: "b is now 3." }],
+      findings: [finding({ basis: "" })],
+    }
+    expect(Value.Check(ReviewSubmission, submission)).toBe(false)
+    expect(Value.Check(ReviewSubmission, { ...submission, findings: [finding()] })).toBe(true)
   })
 
   it("accepts a blocking defect or spec finding, and a standard or test finding graded below blocking", () => {
@@ -321,6 +338,17 @@ describe("missingWalkthrough", () => {
     const files = [{ filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch }]
     const submission = { ...base, walkthrough: [{ path: "./src/x.ts ", summary: "s" }] }
     expect(missingWalkthrough(submission, files)).toEqual([])
+  })
+})
+
+describe("walkthroughPaths", () => {
+  it("lists the files that need a walkthrough row, in diff order, and skips generated ones", () => {
+    const files = [
+      { filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch },
+      { filename: "logo.png", status: "added", additions: 0, deletions: 0 },
+      { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
+    ]
+    expect(walkthroughPaths(files)).toEqual(["src/x.ts", "logo.png"])
   })
 })
 
@@ -448,7 +476,7 @@ describe("renderReviewBody", () => {
         { finding: finding({ title: "Total is NaN for an empty cart" }), reason: "quote matches 2 lines" },
         {
           finding: finding({ basis_kind: "standard", basis: "Feature Envy", title: "Move the total into Cart" }),
-          reason: "a standard or test finding cannot be blocking; grade it suggestion or nitpick",
+          reason: BLOCKING_STANDARD_OR_TEST,
         },
       ],
     )
@@ -592,6 +620,32 @@ describe("renderUnpostedNote", () => {
     )
     expect(note).toBe(
       "_The review couldn't be posted: the model didn't submit one that could be, and the host refused the review it submitted when asked again: Not posted: the head moved._",
+    )
+  })
+})
+
+describe("incompleteNote", () => {
+  it("names each file without a row in backticks, inside the one italic line", () => {
+    expect(incompleteNote(["a", "b"])).toBe("_The review did not complete: no walkthrough row for `a`, `b`._")
+  })
+
+  it("keeps an underscore in a path from ending the italics", () => {
+    expect(incompleteNote(["src/_private_.ts"])).toBe(
+      "_The review did not complete: no walkthrough row for `src/_private_.ts`._",
+    )
+  })
+
+  it("lists all ten files when there are ten, with no count of the rest", () => {
+    const ten = Array.from("abcdefghij")
+    expect(incompleteNote(ten)).toBe(
+      "_The review did not complete: no walkthrough row for `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h`, `i`, `j`._",
+    )
+  })
+
+  it("lists ten files and counts the rest, so a pull request with no rows at all can't flood the summary or the check run", () => {
+    const twelve = Array.from("abcdefghijkl")
+    expect(incompleteNote(twelve)).toBe(
+      "_The review did not complete: no walkthrough row for `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h`, `i`, `j` and 2 more._",
     )
   })
 })

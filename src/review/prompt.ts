@@ -89,18 +89,25 @@ function missingRowsText(missing: readonly string[]): string {
   ].join("\n")
 }
 
-export function resubmitPrompt(refusal: string | undefined): string {
-  const outcome =
-    refusal === undefined
-      ? "No review was posted, because only a submit_review call posts one."
-      : `You wrote the review out as a message instead of calling submit_review. The host submitted it for you, and it was not posted:\n\n${refusal}`
-  return `${outcome}\n\n${RESUBMIT_REQUEST}`
+export function resubmitPrompt(refusal: string | undefined, rowsNeeded: readonly string[]): string {
+  return `${resubmitOutcome(refusal, rowsNeeded)}\n\n${RESUBMIT_REQUEST}`
+}
+
+function resubmitOutcome(refusal: string | undefined, rowsNeeded: readonly string[]): string {
+  if (refusal !== undefined)
+    return `You wrote the review out as a message instead of calling submit_review. The host submitted it for you, and it was not posted:\n\n${refusal}`
+  if (rowsNeeded.length === 0) return NOT_POSTED
+  return [
+    `${NOT_POSTED} The review needs a walkthrough row for each of these files:`,
+    ...rowsNeeded.map((path) => `- ${path}`),
+  ].join("\n")
 }
 
 export function isResubmitPrompt(text: string): boolean {
   return text.endsWith(RESUBMIT_REQUEST)
 }
 
+const NOT_POSTED = "No review was posted, because only a submit_review call posts one."
 const RESUBMIT_REQUEST = "Call submit_review now with the review, and don't write it out as a message."
 
 export function answerPrompt(author: string, text: string, skill: string): string {

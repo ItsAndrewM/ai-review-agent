@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import type { PullRequestInfo } from "../src/github/client.ts"
 import {
   answerPrompt,
+  isResubmitPrompt,
   problemsText,
   rejectionsText,
   resubmitPrompt,
@@ -147,11 +148,31 @@ describe("resubmitPrompt", () => {
   it("passes on why the host refused the review the model wrote out, as submit_review would have", () => {
     const refusal =
       "Rejected findings:\n- src/x.ts:40: line 40 (RIGHT) is not in the diff of src/x.ts\nFix the anchors or drop these, then call submit_review again."
-    expect(resubmitPrompt(refusal)).toContain(refusal)
+    expect(resubmitPrompt(refusal, [])).toContain(refusal)
   })
 
   it("still asks for submit_review when the refusal doesn't, as after a GitHub error", () => {
-    expect(resubmitPrompt("Error: GitHub POST /repos/o/r/pulls/5/reviews: 502")).toContain("Call submit_review")
+    expect(resubmitPrompt("Error: GitHub POST /repos/o/r/pulls/5/reviews: 502", [])).toContain("Call submit_review")
+  })
+
+  it("names the files that need rows when the host had nothing to check, so the retry isn't judged on rows it never heard of", () => {
+    const text = resubmitPrompt(undefined, ["src/a.ts", "logo.png"])
+    expect(text).toContain(
+      "No review was posted, because only a submit_review call posts one. The review needs a walkthrough row for each of these files:\n- src/a.ts\n- logo.png",
+    )
+    expect(isResubmitPrompt(text)).toBe(true)
+  })
+
+  it("leaves the rows to the refusal when there is one, since the refusal already carried them", () => {
+    const text = resubmitPrompt("refused", ["src/a.ts"])
+    expect(text).toContain("refused")
+    expect(text).not.toContain("- src/a.ts")
+  })
+
+  it("leaves out the rows sentence when no file needs a row", () => {
+    const text = resubmitPrompt(undefined, [])
+    expect(text).not.toContain("needs a walkthrough row")
+    expect(text.startsWith("No review was posted, because only a submit_review call posts one.\n\n")).toBe(true)
   })
 })
 
