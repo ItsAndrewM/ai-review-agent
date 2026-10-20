@@ -68,7 +68,8 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 3. The object opens a check run named after the bot on the head commit, titled "Review in progress".
 4. The object fetches the PR and its files, and prompts the Pi session with the diff.
 5. The model reads what it needs with `read_file`, then calls `submit_review`.
-6. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review; a clean approve verdict makes it an approval. The run completes with the verdict in its title; a review that does not complete fails the run, and a push mid-review cancels it as superseded by the new head.
+6. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review. A clean approve verdict makes it an approval once the head's other checks pass; until they do, the review posts as a comment that says approval waits for the checks. The run completes with the verdict in its title; a review that does not complete fails the run, and a push mid-review cancels it as superseded by the new head.
+7. Resolving andabot's blocking threads, or a check suite finishing, re-evaluates approval with no model call. andabot approves the reviewed head once none of its blocking threads is open and every other check run passed. Workers Logs show `approval.decided` with the reason it waited, or `approval.posted`.
 
 `@andabot review`, `@andabot full review` and `@andabot help` work in PR comments from anyone with write access. Any other text after the mention is answered as a question about the PR.
 

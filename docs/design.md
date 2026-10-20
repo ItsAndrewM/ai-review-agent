@@ -51,10 +51,11 @@ Events the App subscribes to:
 | `pull_request` | closed | archive: stop alarms, keep transcript |
 | `issue_comment` | created, on a PR | command or chat turn |
 | `pull_request_review_comment` | created | reply in thread, with file and line context |
-| `pull_request_review_thread` | resolved, unresolved | re-evaluate approval |
+| `pull_request_review_thread` | resolved, unresolved | re-evaluate approval; ignored on a draft or when a bot sent it, so andabot's own resolutions are left to the review that made them |
 | `check_run` / `check_suite` | rerequested | full review of each listed pull request; dormant, since GitHub shows no Re-run on andabot's runs (#8) |
 | `check_suite` | requested | ignored: the pull request event starts the review |
-| `check_suite` / `check_run` | completed | re-evaluate approval (skipping andabot's own suite) |
+| `check_suite` | completed | re-evaluate approval for each listed pull request, skipping andabot's own suite; routed even when a bot sent it, since GitHub Actions' suites arrive from `github-actions[bot]` |
+| `check_run` | completed | ignored: its suite's completion follows |
 
 App permissions: Pull requests write, Contents read, Issues write, Checks write (the review check run), Metadata read.
 
@@ -66,16 +67,16 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
 - `finding:<commentId>`: the severity, title and quoted line of each inline comment the bot posted. Thread state isn't stored. Whether a thread is resolved or outdated, and where it sits now, is read live from GitHub on each review, so a thread a person resolved is always seen as resolved. These records only supply what GitHub doesn't: the quote to catch a repeat, and the severity that gates approval.
 - `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, and the threads to re-check. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
-- `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
+- `last_review`, stored as `lastReview`: the id, event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) and head of the review the bot last submitted, the approval evaluation's own approvals included, with the model's verdict and the count of blocking findings the review couldn't post inline. The approval evaluation reads it.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
-- `paused`: set by `pause`, cleared by `resume`.
+- `paused`: set by `pause`, cleared by `resume` (#27). The approval evaluation reads it.
 - `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the numbers of the linked issues its prompt carried, and whether its rejected findings, duplicates and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
 
 Methods, each an idempotent Pi submission:
 
 - `onPush(head, delivery)`: full review on first sight, incremental review (`compare reviewed...head`) after that.
 - `onCommand(comment, delivery)`: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`, else a chat turn.
-- `onThreadResolved`, `onChecksCompleted`: run the approval evaluation, no model call.
+- `evaluateApproval(trigger)`: after a thread is resolved or unresolved, after a check suite finishes, and after a review that doesn't approve. It makes no model call, so it is no Pi submission.
 
 Reviews are single-flight per pull request. A newer head aborts the running review and cancels its check run as superseded. A request for a head whose review is still running is skipped. A pending review the harness no longer lists is dead: its run is failed and the new review proceeds. A record whose start time is under two minutes old counts as live. The grace bounds only the host's work while none of the review's operations is listed: before its first prompt is submitted, between that prompt and the retry, and after each. So the record is written before the first prompt, and its start time restarts when each prompt returns and again before the retry. The replacer deletes the record, aborts the replaced review's operations, and only then completes its run, from the id it read before the delete, so the replaced review's exits find the record gone and touch nothing. A review replaced before its prompt never prompts, and the run it opened is cancelled as superseded, or as replaced when the newer review is of the same head. A `submit_review` call posts only from a running operation the record names, and the host posts a review the model wrote as text only while the record still names its delivery.
 
@@ -127,12 +128,12 @@ The spec is the issues a pull request links, up to three: the closing keywords i
 1. Gather: changed files, patches, PR body, the repo's config file, and the instruction files the repo already keeps for agents (`CLAUDE.md`, `AGENTS.md`, `REVIEW.md`) as path-scoped guidance.
 2. Draft: one pass over the diff, in chunks sized to the model's context, producing candidate findings and a per-file walkthrough.
 3. Verify: a second pass takes each candidate with the exact lines it cites and the surrounding file, and keeps it only if the problem is real on those lines. This is what makes cheaper models usable; unverifiable findings are the noise people leave CodeRabbit over.
-4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it.
+4. Post: edit the summary comment in place, submit one review with the inline comments, set the review event from the approval policy below, where an approval waits for the head's other checks to pass, and complete the check run, in progress since step 1, with the verdict in its title. A review that does not complete fails it.
 5. Record: `reviewed`, a `finding:<commentId>` per inline comment, the review id.
 
 Reviews follow CodeRabbit's model (#24). A push reviews only what changed since the last review. A push never repeats an open thread, and it resolves the threads it fixed. `full review` starts over. Each review runs in one of three modes, chosen before the prompt:
 
-- **`fresh`**, on `@andabot full review`, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
+- **`fresh`**, on `@andabot full review`, is the whole pull request as before: no thread lists, no duplicate check and no resolving. Its event follows this review's findings and andabot's open blocking threads, which it reads for that alone, so a full review never approves past one (#25).
 - **`full`**, on a push with no `reviewed` record, a retargeted base, a failed compare, or any compare status but `ahead` or `identical`, is the whole pull request too, but it never repeats an open thread. `diverged` and `behind` mean rewritten history. The first push to each pull request after this shipped is `full`, so it doesn't repost every existing finding.
 - **`incremental`** reviews what changed since the last review. It covers the pull request's files whose own changed lines the compare `reviewed...head` also changed, so a merge from the base branch drags nothing in.
 
@@ -160,18 +161,29 @@ The summary comment keeps the last full review's summary and walkthrough. An inc
 
 ### Approval state machine
 
-Evaluated after every review, thread resolution and check completion:
+`evaluateApproval` decides whether to approve the current head without a push (#25). It runs when a thread is resolved or unresolved, when a check suite other than andabot's finishes, and after a posted review that didn't approve, except one that just posted a blocking finding, whose thread is certainly open and may not show in GitHub's list yet. It makes no model call. `decideApproval` in `src/review/approval.ts` is a pure function of what the object reads live, and it waits for the first of these that holds:
 
-```
-if paused                             → do nothing
-if head ≠ reviewed_head               → wait for the review of the current head
-if bot has unresolved threads         → REQUEST_CHANGES stands
-if required checks not all passing    → wait
-re-fetch head; if it moved            → wait
-else                                  → APPROVE, once per head
-```
+1. `workflow_off`: `REQUEST_CHANGES_WORKFLOW` isn't `true`.
+2. `paused`.
+3. `not_open`: the pull request is closed, merged or a draft.
+4. `review_in_flight`: a review is pending. It evaluates when it ends.
+5. `not_reviewed`: the head isn't the reviewed head.
+6. `no_record`: there is no `last_review`, as on a pull request last reviewed before this shipped.
+7. `approved`: the last review is an approval, of this head or an earlier one, so a push with nothing new to review brings no second approval.
+8. `review_stands`: the last review held back a blocking finding it couldn't post inline, which no one can resolve, or only commented without an `approve` verdict. Re-evaluation lifts a request for changes, whatever verdict the model gave, and an approval held back only by unreadable threads or unfinished checks. It never turns a review that only commented into an approval.
+9. `threads_unknown`: the threads couldn't be read, or there are more than the 500 the query pages through.
+10. `blocking_threads`: one of andabot's blocking threads is open.
+11. `checks_unknown`, `checks_failing` and `checks_pending`: the head's check runs other than andabot's couldn't be read, one completed with a conclusion other than success, neutral or skipped, or one hasn't completed.
 
-Rules copied from CodeRabbit's workflow: approve only when the latest commit has a completed review, every bot thread is resolved, no pre-merge check fails, and the head is unchanged at the moment of approval. An optional finding never blocks; only findings marked blocking open threads that gate approval. Branch protection keeps one human approval required regardless, and GitHub's "code review limits" setting must allow the App to submit approving reviews.
+Otherwise the object re-fetches the head and, if it hasn't moved, submits `APPROVE` on it with a short body, records it as `last_review`, and rewrites the summary comment's verdict to "Approved at `def5678`". The check run keeps the review's title. A later failing check or a reopened thread doesn't revoke the approval, and the next review of a new head decides again. A thread event and a check event can arrive together, so an in-memory mark per head keeps the second from approving too.
+
+A review's own approval waits for the checks as well. When `chooseReviewEvent` would approve, the host reads the head's check runs first. Unless they pass, the review posts as a comment, its summary and check run say "Approval waits for the checks", and the evaluation approves once they pass, since that review's `last_review` keeps the model's `approve` verdict. A clean head whose checks finish after its review gets two reviews: the comment, then the approval.
+
+A head with no check runs besides andabot's passes, so a repository without CI can be approved. Just after a push that is a race, because CI hasn't created its first run yet (on #46 it appeared 9 s after the push), so a push with nothing new to review doesn't evaluate, and CI's suite completion does later. The window that's left is accepted: a thread resolved within seconds of such a push, or a review that ends before CI creates its first run, can approve a head whose CI then fails.
+
+Rules copied from CodeRabbit's workflow: approve only when the latest commit has a completed review, every blocking bot thread is resolved, no check fails, and the head is unchanged at the moment of approval. An optional finding never blocks; only findings marked blocking open threads that gate approval. Only check runs count, not commit statuses, and a fork's check events can't be routed, since GitHub sends them with no pull request. Branch protection keeps one human approval required regardless, and GitHub's "code review limits" setting must allow the App to submit approving reviews.
+
+The evaluation logs `approval.decided` with its trigger, the head and the reason it waited, `approval.posted` with the review id, and `approval.checks_failed`, `approval.summary_failed` and `approval.failed` when a read or a write fails.
 
 ### Commands and chat
 
