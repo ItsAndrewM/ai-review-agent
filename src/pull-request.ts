@@ -63,6 +63,7 @@ import {
   nextReviewed,
   nothingToReview,
   openBlockingAfter,
+  pathsChangedSince,
   pathsNeedingRows,
   planThreads,
   promptFiles,
@@ -618,7 +619,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const since = mode === "incremental" ? (comparison?.files ?? []) : []
     const covered = coveredFiles(files, since)
     const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered, since)
-    const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads })
+    const changed = pathsChangedSince(files, since)
+    const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads, changed })
     if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
     return { scope, since }
   }

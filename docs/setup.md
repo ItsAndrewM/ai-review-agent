@@ -16,11 +16,13 @@ The manifest registers, and the script's arguments can change: the name `andabot
 
 | | |
 | --- | --- |
-| Repository permissions | Pull requests: Read and write · Contents: Read-only · Issues: Read and write · Checks: Read and write · Metadata: Read-only |
+| Repository permissions | Pull requests: Read and write · Contents: Read and write · Issues: Read and write · Checks: Read and write · Metadata: Read-only |
 | Events | Pull request · Issue comment · Pull request review comment · Pull request review thread · Check suite · Check run |
 | Where it can be installed | Only on this account |
 
-Checks: Read and write lets the App create the review check run and receive the `check_run` and `check_suite` events. To change an App that is already registered, set Checks to Read and write on its Permissions & events page, then accept the request on the installation page (Settings, Applications, Installed GitHub Apps, andabot). Until it is accepted, check calls answer 403, which the Worker logs as `check.failed` and otherwise ignores. The installation token is cached per pull request object for up to an hour, so a pull request opened before the change can lack the permission for that long, and a new pull request is unaffected.
+Checks: Read and write lets the App create the review check run and receive the `check_run` and `check_suite` events. Contents: Read and write lets it resolve the review threads a push fixed. GitHub lets only the pull request's author or someone with write access resolve a conversation, and for an App that means Contents write; Pull requests write isn't enough. The App never writes contents.
+
+To change an App that is already registered, set the permission on its Permissions & events page, then accept the request on the installation page (Settings, Applications, Installed GitHub Apps, andabot). Until it is accepted, those calls answer 403 "Resource not accessible by integration". The Worker logs a failed check call as `check.failed` and a failed resolve as `review.resolve_failed`, and otherwise ignores both. The installation token is cached per pull request object for up to an hour, so a pull request opened before the change can lack the permission for that long, and a new pull request is unaffected.
 
 Then **install** the App on the repositories it should review, at `https://github.com/apps/andabot/installations/new`. It is installed on `ai-review-agent` only, for now.
 

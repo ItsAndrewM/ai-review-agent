@@ -98,11 +98,31 @@ describe("incrementalPrompt", () => {
     covered,
     marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
     recheckOnly: [],
+    changedOutside: [],
     others,
     recheck,
     otherThreads,
     leftOut: 2,
     issues: [issue24],
+  })
+
+  it("lists a file the push changed without a marked line as changed, apart from the unchanged ones", () => {
+    const logo = { filename: "logo.png", status: "added", additions: 0, deletions: 0 }
+    const withLogo = incrementalPrompt(pushed, {
+      from: "abc1234567",
+      covered,
+      marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
+      recheckOnly: [],
+      changedOutside: [logo],
+      others,
+      recheck: [],
+      otherThreads: [],
+      leftOut: 0,
+      issues: [],
+    })
+    expect(withLogo).toContain(
+      "- `logo.png`: changed since the last review, with no line to comment on; read_file if needed\n- `b.ts`: unchanged since the last review; read_file if needed",
+    )
   })
 
   it("names the commit range and marks the lines changed since the last review", () => {
@@ -145,6 +165,7 @@ describe("incrementalPrompt with a thread to re-check outside the diff", () => {
     covered: [],
     marked: new Map(),
     recheckOnly: [gone],
+    changedOutside: [],
     others,
     recheck: [thread("T1", { path: "gone.ts", outdated: true, line: null, quote: "debug()" })],
     otherThreads: [],

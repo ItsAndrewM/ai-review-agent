@@ -14,6 +14,7 @@ import {
   nothingToReview,
   openBlockingAfter,
   openBotThreads,
+  pathsChangedSince,
   pathsNeedingRows,
   planThreads,
   promptFiles,
@@ -30,6 +31,8 @@ const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode:
 function changed(filename: string, patch: string): ChangedFile {
   return { filename, status: "modified", additions: 1, deletions: 0, patch }
 }
+
+const logo: ChangedFile = { filename: "logo.png", status: "added", additions: 0, deletions: 0 }
 
 function botThread(id: string, overrides: Partial<ReviewThread> = {}): ReviewThread {
   return {
@@ -311,6 +314,29 @@ describe("promptFiles", () => {
     expect(files.recheckOnly.map((f) => f.filename)).toEqual(["gone.ts"])
     expect(files.others.map((f) => f.filename)).toEqual(["b.ts", "c.ts"])
   })
+
+  it("sets a file the push changed without a marked line apart from the files it didn't touch", () => {
+    const prFiles = [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), logo, changed("b.ts", "@@ -1 +1 @@\n-p\n+q")]
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered: new Map([["a.ts", { right: new Set([1]), left: new Set<number>() }]]),
+      threads: undefined,
+      changed: ["a.ts", "logo.png"],
+    })
+    const files = promptFiles(prFiles, [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), logo], scope)
+    expect(files.changedOutside.map((f) => f.filename)).toEqual(["logo.png"])
+    expect(files.others.map((f) => f.filename)).toEqual(["b.ts"])
+  })
+})
+
+describe("pathsChangedSince", () => {
+  it("takes the pull request's files the push changed, binary ones included, and leaves out what only the base changed", () => {
+    const prFiles = [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), logo, changed("b.ts", "@@ -1 +1 @@\n-p\n+q")]
+    const since = [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), logo, changed("from-main.ts", "@@ -1 +1 @@\n-m\n+n")]
+    expect(pathsChangedSince(prFiles, since)).toEqual(["a.ts", "logo.png"])
+  })
 })
 
 function found(overrides: Partial<FindingInput> = {}): FindingInput {
@@ -550,5 +576,34 @@ describe("nextReviewed", () => {
       ],
       since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
     })
+  })
+
+  it("keeps the row the model wrote for a file the push changed without a marked line", () => {
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered,
+      threads: undefined,
+      changed: ["a.ts", "logo.png"],
+    })
+    const withLogo = {
+      ...submission,
+      walkthrough: [...submission.walkthrough, { path: "logo.png", summary: "adds a logo" }],
+    }
+    const next = nextReviewed({
+      previous,
+      scope,
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      submission: withLogo,
+      resolved: 0,
+    })
+    expect(next.walkthrough).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+      { path: "logo.png", summary: "adds a logo" },
+    ])
   })
 })
