@@ -83,6 +83,7 @@ export const ReviewScope = Type.Object({
   recheck: Type.Array(OpenThread),
   open: Type.Array(OpenThread),
   threadsKnown: Type.Boolean(),
+  changed: Type.Optional(Type.Array(Type.String())),
 })
 
 export type ReviewScope = Static<typeof ReviewScope>
@@ -109,6 +110,7 @@ export interface ReviewPlan {
 export interface PromptFiles {
   covered: ChangedFile[]
   recheckOnly: ChangedFile[]
+  changedOutside: ChangedFile[]
   others: ChangedFile[]
 }
 
@@ -124,6 +126,7 @@ export interface ScopeInput {
   from: string | undefined
   covered: ReadonlyMap<string, MarkedLines>
   threads: ThreadPlan | undefined
+  changed?: readonly string[]
 }
 
 export interface NextReviewedInput {
@@ -355,6 +358,7 @@ export function buildScope(input: ScopeInput): ReviewScope {
     mode: input.mode,
     covered: [...input.covered].map(([path, marked]) => ({ path, right: [...marked.right], left: [...marked.left] })),
     ...threadFields(input.threads),
+    changed: [...(input.changed ?? [])],
   }
   return input.mode === "incremental" && input.from !== undefined ? { ...scope, from: input.from } : scope
 }
@@ -385,11 +389,19 @@ export function promptFiles(
 ): PromptFiles {
   const covered = new Set(scope.covered.map((file) => file.path))
   const recheckOnly = new Set(scope.recheck.map((thread) => thread.path).filter((path) => !covered.has(path)))
+  const changed = new Set(scope.changed)
+  const rest = prFiles.filter((file) => !covered.has(file.filename) && !recheckOnly.has(file.filename))
   return {
     covered: prFiles.filter((file) => covered.has(file.filename)),
     recheckOnly: since.filter((file) => recheckOnly.has(file.filename)),
-    others: prFiles.filter((file) => !covered.has(file.filename) && !recheckOnly.has(file.filename)),
+    changedOutside: rest.filter((file) => changed.has(file.filename)),
+    others: rest.filter((file) => !changed.has(file.filename)),
   }
+}
+
+export function pathsChangedSince(prFiles: readonly ChangedFile[], since: readonly ChangedFile[]): string[] {
+  const touched = new Set(since.map((file) => file.filename))
+  return prFiles.filter((file) => touched.has(file.filename)).map((file) => file.filename)
 }
 
 export function coveredMap(scope: ReviewScope): Map<string, MarkedLines> {
@@ -433,13 +445,14 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     return { headSha, baseRef, at, mode: scope.mode, summary: submission.summary, walkthrough: submission.walkthrough }
   }
   const covered = new Set(scope.covered.map((file) => file.path))
+  const rowsTaken = new Set([...covered, ...(scope.changed ?? [])])
   return {
     headSha,
     baseRef,
     at,
     mode: "incremental",
     summary: previous.summary,
-    walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, covered),
+    walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
     since: { from: scope.from, to: headSha, summary: submission.summary, files: [...covered], resolved },
   }
 }

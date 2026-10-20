@@ -9,6 +9,7 @@ export interface IncrementalPromptInput extends ThreadLists {
   covered: readonly ChangedFile[]
   marked: ReadonlyMap<string, MarkedLines>
   recheckOnly: readonly ChangedFile[]
+  changedOutside: readonly ChangedFile[]
   others: readonly ChangedFile[]
   issues: readonly LinkedIssue[]
 }
@@ -69,7 +70,7 @@ export function incrementalPrompt(pr: PullRequestInfo, input: IncrementalPromptI
       `## Changes since your last review\n${ANCHOR_LEGEND}`,
       input.covered.length === 0 ? "(none)" : renderPatches(input.covered, undefined, input.marked),
       ...changesOutsideTheDiff(input.recheckOnly),
-      `## Other changed files\n${otherFiles(input.others)}`,
+      `## Other changed files\n${otherFiles(input.changedOutside, input.others)}`,
       threadListsData(input),
     ]),
     THREADS_NOTE,
@@ -123,9 +124,15 @@ function issueSection({ number, title, body, cut }: LinkedIssue): string {
   return cut ? `${section}\n${CUT_NOTE}` : section
 }
 
-function otherFiles(files: readonly ChangedFile[]): string {
-  if (files.length === 0) return "(none)"
-  return files.map((file) => `- \`${file.filename}\`: unchanged since the last review; read_file if needed`).join("\n")
+function otherFiles(changedOutside: readonly ChangedFile[], unchanged: readonly ChangedFile[]): string {
+  if (changedOutside.length + unchanged.length === 0) return "(none)"
+  return [
+    ...changedOutside.map(
+      (file) =>
+        `- \`${file.filename}\`: changed since the last review, with no line to comment on; read_file if needed`,
+    ),
+    ...unchanged.map((file) => `- \`${file.filename}\`: unchanged since the last review; read_file if needed`),
+  ].join("\n")
 }
 
 function threadListsData(lists: ThreadLists): string {

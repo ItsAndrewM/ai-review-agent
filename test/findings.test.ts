@@ -169,9 +169,36 @@ describe("quote verification", () => {
     )
     expect(result.accepted).toHaveLength(0)
     expect(result.rejected.map((r) => r.reason)).toEqual([
-      "quote does not match line 2 (RIGHT) and no other line in src/x.ts matches",
+      "quote does not match line 2 (RIGHT) and no other line in src/x.ts matches; quote the line's own text, without its anchor or the diff's + or - marker",
       "quote matches 2 lines in src/twice.ts; anchor the right one",
     ])
+  })
+
+  it("accepts a quote carrying the diff's marker for its side, and keeps the quote without it", () => {
+    const right = validateFindings([finding({ quote: "+const b = 3;" })], files)
+    const left = validateFindings([finding({ side: "LEFT", quote: "-  const b = 2;" })], files)
+    const moved = validateFindings([finding({ line: 3, quote: " + const b = 3;" })], files)
+    expect([...right.accepted, ...left.accepted, ...moved.accepted].map((f) => [f.line, f.quote])).toEqual([
+      [2, "const b = 3;"],
+      [2, "const b = 2;"],
+      [2, "const b = 3;"],
+    ])
+    expect(moved.relocated).toBe(1)
+  })
+
+  it("refuses to move a finding when the quote as written and without its marker match different lines", () => {
+    const marks = new Map([["src/marks.ts", commentableLines(["@@ -0,0 +1,3 @@", "++x", "+x", "+y"].join("\n"))]])
+    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks)
+    expect(result.accepted).toEqual([])
+    expect(result.rejected.map((r) => r.reason)).toEqual([
+      "quote matches 2 lines in src/marks.ts; anchor the right one",
+    ])
+  })
+
+  it("keeps a quote whose own text starts with a plus, and refuses the other side's marker", () => {
+    const plus = new Map([["src/plus.ts", commentableLines(["@@ -1 +1,2 @@", " a", "++x"].join("\n"))]])
+    expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus).accepted[0]?.quote).toBe("+x")
+    expect(validateFindings([finding({ quote: "-const b = 3;" })], files).accepted).toEqual([])
   })
 })
 
