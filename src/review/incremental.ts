@@ -1,6 +1,13 @@
 import { Type, type Static } from "typebox"
 import type { CompareStatus, PostedComment, ReviewThread } from "../github/client.ts"
-import { comparableText, markedLines, type ChangedFile, type MarkedLines } from "../github/diff.ts"
+import {
+  comparableText,
+  deltaLines,
+  markedLines,
+  type ChangedFile,
+  type DeltaLines,
+  type MarkedLines,
+} from "../github/diff.ts"
 import {
   SEVERITY_LABEL,
   Severity,
@@ -89,6 +96,18 @@ export interface ThreadInput {
   botLogin: string
   mode: ReviewMode
   covered: ReadonlyMap<string, MarkedLines>
+  since: readonly ChangedFile[]
+}
+
+export interface ReviewPlan {
+  scope: ReviewScope
+  since: ChangedFile[]
+}
+
+export interface PromptFiles {
+  covered: ChangedFile[]
+  recheckOnly: ChangedFile[]
+  others: ChangedFile[]
 }
 
 export interface ThreadLists {
@@ -170,7 +189,7 @@ export function openBotThreads(
 
 export function planThreads(input: ThreadInput): ThreadPlan {
   const open = openBotThreads(input.threads, input.findings, input.botLogin)
-  return { open, recheck: threadsToRecheck(open, input.mode, input.covered) }
+  return { open, recheck: threadsToRecheck(open, input.mode, input.covered, input.since) }
 }
 
 export function threadLists(open: readonly OpenThread[], recheck: readonly OpenThread[]): ThreadLists {
@@ -216,13 +235,22 @@ export function threadsToRecheck(
   open: readonly OpenThread[],
   mode: ReviewMode,
   covered: ReadonlyMap<string, MarkedLines>,
+  since: readonly ChangedFile[],
 ): OpenThread[] {
   if (mode === "fresh") return []
-  const due =
-    mode === "full"
-      ? open.filter((thread) => thread.outdated)
-      : open.filter((thread) => thread.outdated || onMarkedLine(thread, covered))
-  return due.slice(0, MOST_LISTED_THREADS)
+  if (mode === "full") return open.filter((thread) => thread.outdated).slice(0, MOST_LISTED_THREADS)
+  const changes = new Map(since.map((file) => [file.filename, deltaLines(file.patch)]))
+  return open
+    .filter((thread) => onMarkedLine(thread, covered) || (thread.outdated && touchedByPush(thread, changes)))
+    .slice(0, MOST_LISTED_THREADS)
+}
+
+function touchedByPush(thread: OpenThread, changes: ReadonlyMap<string, DeltaLines>): boolean {
+  const delta = changes.get(thread.path)
+  if (delta === undefined) return false
+  if (thread.quote === undefined) return true
+  const quote = comparableText(thread.quote)
+  return delta.deletedTexts.has(quote) || delta.addedTexts.has(quote)
 }
 
 function onMarkedLine(thread: OpenThread, covered: ReadonlyMap<string, MarkedLines>): boolean {
@@ -305,6 +333,24 @@ function threadFields(threads: ThreadPlan | undefined) {
 
 export function freshScope(deliveryId: string): ReviewScope {
   return buildScope({ deliveryId, mode: "fresh", from: undefined, covered: new Map(), threads: undefined })
+}
+
+export function nothingToReview(scope: ReviewScope): boolean {
+  return scope.mode === "incremental" && scope.covered.length === 0 && scope.recheck.length === 0
+}
+
+export function promptFiles(
+  prFiles: readonly ChangedFile[],
+  since: readonly ChangedFile[],
+  scope: ReviewScope,
+): PromptFiles {
+  const covered = new Set(scope.covered.map((file) => file.path))
+  const recheckOnly = new Set(scope.recheck.map((thread) => thread.path).filter((path) => !covered.has(path)))
+  return {
+    covered: prFiles.filter((file) => covered.has(file.filename)),
+    recheckOnly: since.filter((file) => recheckOnly.has(file.filename)),
+    others: prFiles.filter((file) => !covered.has(file.filename) && !recheckOnly.has(file.filename)),
+  }
 }
 
 export function coveredMap(scope: ReviewScope): Map<string, MarkedLines> {

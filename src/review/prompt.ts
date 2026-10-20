@@ -1,5 +1,5 @@
 import type { PullRequestInfo } from "../github/client.ts"
-import { renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
+import { renderChanges, renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
 import type { Rejected } from "./findings.ts"
 import type { OpenThread, ThreadLists } from "./incremental.ts"
 
@@ -7,6 +7,7 @@ export interface IncrementalPromptInput extends ThreadLists {
   from: string
   covered: readonly ChangedFile[]
   marked: ReadonlyMap<string, MarkedLines>
+  recheckOnly: readonly ChangedFile[]
   others: readonly ChangedFile[]
 }
 
@@ -17,6 +18,8 @@ const MARK_LEGEND =
   "A `*` after an anchor marks a line changed since your last review. Comment only on marked lines, except for a blocking bug the new changes cause elsewhere in the diff."
 const THREADS_NOTE =
   "Put the handle of each thread to re-check whose problem the new changes fix in addressed_threads. Don't post a finding that repeats an open thread."
+const OUTSIDE_THE_DIFF_NOTE =
+  "These changes since your last review touch threads to re-check but no line of the pull request's diff. Use them to judge those threads; there is nothing in them to comment on."
 
 export function systemPrompt(botLogin: string): string {
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub.
@@ -46,19 +49,20 @@ ${renderThreadLists(lists)}`
 }
 
 export function incrementalPrompt(pr: PullRequestInfo, input: IncrementalPromptInput): string {
-  return `Review the changes since your last review of this pull request, \`${short(input.from)}..${short(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE}
+  return [
+    `Review the changes since your last review of this pull request, \`${short(input.from)}..${short(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE}`,
+    pullRequestSection(pr),
+    `## Changes since your last review\n${ANCHOR_LEGEND} ${MARK_LEGEND}`,
+    input.covered.length === 0 ? "(none)" : renderPatches(input.covered, undefined, input.marked),
+    ...changesOutsideTheDiff(input.recheckOnly),
+    `## Other changed files\n${otherFiles(input.others)}`,
+    renderThreadLists(input),
+  ].join("\n\n")
+}
 
-${pullRequestSection(pr)}
-
-## Changes since your last review
-${ANCHOR_LEGEND} ${MARK_LEGEND}
-
-${renderPatches(input.covered, undefined, input.marked)}
-
-## Other changed files
-${otherFiles(input.others)}
-
-${renderThreadLists(input)}`
+function changesOutsideTheDiff(files: readonly ChangedFile[]): string[] {
+  if (files.length === 0) return []
+  return [`## New changes outside the diff\n${OUTSIDE_THE_DIFF_NOTE}`, renderChanges(files)]
 }
 
 function pullRequestSection(pr: PullRequestInfo): string {

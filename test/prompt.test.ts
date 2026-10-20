@@ -60,6 +60,7 @@ describe("incrementalPrompt", () => {
     from: "abc1234567",
     covered,
     marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
+    recheckOnly: [],
     others,
     recheck,
     otherThreads,
@@ -84,6 +85,34 @@ describe("incrementalPrompt", () => {
     expect(text).toContain("## Threads to re-check\nT1 a.ts (outdated) — Total is NaN — code: `const b = 3;`")
     expect(text).toContain("## Other open threads\nT2 b.ts:7 — Rename y")
     expect(text).toContain("2 more open threads aren't listed.")
+  })
+})
+
+describe("incrementalPrompt with a thread to re-check outside the diff", () => {
+  const gone = { filename: "gone.ts", status: "removed", additions: 0, deletions: 1, patch: "@@ -1 +0,0 @@\n-debug()" }
+  const text = incrementalPrompt(pr, {
+    from: "abc1234567",
+    covered: [],
+    marked: new Map(),
+    recheckOnly: [gone],
+    others,
+    recheck: [thread("T1", { path: "gone.ts", outdated: true, line: null, quote: "debug()" })],
+    otherThreads: [],
+    leftOut: 0,
+  })
+
+  it("shows what the new commits did to that file apart from the diff, with nothing to comment on", () => {
+    expect(text).toContain(
+      "## New changes outside the diff\nThese changes since your last review touch threads to re-check but no line of the pull request's diff. Use them to judge those threads; there is nothing in them to comment on.\n\n### gone.ts (removed, +0 -1)\n```diff\n@@ -1 +0,0 @@\n-debug()\n```",
+    )
+    expect(text).not.toContain("`gone.ts`: unchanged")
+  })
+
+  it("says when no line of the diff changed", () => {
+    expect(text).toContain("## Changes since your last review\nEach patch line starts with its anchor")
+    expect(text).toMatch(
+      /marks a line changed since your last review\.[^\n]*\n\n\(none\)\n\n## New changes outside the diff/,
+    )
   })
 })
 

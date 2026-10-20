@@ -103,9 +103,10 @@ describe("deltaLines and markedLines", () => {
     " export { a, b };",
   ].join("\n")
 
-  it("deltaLines takes added lines by new number and deleted lines by text", () => {
+  it("deltaLines takes added lines by new number and by text, and deleted lines by text", () => {
     const delta = deltaLines(patch)
     expect([...delta.added].sort((x, y) => x - y)).toEqual([2, 3, 11, 12])
+    expect([...delta.addedTexts].sort()).toEqual(["", "// added", "import { b, c } from './b';", "return c;"])
     expect([...delta.deletedTexts].sort()).toEqual(["import { b } from './b';", "return 1;"])
   })
 

@@ -61,7 +61,7 @@ export function unchangedCheckRun(sinceSha: string, completedAt: number): Update
   const since = shortSha(sinceSha)
   const output = checkOutput(
     `No changes to review since \`${since}\``,
-    `This push changes none of the pull request's own files since \`${since}\`, so there was nothing new to review.`,
+    `The commits since \`${since}\` add no line to the pull request's diff and touch none of its open threads, so there was nothing new to review.`,
   )
   return completedCheckRun("success", output, undefined, completedAt)
 }

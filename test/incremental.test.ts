@@ -11,9 +11,11 @@ import {
   coveredMap,
   findingRecords,
   nextReviewed,
+  nothingToReview,
   openBlockingAfter,
   openBotThreads,
   planThreads,
+  promptFiles,
   threadLists,
   threadsToRecheck,
   type OpenThread,
@@ -172,7 +174,14 @@ describe("planThreads", () => {
     const threads = Array.from({ length: 42 }, (_, i) =>
       botThread(`t${i + 1}`, { firstCommentId: i + 1, line: i === 41 ? null : i + 1, outdated: i === 41 }),
     )
-    const plan = planThreads({ threads, findings: new Map(), botLogin: "andabot", mode: "full", covered: new Map() })
+    const plan = planThreads({
+      threads,
+      findings: new Map(),
+      botLogin: "andabot",
+      mode: "full",
+      covered: new Map(),
+      since: [],
+    })
     expect(plan.open).toHaveLength(42)
     expect(plan.recheck.map((t) => t.threadId)).toEqual(["t42"])
     const onTheOldestThread = found({ line: 1, severity: "blocking" })
@@ -197,20 +206,71 @@ describe("threadLists", () => {
 
 describe("threadsToRecheck", () => {
   const threads = [
-    open("T1", { outdated: true, line: null }),
+    open("T1", { outdated: true, line: null, quote: "console.log(secret)" }),
     open("T2", { line: 3 }),
     open("T3", { line: 9 }),
     open("T4", { path: "c.ts", line: 3 }),
+    open("T5", { outdated: true, line: null, quote: "const kept = 1;" }),
+    open("T6", { path: "b.ts", outdated: true, line: null }),
+    open("T7", { path: "d.ts", outdated: true, line: null }),
+    open("T8", { path: "e.ts", side: "LEFT", outdated: true, line: null, quote: "guard()" }),
   ]
   const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+  const since = [
+    changed("a.ts", ["@@ -1,3 +1,3 @@", " one", "-console.log(secret)", " const kept = 1;", "+three"].join("\n")),
+    changed("d.ts", ["@@ -1 +1 @@", "-x", "+y"].join("\n")),
+    changed("e.ts", ["@@ -1 +1,2 @@", " a", "+guard()"].join("\n")),
+  ]
 
-  it("takes outdated threads and those on marked lines in an incremental review", () => {
-    expect(threadsToRecheck(threads, "incremental", covered).map((t) => t.handle)).toEqual(["T1", "T2"])
+  it("re-checks threads on marked lines and outdated threads whose code the push changed", () => {
+    expect(threadsToRecheck(threads, "incremental", covered, since).map((t) => t.handle)).toEqual([
+      "T1",
+      "T2",
+      "T7",
+      "T8",
+    ])
   })
 
-  it("takes only outdated threads in a full review, and none when starting over", () => {
-    expect(threadsToRecheck(threads, "full", covered).map((t) => t.handle)).toEqual(["T1"])
-    expect(threadsToRecheck(threads, "fresh", covered)).toEqual([])
+  it("takes every outdated thread in a full review, and none when starting over", () => {
+    expect(threadsToRecheck(threads, "full", covered, []).map((t) => t.handle)).toEqual(["T1", "T5", "T6", "T7", "T8"])
+    expect(threadsToRecheck(threads, "fresh", covered, since)).toEqual([])
+  })
+})
+
+describe("nothingToReview", () => {
+  const incremental = { deliveryId: "d", mode: "incremental" as const, from: "aaa", threads: undefined }
+  const marked = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
+
+  it("skips an incremental review only when no line is marked and no thread is to be re-checked", () => {
+    expect(nothingToReview(buildScope({ ...incremental, covered: new Map() }))).toBe(true)
+    expect(nothingToReview(buildScope({ ...incremental, covered: marked }))).toBe(false)
+    const fixed = open("T1", { outdated: true, line: null })
+    const recheckOnly = { ...incremental, covered: new Map(), threads: { open: [fixed], recheck: [fixed] } }
+    expect(nothingToReview(buildScope(recheckOnly))).toBe(false)
+    expect(nothingToReview(buildScope({ ...incremental, mode: "full", covered: new Map() }))).toBe(false)
+  })
+})
+
+describe("promptFiles", () => {
+  it("shows a file whose only new changes left the diff when one of its threads is to be re-checked", () => {
+    const prFiles = [
+      changed("a.ts", "@@ -1 +1 @@\n-x\n+y"),
+      changed("b.ts", "@@ -1 +1 @@\n-p\n+q"),
+      changed("c.ts", ""),
+    ]
+    const since = [changed("a.ts", "@@ -1 +1 @@\n-x\n+y"), changed("gone.ts", "@@ -1 +0,0 @@\n-debug()")]
+    const gone = open("T1", { path: "gone.ts", outdated: true, line: null, quote: "debug()" })
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered: new Map([["a.ts", { right: new Set([1]), left: new Set<number>() }]]),
+      threads: { open: [gone], recheck: [gone] },
+    })
+    const files = promptFiles(prFiles, since, scope)
+    expect(files.covered.map((f) => f.filename)).toEqual(["a.ts"])
+    expect(files.recheckOnly.map((f) => f.filename)).toEqual(["gone.ts"])
+    expect(files.others.map((f) => f.filename)).toEqual(["b.ts", "c.ts"])
   })
 })
 

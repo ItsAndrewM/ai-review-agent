@@ -59,14 +59,17 @@ import {
   findingRecords,
   freshScope,
   nextReviewed,
+  nothingToReview,
   openBlockingAfter,
   planThreads,
+  promptFiles,
   ReviewedRecord,
   ReviewScope,
   StoredFinding,
   threadLists,
   type OpenThread,
   type ReviewMode,
+  type ReviewPlan,
   type ScopedReview,
   type ThreadPlan,
 } from "./review/incremental.ts"
@@ -467,8 +470,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     try {
       const files = await this.openRun(pr, run)
-      const scope = await this.planReview(pr, files, incoming, run)
-      const prompt = promptFor(pr, files, scope)
+      const { scope, since } = await this.planReview(pr, files, incoming, run)
+      const prompt = promptFor(pr, files, scope, since)
       log("review.start", {
         number: pr.number,
         head: short(pr.head.sha),
@@ -487,7 +490,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         delivery: run.deliveryId,
       })
       if (await this.replaced(pr, run)) return
-      if (scope.mode === "incremental" && scope.covered.length === 0) return await this.skipUnchanged(pr, run, scope)
+      if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
       await this.activateReviewSkill()
@@ -518,17 +521,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     files: readonly ChangedFile[],
     incoming: ReviewIncoming,
     run: ReviewRun,
-  ): Promise<ReviewScope> {
+  ): Promise<ReviewPlan> {
     const reviewed = await this.readReviewed()
     const comparison =
       incoming.full || reviewed === undefined ? undefined : await this.compareSince(pr, reviewed.headSha)
     const mode = chooseMode({ full: incoming.full, reviewed, baseRef: pr.base.ref, compareStatus: comparison?.status })
-    const covered =
-      mode === "incremental" ? coveredFiles(files, comparison?.files ?? []) : new Map<string, MarkedLines>()
-    const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered)
+    const since = mode === "incremental" ? (comparison?.files ?? []) : []
+    const covered = coveredFiles(files, since)
+    const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered, since)
     const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads })
     if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
-    return scope
+    return { scope, since }
   }
 
   private async readReviewed(): Promise<ReviewedRecord | undefined> {
@@ -555,12 +558,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pr: PullRequestInfo,
     mode: ReviewMode,
     covered: ReadonlyMap<string, MarkedLines>,
+    since: readonly ChangedFile[],
   ): Promise<ThreadPlan | undefined> {
     try {
       const key = await this.key()
       const threads = await (await this.github()).listReviewThreads(key, key.number)
       const findings = await this.storedFindings(threads.map((thread) => thread.firstCommentId))
-      return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered })
+      return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered, since })
     } catch (error) {
       logError("review.threads_failed", { number: pr.number, error: errorText(error) })
       return undefined
@@ -913,16 +917,19 @@ const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
 const MOST_KEYS_PER_GET = 128
 
-function promptFor(pr: PullRequestInfo, files: readonly ChangedFile[], scope: ReviewScope): string {
+function promptFor(
+  pr: PullRequestInfo,
+  files: readonly ChangedFile[],
+  scope: ReviewScope,
+  since: readonly ChangedFile[],
+): string {
   if (scope.mode === "fresh") return reviewPrompt(pr, files, true)
   const lists = threadLists(scope.open, scope.recheck)
   if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists)
-  const marked = coveredMap(scope)
   return incrementalPrompt(pr, {
     from: scope.from,
-    covered: files.filter((file) => marked.has(file.filename)),
-    marked,
-    others: files.filter((file) => !marked.has(file.filename)),
+    marked: coveredMap(scope),
+    ...promptFiles(files, since, scope),
     ...lists,
   })
 }
