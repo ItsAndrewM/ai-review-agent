@@ -186,6 +186,15 @@ describe("quote verification", () => {
     expect(moved.relocated).toBe(1)
   })
 
+  it("refuses to move a finding when the quote as written and without its marker match different lines", () => {
+    const marks = new Map([["src/marks.ts", commentableLines(["@@ -0,0 +1,3 @@", "++x", "+x", "+y"].join("\n"))]])
+    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks)
+    expect(result.accepted).toEqual([])
+    expect(result.rejected.map((r) => r.reason)).toEqual([
+      "quote matches 2 lines in src/marks.ts; anchor the right one",
+    ])
+  })
+
   it("keeps a quote whose own text starts with a plus, and refuses the other side's marker", () => {
     const plus = new Map([["src/plus.ts", commentableLines(["@@ -1 +1,2 @@", " a", "++x"].join("\n"))]])
     expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus).accepted[0]?.quote).toBe("+x")

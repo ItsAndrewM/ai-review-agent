@@ -242,16 +242,20 @@ function relocateByQuote(
   readings: readonly string[],
   lines: ReadonlyMap<number, string>,
 ): Anchored {
-  for (const quote of readings) {
-    const matching = [...lines].filter(([, other]) => comparableText(other) === comparableText(quote))
-    if (matching.length > 1)
-      return { reason: `quote matches ${matching.length} lines in ${finding.path}; anchor the right one` }
-    const [only] = matching
-    if (only !== undefined) return { finding: moveTo({ ...finding, quote }, only[0]), relocated: true }
+  const matches = readings.flatMap((quote) =>
+    [...lines]
+      .filter(([, other]) => comparableText(other) === comparableText(quote))
+      .map(([line]) => ({ line, quote })),
+  )
+  const lineCount = new Set(matches.map((match) => match.line)).size
+  const [only] = matches
+  if (only === undefined) {
+    return {
+      reason: `quote does not match line ${finding.line} (${side}) and no other line in ${finding.path} matches; quote the line's own text, without its anchor or the diff's + or - marker`,
+    }
   }
-  return {
-    reason: `quote does not match line ${finding.line} (${side}) and no other line in ${finding.path} matches; quote the line's own text, without its anchor or the diff's + or - marker`,
-  }
+  if (lineCount > 1) return { reason: `quote matches ${lineCount} lines in ${finding.path}; anchor the right one` }
+  return { finding: moveTo({ ...finding, quote: only.quote }, only.line), relocated: true }
 }
 
 function quoteReadings(quote: string, side: Side): string[] {
