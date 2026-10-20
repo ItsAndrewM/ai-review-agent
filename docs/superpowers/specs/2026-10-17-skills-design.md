@@ -124,7 +124,7 @@ Left for slice 2:
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required. The summary's "Merge danger" line follows the stored `reviewed` record, not the latest submission: a full review stores its own judgement, and an incremental review (#24), which sees only its push, stores the stricter door of the record's and the push's, the push's judgement when the doors are equal. A push that touches nothing risky therefore leaves a one-way door in place.
 - Every changed file not filtered as generated has a walkthrough row. An incremental review (#24) needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 
-Rendering: a finding's comment carries `_Basis: …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
+Rendering: a finding's comment carries `_Basis (<kind>): …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
 
 ### G. Attribution and logs
 

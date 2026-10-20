@@ -411,7 +411,7 @@ export const SEVERITY_LABEL = {
 export function toReviewComment(finding: FindingInput): ReviewComment {
   const side = finding.side ?? "RIGHT"
   let body = `**${SEVERITY_LABEL[finding.severity]}: ${finding.title.trim()}**\n\n${finding.body.trim()}`
-  body += `\n\n_Basis: ${finding.basis.trim()}_`
+  body += `\n\n_Basis (${finding.basis_kind}): ${finding.basis.trim()}_`
   if (finding.suggestion !== undefined) {
     body += `\n\n\`\`\`suggestion\n${finding.suggestion.replace(/\n$/, "")}\n\`\`\``
   }
