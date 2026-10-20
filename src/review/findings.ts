@@ -179,6 +179,8 @@ const BRACKETS = [
   ["{", "}"],
 ] as const
 
+const DIFF_MARKER = { RIGHT: "+", LEFT: "-" } satisfies Record<Side, string>
+
 export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
@@ -228,16 +230,33 @@ function checkFinding(finding: FindingInput, commentable: ReadonlyMap<string, Co
 function anchorByQuote(finding: FindingInput, side: Side, lines: ReadonlyMap<number, string>): Anchored {
   const text = lines.get(finding.line)
   if (text === undefined) return { reason: `line ${finding.line} (${side}) is not in the diff of ${finding.path}` }
-  const quote = comparableText(finding.quote)
-  if (comparableText(text) === quote) return { finding, relocated: false }
-  const [only, ...others] = [...lines].filter(([, other]) => comparableText(other) === quote).map(([line]) => line)
-  if (only === undefined)
-    return {
-      reason: `quote does not match line ${finding.line} (${side}) and no other line in ${finding.path} matches`,
-    }
-  if (others.length > 0)
-    return { reason: `quote matches ${others.length + 1} lines in ${finding.path}; anchor the right one` }
-  return { finding: moveTo(finding, only), relocated: true }
+  const readings = quoteReadings(finding.quote, side)
+  const exact = readings.find((quote) => comparableText(quote) === comparableText(text))
+  if (exact !== undefined) return { finding: { ...finding, quote: exact }, relocated: false }
+  return relocateByQuote(finding, side, readings, lines)
+}
+
+function relocateByQuote(
+  finding: FindingInput,
+  side: Side,
+  readings: readonly string[],
+  lines: ReadonlyMap<number, string>,
+): Anchored {
+  for (const quote of readings) {
+    const matching = [...lines].filter(([, other]) => comparableText(other) === comparableText(quote))
+    if (matching.length > 1)
+      return { reason: `quote matches ${matching.length} lines in ${finding.path}; anchor the right one` }
+    const [only] = matching
+    if (only !== undefined) return { finding: moveTo({ ...finding, quote }, only[0]), relocated: true }
+  }
+  return {
+    reason: `quote does not match line ${finding.line} (${side}) and no other line in ${finding.path} matches; quote the line's own text, without its anchor or the diff's + or - marker`,
+  }
+}
+
+function quoteReadings(quote: string, side: Side): string[] {
+  const trimmed = quote.trimStart()
+  return trimmed.startsWith(DIFF_MARKER[side]) ? [quote, trimmed.slice(1).trimStart()] : [quote]
 }
 
 function moveTo({ start_line, suggestion, ...finding }: FindingInput, line: number): FindingInput {
