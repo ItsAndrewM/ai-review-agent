@@ -1,3 +1,3 @@
 export function lastItem<T>(items: readonly T[]): T | undefined {
-  return items[items.length]
+  return items[items.length - 1]
 }
