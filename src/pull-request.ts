@@ -13,12 +13,13 @@ import { createAppJwt, fetchInstallationToken, type InstallationToken } from "./
 import {
   canCommand,
   GitHubClient,
+  type Comparison,
   type PullRequestInfo,
   type RepoRef,
   type ReviewEvent,
   type UpdateCheckRun,
 } from "./github/client.ts"
-import { indexCommentableLines, type ChangedFile } from "./github/diff.ts"
+import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
@@ -29,12 +30,14 @@ import {
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
+  unchangedCheckRun,
 } from "./review/check.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   parseWrittenReview,
   toReviewComment,
   validateFindings,
+  type FindingInput,
   type ReviewSubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
@@ -45,7 +48,40 @@ import {
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
-import { answerPrompt, rejectionsText, resubmitPrompt, reviewPrompt } from "./review/prompt.ts"
+import {
+  addressedThreads,
+  applyDeltaPolicy,
+  buildScope,
+  chooseMode,
+  coveredFiles,
+  coveredMap,
+  deltaScopeOf,
+  findingRecords,
+  freshScope,
+  nextReviewed,
+  nothingToReview,
+  openBlockingAfter,
+  planThreads,
+  promptFiles,
+  resolveThreads,
+  ReviewedRecord,
+  ReviewScope,
+  StoredFinding,
+  threadLists,
+  type OpenThread,
+  type ReviewMode,
+  type ReviewPlan,
+  type ScopedReview,
+  type ThreadPlan,
+} from "./review/incremental.ts"
+import {
+  answerPrompt,
+  fullPrompt,
+  incrementalPrompt,
+  rejectionsText,
+  resubmitPrompt,
+  reviewPrompt,
+} from "./review/prompt.ts"
 import {
   chooseReviewEvent,
   renderReviewBody,
@@ -53,6 +89,7 @@ import {
   renderUnpostedNote,
   renderUnpostedSummary,
   SUMMARY_MARKER,
+  type Coverage,
   type RetryOutcome,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
@@ -212,44 +249,75 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`
     }
     const files = await this.changedFiles()
-    const { accepted, rejected, relocated, suggestionsDropped } = validateFindings(
-      submission.findings,
-      indexCommentableLines(files),
-    )
+    const scope = await this.scopeFor(deliveryId)
+    const validated = validateFindings(submission.findings, indexCommentableLines(files))
+    const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     log("review.findings", {
       number: pr.number,
       head: short(pr.head.sha),
-      accepted: accepted.length,
-      relocated,
-      suggestionsDropped,
-      rejected: rejected.length,
+      mode: scope.mode,
+      accepted: scoped.accepted.length,
+      relocated: validated.relocated,
+      suggestionsDropped: validated.suggestionsDropped,
+      rejected: scoped.rejected.length,
+      duplicates: scoped.duplicates.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    if (rejected.length > 0 && pending.rejectionsReturned !== true) {
+    const returned = [...scoped.rejected, ...scoped.duplicates]
+    if (returned.length > 0 && pending.rejectionsReturned !== true) {
       await this.markRejectionsReturned(pending.deliveryId)
-      return rejectionsText(rejected)
+      return rejectionsText(returned)
     }
-    const event = chooseReviewEvent(submission, accepted, rejected, this.env.REQUEST_CHANGES_WORKFLOW === "true")
+    return this.publishReview(pr, pending, submission, scope, scoped)
+  }
+
+  private async publishReview(
+    pr: PullRequestInfo,
+    pending: PendingReview,
+    submission: ReviewSubmissionInput,
+    scope: ReviewScope,
+    scoped: ScopedReview,
+  ): Promise<string> {
+    const resolved = await this.resolveAddressed(
+      pr,
+      addressedThreads(submission.addressed_threads, scope.recheck).resolve,
+    )
+    const openBlocking = scope.mode === "fresh" ? undefined : openBlockingAfter(scope, resolved)
+    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
+    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
     const key = await this.key()
     const github = await this.github()
     const attribution = attributionOf(pending)
+    const reviewed = nextReviewed({
+      previous: await this.readReviewed(),
+      scope,
+      headSha: pr.head.sha,
+      baseRef: pr.base.ref,
+      at: Date.now(),
+      submission,
+      resolved: resolved.length,
+    })
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
       event,
-      submission,
-      accepted,
-      droppedCount: rejected.length,
+      submission: { ...submission, summary: reviewed.summary, walkthrough: reviewed.walkthrough },
+      accepted: scoped.accepted,
+      droppedCount: scoped.rejected.length,
       model: attribution?.model,
       skillsFingerprint: attribution?.fingerprint,
+      since: reviewed.since,
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, accepted, rejected),
-      comments: accepted.map(toReviewComment),
+      body: renderReviewBody(event, scoped.accepted, scoped.rejected, coverageOf(scope, pr.head.sha, resolved.length)),
+      comments: scoped.accepted.map(toReviewComment),
     })
+    await this.replyFixed(pr, resolved)
+    await this.storeFindings(pr, scoped.accepted, review.id)
+    await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
     await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, {
       reviewId: review.id,
       event,
@@ -258,12 +326,58 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     await this.completeOwnRun(
       pending.deliveryId,
-      postedCheckRun(event, accepted, summary, await this.summaryCommentUrl(), Date.now()),
+      postedCheckRun(event, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
     )
     await this.releasePending(pending.deliveryId)
     const dropped =
-      rejected.length > 0 ? ` ${rejected.length} finding(s) that still failed the checks were dropped.` : ""
-    return `Posted review ${review.id} (${event}) with ${accepted.length} inline comment(s).${dropped}`
+      scoped.rejected.length > 0
+        ? ` ${scoped.rejected.length} finding(s) that still failed the checks were dropped.`
+        : ""
+    return `Posted review ${review.id} (${event}) with ${scoped.accepted.length} inline comment(s).${dropped}`
+  }
+
+  private async storeFindings(pr: PullRequestInfo, accepted: readonly FindingInput[], reviewId: number): Promise<void> {
+    if (accepted.length === 0) return
+    try {
+      const key = await this.key()
+      const comments = await (await this.github()).listReviewComments(key, key.number, reviewId)
+      const records = findingRecords(accepted, comments)
+      await this.ctx.storage.put(Object.fromEntries([...records].map(([id, record]) => [`finding:${id}`, record])))
+    } catch (error) {
+      logError("review.findings_unrecorded", { number: pr.number, review: reviewId, error: errorText(error) })
+    }
+  }
+
+  private async resolveAddressed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<OpenThread[]> {
+    if (threads.length === 0) return []
+    const { resolved, failed } = await resolveThreads(await this.github(), threads)
+    for (const { thread, error } of failed) {
+      logError("review.resolve_failed", { number: pr.number, thread: thread.handle, step: "resolve", error })
+    }
+    log("review.resolved", {
+      number: pr.number,
+      head: short(pr.head.sha),
+      resolved: resolved.length,
+      attempted: threads.length,
+    })
+    return resolved
+  }
+
+  private async replyFixed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<void> {
+    for (const thread of threads) {
+      try {
+        const key = await this.key()
+        const reply = `Fixed in \`${short(pr.head.sha)}\`.`
+        await (await this.github()).replyToReviewComment(key, key.number, thread.firstCommentId, reply)
+      } catch (error) {
+        logError("review.resolve_failed", {
+          number: pr.number,
+          thread: thread.handle,
+          step: "reply",
+          error: errorText(error),
+        })
+      }
+    }
   }
 
   private async markRejectionsReturned(deliveryId: string): Promise<void> {
@@ -378,7 +492,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     try {
       const files = await this.openRun(pr, run)
-      const prompt = reviewPrompt(pr, files, incoming.full)
+      const { scope, since } = await this.planReview(pr, files, incoming, run)
+      const prompt = promptFor(pr, files, scope, since)
       log("review.start", {
         number: pr.number,
         head: short(pr.head.sha),
@@ -389,12 +504,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         maxOutputTokens: this.outputLimit(),
         skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
+        mode: scope.mode,
+        since: scope.from === undefined ? undefined : short(scope.from),
+        covered: scope.covered.length,
+        recheck: scope.recheck.length,
         build: this.version().id,
         staleBuild: run.staleBuild,
         callerBuild: run.callerBuild,
         delivery: run.deliveryId,
       })
       if (await this.replaced(pr, run)) return
+      if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
       await this.configureReview()
@@ -419,6 +539,84 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.releasePending(run.deliveryId)
       throw error
     }
+  }
+
+  private async planReview(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    incoming: ReviewIncoming,
+    run: ReviewRun,
+  ): Promise<ReviewPlan> {
+    const reviewed = await this.readReviewed()
+    const comparison =
+      incoming.full || reviewed === undefined ? undefined : await this.compareSince(pr, reviewed.headSha)
+    const mode = chooseMode({ full: incoming.full, reviewed, baseRef: pr.base.ref, compareStatus: comparison?.status })
+    const since = mode === "incremental" ? (comparison?.files ?? []) : []
+    const covered = coveredFiles(files, since)
+    const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered, since)
+    const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads })
+    if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
+    return { scope, since }
+  }
+
+  private async readReviewed(): Promise<ReviewedRecord | undefined> {
+    const stored = await this.ctx.storage.get("reviewed")
+    return Value.Check(ReviewedRecord, stored) ? stored : undefined
+  }
+
+  private async scopeFor(deliveryId: string): Promise<ReviewScope> {
+    const stored = await this.ctx.storage.get("scope")
+    return Value.Check(ReviewScope, stored) && stored.deliveryId === deliveryId ? stored : freshScope(deliveryId)
+  }
+
+  private async compareSince(pr: PullRequestInfo, since: string): Promise<Comparison | undefined> {
+    try {
+      const key = await this.key()
+      return await (await this.github()).compareCommits(key, since, pr.head.sha)
+    } catch (error) {
+      logError("review.compare_failed", { number: pr.number, since: short(since), error: errorText(error) })
+      return undefined
+    }
+  }
+
+  private async threadPlan(
+    pr: PullRequestInfo,
+    mode: ReviewMode,
+    covered: ReadonlyMap<string, MarkedLines>,
+    since: readonly ChangedFile[],
+  ): Promise<ThreadPlan | undefined> {
+    try {
+      const key = await this.key()
+      const threads = await (await this.github()).listReviewThreads(key, key.number)
+      const findings = await this.storedFindings(threads.map((thread) => thread.firstCommentId))
+      return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered, since })
+    } catch (error) {
+      logError("review.threads_failed", { number: pr.number, error: errorText(error) })
+      return undefined
+    }
+  }
+
+  private async storedFindings(commentIds: readonly number[]): Promise<Map<number, StoredFinding>> {
+    const findings = new Map<number, StoredFinding>()
+    for (let start = 0; start < commentIds.length; start += MOST_KEYS_PER_GET) {
+      const ids = commentIds.slice(start, start + MOST_KEYS_PER_GET)
+      const stored = await this.ctx.storage.get(ids.map((id) => `finding:${id}`))
+      for (const id of ids) {
+        const record = stored.get(`finding:${id}`)
+        if (Value.Check(StoredFinding, record)) findings.set(id, record)
+      }
+    }
+    return findings
+  }
+
+  private async skipUnchanged(pr: PullRequestInfo, run: ReviewRun, scope: ReviewScope): Promise<void> {
+    const since = scope.from ?? pr.base.sha
+    log("review.skip", { reason: "no_new_changes", head: short(pr.head.sha), since: short(since), number: pr.number })
+    const reviewed = await this.readReviewed()
+    if (reviewed)
+      await this.ctx.storage.put<ReviewedRecord>("reviewed", { ...reviewed, headSha: pr.head.sha, at: Date.now() })
+    await this.completeOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
+    await this.releasePending(run.deliveryId)
   }
 
   private async configureReview(): Promise<void> {
@@ -738,7 +936,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async releasePending(deliveryId: string): Promise<void> {
-    if (await this.ownsPending(deliveryId)) await this.ctx.storage.delete("pending")
+    if (await this.ownsPending(deliveryId)) await this.ctx.storage.delete(["pending", "scope"])
   }
 
   private async restartGrace(deliveryId: string): Promise<void> {
@@ -763,6 +961,30 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const GRACE_MS = 120_000
+const MOST_KEYS_PER_GET = 128
+
+function promptFor(
+  pr: PullRequestInfo,
+  files: readonly ChangedFile[],
+  scope: ReviewScope,
+  since: readonly ChangedFile[],
+): string {
+  if (scope.mode === "fresh") return reviewPrompt(pr, files, true)
+  const lists = threadLists(scope.open, scope.recheck)
+  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists)
+  return incrementalPrompt(pr, {
+    from: scope.from,
+    marked: coveredMap(scope),
+    ...promptFiles(files, since, scope),
+    ...lists,
+  })
+}
+
+function coverageOf(scope: ReviewScope, headSha: string, resolved: number): Coverage {
+  const coverage = { mode: scope.mode, to: headSha, files: scope.covered.length, resolved }
+  return scope.from === undefined ? coverage : { ...coverage, from: scope.from }
+}
+
 function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
   log("review.transcript", {
     number: pr.number,
