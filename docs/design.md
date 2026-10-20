@@ -52,7 +52,7 @@ Events the App subscribes to:
 | `issue_comment` | created, on a PR | command or chat turn |
 | `pull_request_review_comment` | created | reply in thread, with file and line context |
 | `pull_request_review_thread` | resolved, unresolved | re-evaluate approval |
-| `check_run` / `check_suite` | rerequested | full review of each listed pull request |
+| `check_run` / `check_suite` | rerequested | full review of each listed pull request; dormant, since GitHub shows no Re-run on andabot's runs (#8) |
 | `check_suite` | requested | ignored: the pull request event starts the review |
 | `check_suite` / `check_run` | completed | re-evaluate approval (skipping andabot's own suite) |
 
@@ -132,7 +132,7 @@ The spec is the issues a pull request links, up to three: the closing keywords i
 
 Reviews follow CodeRabbit's model (#24). A push reviews only what changed since the last review. A push never repeats an open thread, and it resolves the threads it fixed. `full review` starts over. Each review runs in one of three modes, chosen before the prompt:
 
-- **`fresh`**, on `@andabot full review` or a check Re-run, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
+- **`fresh`**, on `@andabot full review`, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
 - **`full`**, on a push with no `reviewed` record, a retargeted base, a failed compare, or any compare status but `ahead` or `identical`, is the whole pull request too, but it never repeats an open thread. `diverged` and `behind` mean rewritten history. The first push to each pull request after this shipped is `full`, so it doesn't repost every existing finding.
 - **`incremental`** reviews what changed since the last review. It covers the pull request's files whose own changed lines the compare `reviewed...head` also changed, so a merge from the base branch drags nothing in.
 
