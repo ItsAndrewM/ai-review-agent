@@ -237,7 +237,7 @@ export function chooseReviewEvent(
   return "COMMENT"
 }
 
-function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
+export function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
   return !unfounded && finding.severity === "blocking"
 }
 
