@@ -342,7 +342,7 @@ export function missingWalkthrough(submission: ReviewSubmissionInput, needed: re
   return needed.filter((path) => !covered.has(path))
 }
 
-function rowPath(path: string): string {
+export function rowPath(path: string): string {
   return path.trim().replace(/^\.\//, "")
 }
 

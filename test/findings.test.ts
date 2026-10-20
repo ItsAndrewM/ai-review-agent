@@ -571,6 +571,21 @@ describe("mergeWalkthrough", () => {
       { path: "c.ts", summary: "new c" },
     ])
   })
+
+  it("matches a row's path the way the coverage check does, so ./a.ts replaces a.ts", () => {
+    const merged = mergeWalkthrough(
+      [{ path: "a.ts", summary: "old a" }],
+      [
+        { path: " ./a.ts ", summary: "new a" },
+        { path: "./c.ts", summary: "new c" },
+      ],
+      new Set(["a.ts", "c.ts"]),
+    )
+    expect(merged).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "c.ts", summary: "new c" },
+    ])
+  })
 })
 
 describe("renderSummaryComment", () => {

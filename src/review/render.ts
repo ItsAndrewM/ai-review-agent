@@ -4,6 +4,7 @@ import {
   type FindingInput,
   type Rejected,
   type ReviewSubmissionInput,
+  rowPath,
   type WalkthroughInput,
   type WrittenReview,
 } from "./findings.ts"
@@ -97,7 +98,8 @@ export function mergeWalkthrough(
   incoming: readonly WalkthroughInput[],
   covered: ReadonlySet<string>,
 ): WalkthroughInput[] {
-  const replacements = new Map(incoming.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
+  const rows = incoming.map((row) => ({ ...row, path: rowPath(row.path) }))
+  const replacements = new Map(rows.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
   const known = new Set(stored.map((row) => row.path))
   return [
     ...stored.map((row) => replacements.get(row.path) ?? row),
