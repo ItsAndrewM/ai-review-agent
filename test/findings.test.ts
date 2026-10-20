@@ -586,6 +586,21 @@ describe("mergeWalkthrough", () => {
       { path: "c.ts", summary: "new c" },
     ])
   })
+
+  it("matches a stored row written as ./a.ts too, so the new a.ts row replaces it instead of joining it", () => {
+    const merged = mergeWalkthrough(
+      [
+        { path: "./a.ts", summary: "old a" },
+        { path: "b.ts", summary: "old b" },
+      ],
+      [{ path: "a.ts", summary: "new a" }],
+      new Set(["a.ts"]),
+    )
+    expect(merged).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+    ])
+  })
 })
 
 describe("renderSummaryComment", () => {

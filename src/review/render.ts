@@ -98,13 +98,18 @@ export function mergeWalkthrough(
   incoming: readonly WalkthroughInput[],
   covered: ReadonlySet<string>,
 ): WalkthroughInput[] {
-  const rows = incoming.map((row) => ({ ...row, path: rowPath(row.path) }))
+  const kept = normalisedRows(stored)
+  const rows = normalisedRows(incoming)
   const replacements = new Map(rows.filter((row) => covered.has(row.path)).map((row) => [row.path, row]))
-  const known = new Set(stored.map((row) => row.path))
+  const known = new Set(kept.map((row) => row.path))
   return [
-    ...stored.map((row) => replacements.get(row.path) ?? row),
+    ...kept.map((row) => replacements.get(row.path) ?? row),
     ...[...replacements.values()].filter((row) => !known.has(row.path)),
   ]
+}
+
+function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
+  return rows.map((row) => ({ ...row, path: rowPath(row.path) }))
 }
 
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
