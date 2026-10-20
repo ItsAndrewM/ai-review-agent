@@ -182,6 +182,19 @@ Unit tests, in the existing Node suite:
   - a force-push gets a full review that repeats no open thread;
   - `@andabot full review` starts over.
 
+## Amended after the final review (19 Oct 2026)
+
+The whole-branch review found five places where the mechanism above defeated a goal. The builder changed the mechanism and kept the goals:
+
+- **Marked lines.** Only the pull request's own `+` lines are marked on the RIGHT. A context line the compare added is the base's change, merged in, so marking it broke "Merging `main` into the branch doesn't drag `main`'s changes in".
+- **Threads to re-check.** In `incremental` mode, these are the threads on a marked line, and the outdated threads whose quoted line the push added or deleted in that file. For a thread with no stored quote, any change to its file counts.
+  - **The skip.** A push skips only when no line is marked and no thread is due a re-check. Before, a push that only deleted the flagged line, the most common fix, marked nothing, so it was skipped and its thread never re-checked.
+  - **The prompt.** Such a file's compare patch appears under "New changes outside the diff".
+- **The cap.** The 30-thread cap applies only to the prompt's lists, newest first with the threads to re-check ahead. Duplicates and the open-blocking count use every open thread. Before, capping first hid the newest threads from re-check and from the duplicate check.
+- **Duplicates.** A quote matches only an outdated thread, and a blocking finding on the line of a thread that isn't blocking still posts. Before, a common line anywhere in the file counted as a repeat, and a blocking finding could vanish from the event.
+- **Resolving.** Threads are resolved before the event is chosen, so the event counts only real resolutions. The "Fixed in" reply comes after the review posts. "After the review posts" and "remain after this review's resolutions" couldn't both hold.
+- **`identical`** is treated as `incremental` with nothing new, not as `full`, so a redelivered push is skipped instead of fully reviewed.
+
 ## Left to the builder
 
 - The exact marker syntax for marked lines.

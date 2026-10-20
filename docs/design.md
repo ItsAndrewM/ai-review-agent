@@ -65,7 +65,7 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `reviewed`: the head of the last review, the base branch's name, the mode it ran in, and the last full review's summary and walkthrough, with a `since` section from the latest incremental one. The next push diffs against that head, and a different base branch (a retargeted pull request) means a full review.
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
 - `finding:<commentId>`: the severity, title and quoted line of each inline comment the bot posted. Thread state isn't stored. Whether a thread is resolved or outdated, and where it sits now, is read live from GitHub on each review, so a thread a person resolved is always seen as resolved. These records only supply what GitHub doesn't: the quote to catch a repeat, and the severity that gates approval.
-- `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, and the bot's open threads with their handles. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
+- `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, and the threads to re-check. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
 - `last_review`: the review id and event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) the bot last submitted.
 - `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume`.
@@ -131,21 +131,27 @@ Reviews follow CodeRabbit's model (#24). A push reviews only what changed since 
 
 - **`fresh`**, on `@andabot full review` or a check Re-run, is the whole pull request as before: no thread lists, no duplicate check, no resolving, and the event follows only this review's findings.
 - **`full`**, on a push with no `reviewed` record, a retargeted base, a failed compare, or any compare status but `ahead` or `identical`, is the whole pull request too, but it never repeats an open thread. `diverged` and `behind` mean rewritten history. The first push to each pull request after this shipped is `full`, so it doesn't repost every existing finding.
-- **`incremental`** reviews what changed since the last review. It covers the files in both the compare `reviewed...head` and the pull request's own diff, so a merge from the base branch drags nothing in.
+- **`incremental`** reviews what changed since the last review. It covers the pull request's files whose own changed lines the compare `reviewed...head` also changed, so a merge from the base branch drags nothing in.
 
-In `incremental` mode, the prompt shows the pull request's own numbered patch for each covered file, with the lines that changed since the last review starred after their anchors (`R12*`). It lists the other files by name only.
+In `incremental` mode, the prompt shows the pull request's own numbered patch for each covered file, with the lines that changed since the last review starred after their anchors (`R12*`). A file with a thread to re-check but no starred line gets the compare's patch instead, unnumbered, under "New changes outside the diff", so the model can see that the push deleted or reverted the flagged code. It lists the other files by name only.
 
-- **Why marked lines are the PR's own.** Comments anchor to the pull request's diff, not to the compare's, so marking that diff's lines keeps every anchor one GitHub accepts. RIGHT lines are marked by number, since both diffs number the head the same way. LEFT lines are marked by text, since their old-file numbers differ.
+- **Why marked lines are the PR's own.** Comments anchor to the pull request's diff, not to the compare's, so marking that diff's lines keeps every anchor one GitHub accepts. RIGHT lines are marked by number, since both diffs number the head the same way, and only the pull request's own `+` lines are marked: a context line the compare added is the base's change, merged in. LEFT lines are marked by text, since their old-file numbers differ.
 - **What a finding may anchor to.** A finding must sit on a marked line, except a blocking one: a bug the push causes in code it didn't edit, such as a caller of a changed function, still gets an inline comment if its line is in the diff.
-- **When nothing is covered.** When the push changes none of the pull request's own files, there is no model call. The check run completes as "No changes to review since `abc1234`".
+- **When there's nothing to review.** When no line is marked and no thread is due a re-check, there is no model call. The check run completes as "No changes to review since `abc1234`". A push whose changes all left the diff, such as deleting a line the pull request added, has nothing to comment on, so it is reviewed only through the threads it touched.
 - **An unchanged head.** `identical`, a head already reviewed, takes the same path, so a redelivered push isn't fully reviewed again.
 
-Both `incremental` and `full` reviews fetch the bot's open threads from GitHub's GraphQL `reviewThreads`. They list them for the model in two groups, with handles (`T1`, `T2`, …):
+Both `incremental` and `full` reviews fetch the bot's open threads from GitHub's GraphQL `reviewThreads` and list them for the model in two groups, with handles (`T1`, `T2`, …):
 
-- **The threads to re-check** are those GitHub marks outdated and, in `incremental` mode, those on a marked line.
-- **The other open threads** are listed so the model doesn't repeat them. A finding on an open thread's line, or quoting its code, is set aside as a duplicate. Like other rejections it goes back to the model once, but it doesn't hold approval back, since the open thread already does.
+- **The threads to re-check.** In `full` mode, these are the threads GitHub marks outdated. In `incremental` mode, they are the threads on a marked line, and the outdated threads whose quoted line the push added or deleted in that file. For a thread with no stored quote, any change to its file counts. Deleting the flagged line, the most common fix, re-checks its thread. Threads the push didn't touch are left alone.
+- **The other open threads** are listed so the model doesn't repeat them.
+- **Duplicates.** A finding is set aside as a duplicate when it sits on an open thread's line, or quotes the code of an outdated one (whose line GitHub no longer reports). A thread that isn't outdated still has its line, so a common line such as `}` elsewhere in the file is no repeat. The check runs against every open thread, listed or not. A blocking finding on the line of a thread that isn't blocking still posts, since that thread doesn't gate approval. Like other rejections a duplicate goes back to the model once, but it doesn't hold approval back, since the open thread already does.
+- **The cap.** The lists hold at most 30 threads, newest first, with the threads to re-check ahead of the rest. A note counts the threads left out.
 
-The model names the threads it fixed in `addressed_threads`. The host replies "Fixed in `def5678`." on each and resolves it with `resolveReviewThread`, best effort, like the check-run calls. Only the bot's own unresolved threads are touched. Such a review never approves while one of the bot's blocking threads stays open, counting past the 30 it lists. If the threads couldn't be read, it never approves at all.
+The model names the threads it fixed in `addressed_threads`. Only the bot's own unresolved threads are touched:
+
+- **Before the review is chosen,** the host resolves each named thread with `resolveReviewThread`, best effort, like the check-run calls. The event then counts only the threads that resolved.
+- **After the review posts,** it replies "Fixed in `def5678`." on each one that resolved. A publish retried after a failed `createReview` resolves again, which is harmless, but never replies twice.
+- **Approval.** Such a review never approves while one of the bot's blocking threads stays open, counting every open thread, not only those listed. If the threads couldn't be read, it never approves at all.
 
 The summary comment keeps the last full review's summary and walkthrough. An incremental review replaces the walkthrough rows of the files it covered and adds a "Since `abc1234`" section. The review's body says what it covered: "Incremental review of `abc1234..def5678`: 3 files; 2 threads resolved." or "Full review.". `review.start` logs `mode`, `since`, `covered` and `recheck`; `review.resolved` and `review.skip` (`no_new_changes`) say what happened.
 
