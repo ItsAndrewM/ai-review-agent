@@ -15,6 +15,7 @@ export const PullRequestInfo = Type.Object({
   user: Type.Object({ login: Type.String() }),
   base: Type.Object({ ref: Type.String(), sha: Type.String(), repo: Type.Object({ full_name: Type.String() }) }),
   head: Type.Object({ ref: Type.String(), sha: Type.String() }),
+  draft: Type.Optional(Type.Boolean()),
   changed_files: Type.Integer(),
   additions: Type.Integer(),
   deletions: Type.Integer(),
@@ -43,6 +44,18 @@ const CreatedReview = Type.Object({ id: Type.Integer() })
 const CreatedReply = Type.Object({ id: Type.Integer() })
 const CheckRun = Type.Object({ id: Type.Integer() })
 const CollaboratorPermission = Type.Object({ permission: Type.String() })
+
+const CheckRunsPage = Type.Object({
+  total_count: Type.Integer(),
+  check_runs: Type.Array(
+    Type.Object({
+      name: Type.String(),
+      status: Type.String(),
+      conclusion: Type.Union([Type.String(), Type.Null()]),
+      app: Type.Union([Type.Object({ slug: Type.Optional(Type.String()) }), Type.Null()]),
+    }),
+  ),
+})
 
 const SideValue = Type.Union([Type.Literal("LEFT"), Type.Literal("RIGHT")])
 
@@ -146,6 +159,15 @@ export interface ReviewThread {
   authorIsBot: boolean
 }
 
+export interface CheckRunSummary {
+  name: string
+  status: string
+  conclusion: string | null
+  app: string | null
+}
+
+type CheckRunNode = Static<typeof CheckRunsPage>["check_runs"][number]
+
 type GraphQLVariables = Record<string, string | number | null>
 
 type ThreadsPage = Static<typeof ReviewThreadsPage>["data"]["repository"]["pullRequest"]["reviewThreads"]
@@ -195,6 +217,7 @@ const PER_PAGE = 100
 const MOST_FILES_GITHUB_LISTS = 3000
 const MOST_COMMENT_PAGES = 10
 const MOST_THREAD_PAGES = 5
+const MOST_CHECK_RUN_PAGES = 10
 
 export class GitHubClient {
   constructor(
@@ -250,6 +273,10 @@ export class GitHubClient {
     return comments
   }
 
+  async getIssueComment(ref: RepoRef, commentId: number): Promise<IssueComment> {
+    return this.json(IssueComment, `/repos/${ref.owner}/${ref.repo}/issues/comments/${commentId}`)
+  }
+
   async createIssueComment(ref: RepoRef, number: number, body: string): Promise<IssueComment> {
     return this.json(IssueComment, `/repos/${ref.owner}/${ref.repo}/issues/${number}/comments`, {
       method: "POST",
@@ -285,6 +312,19 @@ export class GitHubClient {
       body: JSON.stringify(update),
     })
     return { id }
+  }
+
+  async listCheckRuns(ref: RepoRef, sha: string): Promise<CheckRunSummary[]> {
+    const runs: CheckRunSummary[] = []
+    for (let page = 1; page <= MOST_CHECK_RUN_PAGES; page++) {
+      const batch = await this.json(
+        CheckRunsPage,
+        `/repos/${ref.owner}/${ref.repo}/commits/${sha}/check-runs?per_page=${PER_PAGE}&page=${page}`,
+      )
+      runs.push(...batch.check_runs.map(summarizeCheckRun))
+      if (runs.length >= batch.total_count || batch.check_runs.length < PER_PAGE) return runs
+    }
+    throw new Error(`GitHub: more than ${MOST_CHECK_RUN_PAGES * PER_PAGE} check runs on ${sha}`)
   }
 
   async compareCommits(ref: RepoRef, base: string, head: string): Promise<Comparison> {
@@ -419,6 +459,10 @@ function flattenThread(node: Static<typeof ThreadNode>): ReviewThread[] {
       authorIsBot: first.author?.__typename === "Bot",
     },
   ]
+}
+
+function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): CheckRunSummary {
+  return { name, status, conclusion, app: app?.slug ?? null }
 }
 
 function encodePath(path: string): string {

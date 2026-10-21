@@ -1,12 +1,14 @@
 import { Type, type Static } from "typebox"
 import type { Incoming } from "./pull-request.ts"
 import type { PullRequestKey } from "./records.ts"
+import type { WebhookTrigger } from "./review/approval.ts"
 
 const Account = Type.Object({ login: Type.String() })
 
 const CheckTarget = Type.Object({
   head_sha: Type.String(),
   pull_requests: Type.Array(Type.Object({ number: Type.Integer() })),
+  app: Type.Optional(Type.Union([Type.Object({ slug: Type.Optional(Type.String()) }), Type.Null()])),
 })
 
 export const WebhookPayload = Type.Object({
@@ -47,14 +49,21 @@ export type Routed = { kind: "handle"; incoming: Incoming[] } | { kind: "ignore"
 const REVIEW_ACTIONS = new Set(["opened", "reopened", "ready_for_review", "synchronize"])
 
 export function routeWebhook(eventName: string, payload: WebhookPayload, deliveryId: string, botLogin: string): Routed {
-  if (payload.sender?.type === "Bot") return ignore("sent by a bot")
   const repo = repoKeyOf(payload)
   if (!repo) return ignore("no installation or repository")
-  return routeEvent(eventName, payload, { repo, deliveryId, action: payload.action }, botLogin)
+  const delivery = { repo, deliveryId, action: payload.action }
+  if (eventName === "check_suite" && delivery.action === "completed") {
+    return routeCompletedSuite(payload.check_suite, delivery, botLogin)
+  }
+  if (payload.sender?.type === "Bot") return ignore("sent by a bot")
+  return routeEvent(eventName, payload, delivery, botLogin)
 }
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
   if (eventName === "pull_request" && payload.pull_request) return routePullRequest(payload.pull_request, delivery)
+  if (eventName === "pull_request_review_thread" && payload.pull_request) {
+    return routeThread(payload.pull_request, delivery)
+  }
   if (eventName === "issue_comment" && payload.comment && payload.issue) {
     return routeComment(payload.issue, payload.comment, delivery, botLogin)
   }
@@ -137,6 +146,33 @@ function routeCheck(
     return review
   })
   return { kind: "handle", incoming }
+}
+
+function routeThread(pullRequest: PullRequestEvent, delivery: Delivery): Routed {
+  const trigger = threadTrigger(delivery.action)
+  if (trigger === undefined) return ignore(`pull_request_review_thread ${delivery.action ?? ""}`)
+  if (pullRequest.draft) return ignore("draft pull request")
+  return { kind: "handle", incoming: [approval(delivery, pullRequest.number, trigger)] }
+}
+
+function threadTrigger(action: string | undefined): WebhookTrigger | undefined {
+  if (action === "resolved") return "thread_resolved"
+  if (action === "unresolved") return "thread_unresolved"
+  return undefined
+}
+
+function routeCompletedSuite(suite: CheckTarget | undefined, delivery: Delivery, botLogin: string): Routed {
+  if (!suite) return ignore("check_suite completed without a suite")
+  if (suite.app?.slug === botLogin) return ignore(`${botLogin}'s own check suite`)
+  if (suite.pull_requests.length === 0) return ignore("check with no pull request")
+  return {
+    kind: "handle",
+    incoming: suite.pull_requests.map(({ number }) => approval(delivery, number, "checks_completed")),
+  }
+}
+
+function approval(delivery: Delivery, number: number, trigger: WebhookTrigger): Incoming {
+  return { kind: "approval", key: { ...delivery.repo, number }, deliveryId: delivery.deliveryId, trigger }
 }
 
 function ignore(reason: string): Routed {

@@ -192,3 +192,79 @@ describe("routeWebhook for checks", () => {
     })
   })
 })
+
+const key3 = { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 }
+const threadPr = { number: 3, head: { sha: "abc" } }
+
+function threadEvent(overrides: Partial<WebhookPayload>) {
+  return routeWebhook(
+    "pull_request_review_thread",
+    { ...base, action: "resolved", pull_request: threadPr, ...overrides },
+    "d",
+    "andabot",
+  )
+}
+
+function completedSuite(check_suite: NonNullable<WebhookPayload["check_suite"]>, sender = base.sender) {
+  return routeWebhook("check_suite", { ...base, sender, action: "completed", check_suite }, "d", "andabot")
+}
+
+describe("routeWebhook for approval", () => {
+  it("turns a resolved or an unresolved thread into an approval evaluation", () => {
+    expect(threadEvent({})).toEqual({
+      kind: "handle",
+      incoming: [{ kind: "approval", key: key3, deliveryId: "d", trigger: "thread_resolved" }],
+    })
+    expect(threadEvent({ action: "unresolved" })).toEqual({
+      kind: "handle",
+      incoming: [{ kind: "approval", key: key3, deliveryId: "d", trigger: "thread_unresolved" }],
+    })
+  })
+
+  it("ignores a thread event on a draft, from a bot, or with another action", () => {
+    expect(threadEvent({ pull_request: { ...threadPr, draft: true } })).toEqual({
+      kind: "ignore",
+      reason: "draft pull request",
+    })
+    expect(threadEvent({ sender: { login: "andabot[bot]", type: "Bot" } })).toEqual({
+      kind: "ignore",
+      reason: "sent by a bot",
+    })
+    expect(threadEvent({ action: "edited" })).toEqual({ kind: "ignore", reason: "pull_request_review_thread edited" })
+  })
+
+  it("evaluates each pull request a finished suite lists, even when a bot sent it", () => {
+    const routed = completedSuite(
+      { head_sha: "abc", pull_requests: [{ number: 3 }, { number: 4 }], app: { slug: "github-actions" } },
+      { login: "github-actions[bot]", type: "Bot" },
+    )
+    expect(routed).toEqual({
+      kind: "handle",
+      incoming: [3, 4].map((number) => ({
+        kind: "approval",
+        key: { ...key3, number },
+        deliveryId: "d",
+        trigger: "checks_completed",
+      })),
+    })
+  })
+
+  it("ignores andabot's own finished suite and a finished suite with no pull request", () => {
+    expect(completedSuite({ head_sha: "abc", pull_requests: [{ number: 3 }], app: { slug: "andabot" } })).toEqual({
+      kind: "ignore",
+      reason: "andabot's own check suite",
+    })
+    expect(completedSuite({ head_sha: "abc", pull_requests: [], app: { slug: "github-actions" } })).toEqual({
+      kind: "ignore",
+      reason: "check with no pull request",
+    })
+  })
+
+  it("evaluates a finished suite whose app is null or has no slug", () => {
+    const withApp = { ...base, action: "completed", check_suite: { ...checkTarget, app: { id: 2, name: "Legacy" } } }
+    expect(Value.Check(WebhookPayload, withApp)).toBe(true)
+    expect(Value.Check(WebhookPayload, { ...withApp, check_suite: { ...checkTarget, app: null } })).toBe(true)
+    expect(completedSuite({ ...checkTarget, app: null })).toMatchObject({ kind: "handle" })
+    expect(completedSuite({ ...checkTarget, app: {} })).toMatchObject({ kind: "handle" })
+  })
+})

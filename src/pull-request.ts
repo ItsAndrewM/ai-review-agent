@@ -22,6 +22,20 @@ import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./git
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
+import {
+  checksState,
+  decideApproval,
+  evaluatesAfterReview,
+  LastReview,
+  lastReviewOf,
+  openBlockingIn,
+  verdictAfterChecks,
+  type ApprovalState,
+  type ApprovalTrigger,
+  type ChecksState,
+  type WaitReason,
+  type WebhookTrigger,
+} from "./review/approval.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -93,15 +107,19 @@ import {
   reviewPrompt,
 } from "./review/prompt.ts"
 import {
+  approvalBody,
   chooseReviewEvent,
   incompleteNote,
   renderReviewBody,
   renderSummaryComment,
   renderUnpostedNote,
   renderUnpostedSummary,
+  reviewEventOf,
   SUMMARY_MARKER,
+  withApprovedVerdict,
   type Coverage,
   type RetryOutcome,
+  type Verdict,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
@@ -124,6 +142,12 @@ export type Incoming =
       deliveryId: string
       author: string
       body: string
+    }
+  | {
+      kind: "approval"
+      key: PullRequestKey
+      deliveryId: string
+      trigger: WebhookTrigger
     }
 
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
@@ -153,6 +177,13 @@ interface ReviewRun {
 
 type ReviewSource = "tool" | "text" | "retry" | "retry_text"
 
+interface ApprovalContext {
+  number: number
+  head: string
+  trigger: ApprovalTrigger
+  delivery: string | undefined
+}
+
 const StoredDetailText = Type.String()
 
 export class PullRequest extends DurableObject<Env> implements ReviewHost {
@@ -181,6 +212,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #pr: PullRequestInfo | undefined
   #files: ChangedFile[] | undefined
   #incompleteDelivery: string | undefined
+  #approving = new Set<string>()
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -316,9 +348,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       pr,
       addressedThreads(submission.addressed_threads, scope.recheck).resolve,
     )
-    const openBlocking = scope.mode === "fresh" ? undefined : openBlockingAfter(scope, resolved)
-    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
-    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
+    const verdict = await this.reviewVerdict(pr, submission, scoped, openBlockingAfter(scope, resolved))
+    const event = reviewEventOf(verdict)
     const key = await this.key()
     const github = await this.github()
     const attribution = attributionOf(pending)
@@ -334,7 +365,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
-      event,
+      event: verdict,
       submission: submissionFromRecord(submission, reviewed),
       accepted: scoped.accepted,
       droppedCount: scoped.rejected.length,
@@ -347,9 +378,25 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const review = await github.createReview(key, key.number, {
       commit_id: pr.head.sha,
       event,
-      body: renderReviewBody(event, scoped.accepted, scoped.rejected, coverageOf(scope, pr.head.sha, resolved.length)),
+      body: renderReviewBody(
+        verdict,
+        scoped.accepted,
+        scoped.rejected,
+        coverageOf(scope, pr.head.sha, resolved.length),
+      ),
       comments: scoped.accepted.map(toReviewComment),
     })
+    await this.ctx.storage.put<LastReview>(
+      "lastReview",
+      lastReviewOf({
+        reviewId: review.id,
+        event,
+        headSha: pr.head.sha,
+        verdict: submission.verdict,
+        rejected: scoped.rejected,
+        at: Date.now(),
+      }),
+    )
     await this.replyFixed(pr, resolved)
     await this.storeFindings(pr, scoped.accepted, review.id)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
@@ -362,8 +409,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     await this.endOwnRun(
       pending.deliveryId,
-      postedCheckRun(event, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
+      postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
     )
+    if (evaluatesAfterReview(event, scoped.accepted)) {
+      this.ctx.waitUntil(this.evaluateApproval("review", pending.deliveryId))
+    }
     const dropped =
       scoped.rejected.length > 0
         ? ` ${scoped.rejected.length} finding(s) that still failed the checks were dropped.`
@@ -372,6 +422,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       text: `Posted review ${review.id} (${event}) with ${scoped.accepted.length} inline comment(s).${dropped}`,
       done: true,
     }
+  }
+
+  private async reviewVerdict(
+    pr: PullRequestInfo,
+    submission: ReviewSubmissionInput,
+    scoped: ScopedReview,
+    openBlocking: number | "unknown",
+  ): Promise<Verdict> {
+    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
+    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
+    const checks = event === "APPROVE" ? await this.checksOn(pr.head.sha) : undefined
+    return verdictAfterChecks(event, checks)
   }
 
   private async storeFindings(pr: PullRequestInfo, accepted: readonly FindingInput[], reviewId: number): Promise<void> {
@@ -429,6 +491,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return this.review(incoming, callerVersion)
       case "comment":
         return this.comment(incoming, callerVersion)
+      case "approval":
+        return this.evaluateApproval(incoming.trigger, incoming.deliveryId)
     }
   }
 
@@ -610,7 +674,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const mode = chooseMode({ full: incoming.full, reviewed, baseRef: pr.base.ref, compareStatus: comparison?.status })
     const since = mode === "incremental" ? (comparison?.files ?? []) : []
     const covered = coveredFiles(files, since)
-    const threads = mode === "fresh" ? undefined : await this.threadPlan(pr, mode, covered, since)
+    const threads = await this.threadPlan(pr, mode, covered, since)
     const changed = pathsChangedSince(files, since)
     const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads, changed })
     if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
@@ -883,6 +947,103 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
+  private async evaluateApproval(trigger: ApprovalTrigger, deliveryId: string | undefined): Promise<void> {
+    try {
+      const pr = await this.currentPullRequest()
+      const decision = decideApproval(await this.approvalState(pr))
+      const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
+      if (decision.kind === "wait") return logWait(context, decision.reason)
+      await this.approve(pr.head.sha, context)
+    } catch (error) {
+      logError("approval.failed", { trigger, delivery: deliveryId, error: errorText(error) })
+    }
+  }
+
+  private async currentPullRequest(): Promise<PullRequestInfo> {
+    const key = await this.key()
+    return (await this.github()).getPullRequest(key, key.number)
+  }
+
+  private async approvalState(pr: PullRequestInfo): Promise<ApprovalState> {
+    return {
+      workflow: this.env.REQUEST_CHANGES_WORKFLOW === "true",
+      paused: await this.isPaused(),
+      open: pr.state === "open" && pr.draft !== true,
+      reviewInFlight: (await this.readPending()) !== undefined,
+      headSha: pr.head.sha,
+      reviewedHead: (await this.readReviewed())?.headSha,
+      lastReview: await this.readLastReview(),
+      openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), [])),
+      checks: await this.checksOn(pr.head.sha),
+    }
+  }
+
+  private async isPaused(): Promise<boolean> {
+    return (await this.ctx.storage.get("paused")) === true
+  }
+
+  private async readLastReview(): Promise<LastReview | undefined> {
+    const stored = await this.ctx.storage.get("lastReview")
+    return Value.Check(LastReview, stored) ? stored : undefined
+  }
+
+  private async checksOn(sha: string): Promise<ChecksState> {
+    try {
+      const key = await this.key()
+      return checksState(await (await this.github()).listCheckRuns(key, sha), this.botLogin())
+    } catch (error) {
+      logError("approval.checks_failed", { head: shortSha(sha), error: errorText(error) })
+      return "unknown"
+    }
+  }
+
+  private async approve(head: string, context: ApprovalContext): Promise<void> {
+    if (this.#approving.has(head)) return logWait(context, "approving")
+    this.#approving.add(head)
+    try {
+      await this.submitApproval(head, context)
+    } finally {
+      this.#approving.delete(head)
+    }
+  }
+
+  private async submitApproval(head: string, context: ApprovalContext): Promise<void> {
+    if ((await this.currentPullRequest()).head.sha !== head) return logWait(context, "head_moved")
+    if ((await this.readLastReview())?.event === "APPROVE") return logWait(context, "approved")
+    const key = await this.key()
+    const review = await (
+      await this.github()
+    ).createReview(key, key.number, {
+      commit_id: head,
+      event: "APPROVE",
+      body: approvalBody(head),
+      comments: [],
+    })
+    await this.ctx.storage.put<LastReview>("lastReview", {
+      reviewId: review.id,
+      event: "APPROVE",
+      headSha: head,
+      heldBack: 0,
+      at: Date.now(),
+    })
+    await this.rewriteSummaryVerdict(head)
+    log("approval.posted", { ...context, review: review.id })
+  }
+
+  private async rewriteSummaryVerdict(headSha: string): Promise<void> {
+    try {
+      const commentId = await this.summaryCommentId()
+      if (commentId === undefined) return
+      const key = await this.key()
+      const github = await this.github()
+      const comment = await github.getIssueComment(key, commentId)
+      const body = withApprovedVerdict(comment.body ?? "", headSha)
+      if (body !== undefined) await github.updateIssueComment(key, commentId, body)
+    } catch (error) {
+      logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })
+    }
+  }
+
   private async storedFailureDetail(operationId: string): Promise<string | undefined> {
     try {
       const storage = await this.harness.storage()
@@ -1074,6 +1235,10 @@ function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: P
     status: result.status,
     ...transcriptFields(summarizeTranscript(result.messages)),
   })
+}
+
+function logWait(context: ApprovalContext, reason: WaitReason): void {
+  log("approval.decided", { ...context, decision: "wait", reason })
 }
 
 function retryOutcome(failure: string | undefined, refusal: string | undefined): RetryOutcome {
