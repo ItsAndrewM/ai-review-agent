@@ -18,6 +18,11 @@ export interface RenderedStandards {
   cut: string[]
 }
 
+export interface PathInstruction {
+  readonly path: string
+  readonly instructions: string
+}
+
 export const MAX_STANDARDS_CHARS = 12_000
 
 const CONFIG_FILE = ".andabot.yaml"
@@ -72,7 +77,12 @@ const nestedPaths = (blobs: ReadonlySet<string>, changed: readonly string[]): st
 
 const rootPaths = (blobs: ReadonlySet<string>): string[] => ROOT_FILES.filter((path) => blobs.has(path))
 
-export const isRootFile = (path: string): boolean => ROOT_FILES.includes(path)
+const isRootFile = (path: string): boolean => ROOT_FILES.includes(path)
+
+const isNestedFile = (path: string): boolean => NESTED_FILES.some((file) => path.endsWith(`/${file}`))
+
+export const mayBeInstructionFile = (path: string): boolean =>
+  isRootFile(path) || isNestedFile(path) || INSTRUCTIONS_GLOB.match(path)
 
 export function instructionCandidates(entries: readonly TreeEntry[], changed: readonly string[]): string[] {
   const blobs = new Set(entries.filter(({ type }) => type === "blob").map(({ path }) => path))
@@ -145,7 +155,7 @@ export function frontmatterStripped(text: string): string {
   return block === null ? text : (block[2] ?? "")
 }
 
-const sourceOf = (path: string): StandardSource => {
+export const sourceOf = (path: string): StandardSource => {
   if (path.endsWith(INSTRUCTIONS_SUFFIX)) return "instructions"
   return isRootFile(path) ? "root" : "nested"
 }
@@ -169,7 +179,7 @@ const withTextOnce = (standards: readonly Standard[]): Standard[] => {
 export function orderedStandards(
   loaded: readonly { path: string; text: string }[],
   changed: readonly string[],
-  pathInstructions: readonly { path: string; instructions: string }[],
+  pathInstructions: readonly PathInstruction[],
 ): Standard[] {
   const configured = pathInstructions
     .filter(({ path }) => matchesAnyPath(path, changed))

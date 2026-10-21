@@ -5,8 +5,10 @@ import {
   frontmatterStripped,
   instructionCandidates,
   MAX_STANDARDS_CHARS,
+  mayBeInstructionFile,
   orderedStandards,
   renderStandards,
+  sourceOf,
   type Standard,
 } from "../src/repository/instructions.ts"
 
@@ -148,6 +150,49 @@ describe("instructionCandidates", () => {
     const entries = [blob("apps/web/CLAUDE.md"), blob("CLAUDE.md")]
     expect(instructionCandidates(entries, ["README.md"])).toEqual(["CLAUDE.md"])
     expect(instructionCandidates(entries, [])).toEqual(["CLAUDE.md"])
+  })
+})
+
+describe("mayBeInstructionFile", () => {
+  it("holds for the root files, a NAME.instructions.md directly inside .github/instructions, and a CLAUDE.md or AGENTS.md in any directory", () => {
+    for (const path of [
+      "CLAUDE.md",
+      "AGENTS.md",
+      "REVIEW.md",
+      "CODING_STANDARDS.md",
+      ".github/copilot-instructions.md",
+      "CONTRIBUTING.md",
+      ".github/instructions/ts.instructions.md",
+      "apps/CLAUDE.md",
+      "apps/web/src/AGENTS.md",
+    ]) {
+      expect(mayBeInstructionFile(path)).toBe(true)
+    }
+  })
+
+  it("does not hold for any other path, a lookalike included", () => {
+    for (const path of [
+      "README.md",
+      "src/a.ts",
+      "apps/README.md",
+      "docs/CLAUDE.md.bak",
+      "docs/MY-CLAUDE.md",
+      "apps/REVIEW.md",
+      ".github/instructions/README.md",
+      ".github/instructions/frontend/react.instructions.md",
+      "docs/style.instructions.md",
+    ]) {
+      expect(mayBeInstructionFile(path)).toBe(false)
+    }
+  })
+})
+
+describe("sourceOf", () => {
+  it("names an instructions file, a root file and a nested file by their source", () => {
+    expect(sourceOf(".github/instructions/ts.instructions.md")).toBe("instructions")
+    expect(sourceOf("CLAUDE.md")).toBe("root")
+    expect(sourceOf(".github/copilot-instructions.md")).toBe("root")
+    expect(sourceOf("apps/web/AGENTS.md")).toBe("nested")
   })
 })
 

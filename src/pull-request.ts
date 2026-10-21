@@ -24,6 +24,7 @@ import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputL
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
   CONTEXT_PREFIX,
+  contextInputs,
   contextKey,
   loadRepositoryContext,
   readRepositoryContext,
@@ -622,21 +623,36 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async repositoryStandards(pr: PullRequestInfo, files: readonly ChangedFile[]): Promise<ReviewStandards> {
-    const changed = files.map(({ filename }) => filename)
-    const github = await this.github()
-    const key = await this.key()
-    const cached = await this.cachedContext(pr.base.sha)
-    const context = await readRepositoryContext(
-      () => loadRepositoryContext(github, key, pr.base.sha, changed, cached),
-      (error) => logError("context.unreadable", { number: pr.number, base: shortSha(pr.base.sha), error }),
-    )
-    if (context !== undefined && context !== cached) await this.cacheContext(context)
+    const { baseSha, changed } = contextInputs(pr, files)
+    const context = await this.repositoryContext(pr.number, baseSha, changed)
     return reviewStandards(context, changed, [])
   }
 
+  private async repositoryContext(
+    number: number,
+    baseSha: string,
+    changed: readonly string[],
+  ): Promise<RepositoryContext | undefined> {
+    const github = await this.github()
+    const key = await this.key()
+    const cached = await this.cachedContext(baseSha)
+    const fields = { number, base: shortSha(baseSha) }
+    const unreadableFile = (path: string, error: string): void =>
+      logError("context.unreadable", { ...fields, path, error })
+    const context = await readRepositoryContext(
+      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
+      (error) => logError("context.unreadable", { ...fields, error }),
+    )
+    if (context !== undefined && context !== cached) await this.cacheContext(context)
+    return context
+  }
+
   private async cachedContext(baseSha: string): Promise<RepositoryContext | undefined> {
-    const stored = await this.ctx.storage.get(contextKey(baseSha))
-    return Value.Check(StoredRepositoryContext, stored) ? stored : undefined
+    const key = contextKey(baseSha)
+    const stored = await this.ctx.storage.get(key)
+    if (Value.Check(StoredRepositoryContext, stored)) return stored
+    if (stored !== undefined) await this.ctx.storage.delete(key)
+    return undefined
   }
 
   private async cacheContext(context: RepositoryContext): Promise<void> {
@@ -646,7 +662,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (stale.length > 0) await this.ctx.storage.delete(stale)
       await this.ctx.storage.put(contextKey(context.baseSha), context)
     } catch (error) {
-      logError("review.context_uncached", { base: shortSha(context.baseSha), error: errorText(error) })
+      logError("context.uncached", { base: shortSha(context.baseSha), error: errorText(error) })
     }
   }
 
@@ -667,6 +683,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("review.start", {
         number: pr.number,
         head: shortSha(pr.head.sha),
+        base: shortSha(pr.base.sha),
         files: files.length,
         linkedIssues: issues.length,
         instructionFiles: standards.used.length,
