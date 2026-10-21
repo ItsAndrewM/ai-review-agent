@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox"
+import { ReviewSpend } from "./review/cost.ts"
 
 export const PullRequestKey = Type.Object({
   installationId: Type.Integer(),
@@ -24,6 +25,7 @@ export const PostedReview = Type.Object({
   fingerprint: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   counts: Type.Optional(SeverityCounts),
+  spend: Type.Optional(ReviewSpend),
 })
 
 export type PostedReview = Static<typeof PostedReview>
