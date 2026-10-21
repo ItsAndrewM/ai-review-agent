@@ -7,6 +7,12 @@ describe("helpText", () => {
       "`@andabot full review`: start over: review the whole pull request again, ignoring earlier reviews.",
     )
   })
+
+  it("says a reply under an inline comment is answered in that thread", () => {
+    expect(helpText("andabot")).toContain(
+      "Reply under one of my inline comments to ask about it, and I'll answer in that thread.",
+    )
+  })
 })
 
 describe("parseCommand", () => {

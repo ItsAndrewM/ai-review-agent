@@ -21,6 +21,7 @@ export function helpText(botLogin: string): string {
     `- \`@${botLogin} help\`: this message.`,
     "",
     `Anything else after \`@${botLogin}\` is a question for the reviewer about this pull request.`,
+    "Reply under one of my inline comments to ask about it, and I'll answer in that thread.",
   ].join("\n")
 }
 

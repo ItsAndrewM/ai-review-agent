@@ -50,7 +50,7 @@ Events the App subscribes to:
 | `pull_request` | opened, synchronize, reopened, ready_for_review | review (incremental on synchronize) |
 | `pull_request` | closed | archive: stop alarms, keep transcript |
 | `issue_comment` | created, on a PR | command or chat turn |
-| `pull_request_review_comment` | created | reply in thread, with file and line context |
+| `pull_request_review_comment` | created | a mention, or a reply in one of andabot's threads: answer in that thread, with its file, line and hunk |
 | `pull_request_review_thread` | resolved, unresolved | re-evaluate approval; ignored on a draft or when a bot sent it, so andabot's own resolutions are left to the review that made them |
 | `check_run` / `check_suite` | rerequested | full review of each listed pull request; dormant, since GitHub shows no Re-run on andabot's runs (#8) |
 | `check_suite` | requested | ignored: the pull request event starts the review |
@@ -189,7 +189,9 @@ The evaluation logs `approval.decided` with its trigger, the head and the reason
 
 `@andabot <command>` in an issue comment or review comment. The App's login is `andabot[bot]`; GitHub resolves the mention `@andabot` to it. Commands: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`. Anything else is a chat turn in the PR's Pi session, which already holds the review transcript, so "why is this a problem?" on a thread works without re-reading the PR. Replies to a review comment go back on that thread.
 
-Only users with write access to the repo can issue commands; the router checks the commenter's permission before forwarding.
+A reply in a review thread whose first comment is andabot's is a question about that finding and needs no mention; in any other review thread, `@andabot` asks. The router passes every review comment that mentions the bot or replies in a thread, and the object looks the thread up through GraphQL `reviewThreads` to tell whose it is. The answer's prompt carries the thread's file, line, diff hunk and opening comment, and the answer goes under the thread's first comment, since GitHub takes replies only to a thread's top-level comment.
+
+Only users with write access to the repo can issue commands; the object checks the commenter's permission before acting.
 
 ### Configuration file
 

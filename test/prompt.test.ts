@@ -3,6 +3,7 @@ import type { PullRequestInfo } from "../src/github/client.ts"
 import type { OpenThread } from "../src/review/incremental.ts"
 import {
   answerPrompt,
+  threadAnswerPrompt,
   fullPrompt,
   incrementalPrompt,
   isResubmitPrompt,
@@ -387,5 +388,42 @@ describe("answerPrompt", () => {
     )
     expect(text.startsWith('<skill_content name="answer"')).toBe(true)
     expect(text).toContain("andrew asks, in a comment on the pull request:\n\nwhy is this a problem?")
+  })
+})
+
+describe("threadAnswerPrompt", () => {
+  const skill = '<skill_content name="answer" version="1">\nx\n</skill_content>'
+  const thread = {
+    path: "src/a.ts",
+    line: 12,
+    diffHunk: "@@ -10,3 +10,3 @@\n-a\n+b",
+    opening: "**🔴 Blocking: x**\n\nThe caller drops it.",
+  }
+
+  it("puts the thread's file, line, hunk and opening comment before the question", () => {
+    const text = threadAnswerPrompt("andrew", "why?", skill, thread)
+    expect(text.startsWith('<skill_content name="answer"')).toBe(true)
+    expect(text).toContain(
+      "andrew replies in a review thread on `src/a.ts` line 12:\n\n```diff\n@@ -10,3 +10,3 @@\n-a\n+b\n```",
+    )
+    expect(text).toContain("The thread opens with this comment:\n\n**🔴 Blocking: x**")
+    expect(text.endsWith("why?\n\nAnswer them directly, in text.")).toBe(true)
+  })
+
+  it("calls a thread with no line outdated", () => {
+    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, line: null })).toContain(
+      "on `src/a.ts`, on a line the latest push no longer shows",
+    )
+  })
+
+  it("leaves the opening comment out when the thread couldn't be read", () => {
+    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, opening: undefined })).not.toContain(
+      "The thread opens with this comment",
+    )
+  })
+
+  it("fences a hunk that itself holds three backticks with four", () => {
+    const text = threadAnswerPrompt("andrew", "why?", skill, { ...thread, diffHunk: "@@ -1 +1 @@\n+```ts" })
+    expect(text).toContain("````diff\n@@ -1 +1 @@\n+```ts\n````")
   })
 })
