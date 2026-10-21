@@ -56,7 +56,8 @@ export function postedEarlierCheckRun(
   completedAt: number,
 ): UpdateCheckRun {
   const title = posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
-  const summary = `Review ${posted.reviewId} was posted by an earlier run of this head. Details opens its summary comment.`
+  const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
+  const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
 }
 

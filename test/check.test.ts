@@ -69,7 +69,15 @@ describe("postedEarlierCheckRun", () => {
   })
 
   it("titles the run with the verdict alone for a record from before reviews stored their counts", () => {
-    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, undefined, at).output.title).toBe("Approved")
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, "https://example.test", at).output.title).toBe(
+      "Approved",
+    )
+  })
+
+  it("doesn't point to Details when the summary comment's id is gone and the run has no link", () => {
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, undefined, at).output.summary).toBe(
+      "Review 9 was posted by an earlier run of this head.",
+    )
   })
 })
 
