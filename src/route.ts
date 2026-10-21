@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
-import type { Incoming, PullRequestKey } from "./pull-request.ts"
+import type { Incoming } from "./pull-request.ts"
+import type { PullRequestKey } from "./records.ts"
 import type { WebhookTrigger } from "./review/approval.ts"
 
 const Account = Type.Object({ login: Type.String() })

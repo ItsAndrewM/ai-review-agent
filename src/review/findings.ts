@@ -74,7 +74,8 @@ export const MergeDanger = Type.Object(
 
 export const ReviewSubmission = Type.Object({
   summary: Type.String({
-    description: "Two to five sentences on what the pull request does and how it does it. Markdown.",
+    description:
+      "Two to five sentences on what the pull request does and how it does it, naming each linked-issue requirement the diff leaves out, in the issue's words. Markdown.",
   }),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
@@ -410,7 +411,7 @@ export const SEVERITY_LABEL = {
 export function toReviewComment(finding: FindingInput): ReviewComment {
   const side = finding.side ?? "RIGHT"
   let body = `**${SEVERITY_LABEL[finding.severity]}: ${finding.title.trim()}**\n\n${finding.body.trim()}`
-  body += `\n\n_Basis: ${finding.basis.trim()}_`
+  body += `\n\n_Basis (${finding.basis_kind}): ${finding.basis.trim()}_`
   if (finding.suggestion !== undefined) {
     body += `\n\n\`\`\`suggestion\n${finding.suggestion.replace(/\n$/, "")}\n\`\`\``
   }

@@ -5,13 +5,14 @@ import {
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
   postedCheckRun,
+  postedEarlierCheckRun,
   replacedCheckRun,
   startedCheckRun,
   summaryCommentLink,
   supersededCheckRun,
   unchangedCheckRun,
 } from "../src/review/check.ts"
-import type { FindingInput } from "../src/review/findings.ts"
+import { countBySeverity, type FindingInput } from "../src/review/findings.ts"
 
 describe("unchangedCheckRun", () => {
   it("completes the run as success when a push added no line to the diff and touched no open thread", () => {
@@ -33,25 +34,56 @@ const at = Date.UTC(2026, 9, 17, 20, 36, 38, 123)
 
 describe("checkRunTitle", () => {
   it("is the verdict label alone when there are no findings", () => {
-    expect(checkRunTitle("APPROVE", [])).toBe("Approved")
-    expect(checkRunTitle("COMMENT", [])).toBe("Commented")
+    expect(checkRunTitle("APPROVE", countOf([]))).toBe("Approved")
+    expect(checkRunTitle("COMMENT", countOf([]))).toBe("Commented")
   })
 
   it("labels a clean review whose approval waits for the checks", () => {
-    expect(checkRunTitle("AWAITING_CHECKS", [])).toBe("Approval waits for the checks")
-    expect(checkRunTitle("AWAITING_CHECKS", [finding("suggestion")])).toBe(
+    expect(checkRunTitle("AWAITING_CHECKS", countOf([]))).toBe("Approval waits for the checks")
+    expect(checkRunTitle("AWAITING_CHECKS", countOf(["suggestion"]))).toBe(
       "Approval waits for the checks: 1 suggestion",
     )
   })
 
   it("appends the non-zero counts, singular and plural, blocking first", () => {
-    expect(checkRunTitle("APPROVE", [finding("suggestion"), finding("suggestion")])).toBe("Approved: 2 suggestions")
-    expect(checkRunTitle("REQUEST_CHANGES", [finding("suggestion"), finding("blocking"), finding("suggestion")])).toBe(
+    expect(checkRunTitle("APPROVE", countOf(["suggestion", "suggestion"]))).toBe("Approved: 2 suggestions")
+    expect(checkRunTitle("REQUEST_CHANGES", countOf(["suggestion", "blocking", "suggestion"]))).toBe(
       "Changes requested: 1 blocking, 2 suggestions",
     )
-    expect(checkRunTitle("COMMENT", [finding("nitpick")])).toBe("Commented: 1 nitpick")
-    expect(checkRunTitle("REQUEST_CHANGES", [finding("blocking"), finding("blocking"), finding("nitpick")])).toBe(
+    expect(checkRunTitle("COMMENT", countOf(["nitpick"]))).toBe("Commented: 1 nitpick")
+    expect(checkRunTitle("REQUEST_CHANGES", countOf(["blocking", "blocking", "nitpick"]))).toBe(
       "Changes requested: 2 blocking, 1 nitpick",
+    )
+  })
+})
+
+function countOf(severities: FindingInput["severity"][]) {
+  return countBySeverity(severities.map(finding))
+}
+
+describe("postedEarlierCheckRun", () => {
+  it("titles the run with the verdict and counts of the review an earlier run of the head posted", () => {
+    const posted = { reviewId: 9, event: "REQUEST_CHANGES" as const, counts: countOf(["blocking", "suggestion"]) }
+    expect(postedEarlierCheckRun(posted, "https://github.com/o/r/pull/5#issuecomment-1", at)).toEqual({
+      conclusion: "success",
+      completed_at: "2026-10-17T20:36:38Z",
+      details_url: "https://github.com/o/r/pull/5#issuecomment-1",
+      output: {
+        title: "Changes requested: 1 blocking, 1 suggestion",
+        summary: "Review 9 was posted by an earlier run of this head. Details opens its summary comment.",
+      },
+    })
+  })
+
+  it("titles the run with the verdict alone for a record from before reviews stored their counts", () => {
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, "https://example.test", at).output.title).toBe(
+      "Approved",
+    )
+  })
+
+  it("doesn't point to Details when the summary comment's id is gone and the run has no link", () => {
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, undefined, at).output.summary).toBe(
+      "Review 9 was posted by an earlier run of this head.",
     )
   })
 })

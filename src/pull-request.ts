@@ -9,19 +9,19 @@ import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { helpText, parseCommand } from "./commands.ts"
-import { createAppJwt, fetchInstallationToken, type InstallationToken } from "./github/app-auth.ts"
+import { createAppJwt, fetchInstallationToken, InstallationToken } from "./github/app-auth.ts"
 import {
   canCommand,
   GitHubClient,
   type Comparison,
   type PullRequestInfo,
   type RepoRef,
-  type ReviewEvent,
   type UpdateCheckRun,
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
+import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
   checksState,
   decideApproval,
@@ -40,6 +40,7 @@ import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
   postedCheckRun,
+  postedEarlierCheckRun,
   replacedCheckRun,
   startedCheckRun,
   summaryCommentLink,
@@ -48,6 +49,7 @@ import {
 } from "./review/check.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
+  countBySeverity,
   missingWalkthrough,
   parseWrittenReview,
   toReviewComment,
@@ -59,6 +61,8 @@ import {
 import {
   decideFlight,
   migratePending,
+  ownsOperation,
+  replacedExit,
   runStanding,
   StoredPending,
   type FlightDecision,
@@ -120,14 +124,8 @@ import {
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
+import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
-
-export interface PullRequestKey {
-  installationId: number
-  owner: string
-  repo: string
-  number: number
-}
 
 export type Incoming =
   | {
@@ -156,14 +154,6 @@ type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 type Replacement = Extract<FlightDecision, { kind: "replace" }>
 type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
-
-interface PostedReview {
-  reviewId: number
-  event: ReviewEvent
-  at: number
-  fingerprint?: string
-  model?: string
-}
 
 interface Attribution {
   model: string
@@ -195,7 +185,6 @@ interface ApprovalContext {
 }
 
 const StoredDetailText = Type.String()
-const StoredCommentId = Type.Integer()
 
 export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
@@ -253,8 +242,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async github(): Promise<GitHubClient> {
     const key = await this.key()
-    const cached = await this.ctx.storage.get<InstallationToken>("token")
-    if (cached && cached.expiresAt - Date.now() > 5 * 60_000) return new GitHubClient(cached.token)
+    const cached = await this.ctx.storage.get("token")
+    if (Value.Check(InstallationToken, cached) && cached.expiresAt - Date.now() > 5 * 60_000) {
+      return new GitHubClient(cached.token)
+    }
     const jwt = await createAppJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_PRIVATE_KEY)
     const token = await fetchInstallationToken(jwt, key.installationId)
     await this.ctx.storage.put("token", token)
@@ -285,8 +276,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
     const pending = await this.pendingFor(deliveryId)
     if (!pending) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
-    const posted = await this.ctx.storage.get<PostedReview>(`posted:${pending.headSha}`)
-    if (posted) {
+    const posted = await this.ctx.storage.get(`posted:${pending.headSha}`)
+    if (Value.Check(PostedReview, posted)) {
       await this.completeAsPostedEarlier(deliveryId, posted)
       return { text: `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`, done: true }
     }
@@ -321,7 +312,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
     log("review.findings", {
       number: pr.number,
-      head: short(pr.head.sha),
+      head: shortSha(pr.head.sha),
       mode: scope.mode,
       accepted: scoped.accepted.length,
       relocated: validated.relocated,
@@ -339,12 +330,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pending: PendingReview,
     missing: readonly string[],
   ): Promise<SubmitOutcome> {
-    log("review.incomplete", { number: pr.number, head: short(pr.head.sha), missing: missing.length })
+    log("review.incomplete", { number: pr.number, head: shortSha(pr.head.sha), missing: missing.length })
     const note = incompleteNote(missing)
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
-    await this.failOwnRun(pending.deliveryId, note)
     this.#incompleteDelivery = pending.deliveryId
-    await this.releasePending(pending.deliveryId)
+    await this.endOwnRun(pending.deliveryId, await this.failedRun(note))
     return { text: `Not posted: no walkthrough row for ${missing.join(", ")}. The review ends here.`, done: true }
   }
 
@@ -414,13 +404,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reviewId: review.id,
       event,
       at: Date.now(),
+      counts: countBySeverity(scoped.accepted),
       ...attribution,
     })
-    await this.completeOwnRun(
+    await this.endOwnRun(
       pending.deliveryId,
       postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
     )
-    await this.releasePending(pending.deliveryId)
     if (evaluatesAfterReview(event, scoped.accepted)) {
       this.ctx.waitUntil(this.evaluateApproval("review", pending.deliveryId))
     }
@@ -466,7 +456,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     log("review.resolved", {
       number: pr.number,
-      head: short(pr.head.sha),
+      head: shortSha(pr.head.sha),
       resolved: resolved.length,
       attempted: threads.length,
     })
@@ -477,7 +467,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     for (const thread of threads) {
       try {
         const key = await this.key()
-        const reply = `Fixed in \`${short(pr.head.sha)}\`.`
+        const reply = `Fixed in \`${shortSha(pr.head.sha)}\`.`
         await (await this.github()).replyToReviewComment(key, key.number, thread.firstCommentId, reply)
       } catch (error) {
         logError("review.resolve_failed", {
@@ -516,20 +506,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pr.head.sha !== incoming.headSha) {
       log("review.skip", {
         reason: "superseded",
-        was: short(incoming.headSha),
-        now: short(pr.head.sha),
+        was: shortSha(incoming.headSha),
+        now: shortSha(pr.head.sha),
         number: pr.number,
       })
       return
     }
     if (!incoming.full && (await this.isPosted(pr))) {
-      log("review.skip", { reason: "already_reviewed", head: short(pr.head.sha), number: pr.number })
+      log("review.skip", { reason: "already_reviewed", head: shortSha(pr.head.sha), number: pr.number })
       return
     }
     const skillsFingerprint = (await bundledSkills()).fingerprint
     const flight = await this.clearFlight(pr.head.sha)
     if (flight.kind === "skip") {
-      log("review.skip", { reason: "in_progress", head: short(pr.head.sha), number: pr.number })
+      log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
       return
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
@@ -555,12 +545,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async clearFlight(headSha: string): Promise<FlightDecision> {
     const pending = await this.readPending()
     const operations = await this.operationsOf(pending)
-    const decision = decideFlight(pending, headSha, operations.length > 0 || withinGrace(pending))
+    const decision = decideFlight(pending, headSha, { running: operations.length > 0, now: Date.now() })
     if (decision.kind !== "replace") return decision
     log("review.replaced", {
       because: decision.because,
-      previous: short(decision.previous.headSha),
-      head: short(headSha),
+      previous: shortSha(decision.previous.headSha),
+      head: shortSha(headSha),
     })
     await this.ctx.storage.delete("pending")
     for (const operationId of operations) await this.abortOperation(operationId)
@@ -627,7 +617,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const prompt = promptFor(pr, files, scope, since, issues)
       log("review.start", {
         number: pr.number,
-        head: short(pr.head.sha),
+        head: shortSha(pr.head.sha),
         files: files.length,
         linkedIssues: issues.length,
         promptChars: prompt.length,
@@ -637,7 +627,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         skillsFingerprint: run.skillsFingerprint,
         full: incoming.full,
         mode: scope.mode,
-        since: scope.from === undefined ? undefined : short(scope.from),
+        since: scope.from === undefined ? undefined : shortSha(scope.from),
         covered: scope.covered.length,
         recheck: scope.recheck.length,
         build: this.version().id,
@@ -658,7 +648,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (source) {
         log("review.done", {
           number: pr.number,
-          head: short(pr.head.sha),
+          head: shortSha(pr.head.sha),
           outcome: "posted",
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
@@ -667,8 +657,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       }
       await this.releasePending(run.deliveryId)
     } catch (error) {
-      await this.failOwnRun(run.deliveryId, errorText(error))
-      await this.releasePending(run.deliveryId)
+      await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       throw error
     }
   }
@@ -707,7 +696,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       return await (await this.github()).compareCommits(key, since, pr.head.sha)
     } catch (error) {
-      logError("review.compare_failed", { number: pr.number, since: short(since), error: errorText(error) })
+      logError("review.compare_failed", { number: pr.number, since: shortSha(since), error: errorText(error) })
       return undefined
     }
   }
@@ -744,12 +733,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async skipUnchanged(pr: PullRequestInfo, run: ReviewRun, scope: ReviewScope): Promise<void> {
     const since = scope.from ?? pr.base.sha
-    log("review.skip", { reason: "no_new_changes", head: short(pr.head.sha), since: short(since), number: pr.number })
+    log("review.skip", {
+      reason: "no_new_changes",
+      head: shortSha(pr.head.sha),
+      since: shortSha(since),
+      number: pr.number,
+    })
     const reviewed = await this.readReviewed()
     if (reviewed)
       await this.ctx.storage.put<ReviewedRecord>("reviewed", { ...reviewed, headSha: pr.head.sha, at: Date.now() })
-    await this.completeOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
-    await this.releasePending(run.deliveryId)
+    await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
   private async configureReview(): Promise<void> {
@@ -782,7 +775,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (written.kind === "unfit") {
       log("review.unfit_json", {
         number: pr.number,
-        head: short(pr.head.sha),
+        head: shortSha(pr.head.sha),
         problem: written.problem,
         chars: text.length,
         text: text.slice(0, MAX_LOGGED_TEXT_CHARS),
@@ -795,7 +788,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }))
     if (await this.isPosted(pr)) return "text"
     if (outcome.done) return undefined
-    log("review.text_refused", { number: pr.number, head: short(pr.head.sha), refusal: outcome.text })
+    log("review.text_refused", { number: pr.number, head: shortSha(pr.head.sha), refusal: outcome.text })
     return this.askAgain(pr, written, outcome.text, run)
   }
 
@@ -808,8 +801,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const rowsNeeded =
       refusal === undefined ? pathsNeedingRows(await this.scopeFor(run.deliveryId), await this.changedFiles()) : []
     if (await this.headMoved(pr, run)) return undefined
-    if (await this.replaced(pr, run)) return undefined
     await this.restartGrace(run.deliveryId)
+    if (await this.replaced(pr, run)) return undefined
     const retry = await this.harness.prompt(resubmitPrompt(refusal, rowsNeeded), {
       operationId: `${run.operationId}:retry`,
     })
@@ -836,9 +829,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async replaced(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
-    const standing = runStanding(await this.readPending(), run.deliveryId, this.#incompleteDelivery)
+    const current = await this.readPending()
+    const standing = runStanding(current, run.deliveryId, this.#incompleteDelivery)
     if (standing === "replaced") {
-      log("review.superseded", { number: pr.number, head: short(pr.head.sha), delivery: run.deliveryId })
+      log(replacedExit(current, pr.head.sha), {
+        number: pr.number,
+        head: shortSha(pr.head.sha),
+        delivery: run.deliveryId,
+      })
     }
     return standing !== "in_flight"
   }
@@ -848,12 +846,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (now.head.sha === pr.head.sha) return false
     log("review.skip", {
       reason: "superseded",
-      was: short(pr.head.sha),
-      now: short(now.head.sha),
+      was: shortSha(pr.head.sha),
+      now: shortSha(now.head.sha),
       number: pr.number,
       ms: Date.now() - run.started,
     })
-    await this.completeOwnRun(run.deliveryId, supersededCheckRun(now.head.sha, Date.now()))
+    await this.endOwnRun(run.deliveryId, supersededCheckRun(now.head.sha, Date.now()))
     return true
   }
 
@@ -865,7 +863,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const failure = describeFailure(result, await this.storedFailureDetail(run.operationId))
     logError("review.failed", {
       number: pr.number,
-      head: short(pr.head.sha),
+      head: shortSha(pr.head.sha),
       reason: failure,
       ms: Date.now() - run.started,
       staleBuild: run.staleBuild,
@@ -873,7 +871,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (await this.headMoved(pr, run)) return
     const note = `_The review did not complete: ${failure}._`
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
-    await this.failOwnRun(run.deliveryId, note)
+    await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
   private async reportUnpostedReview(
@@ -885,7 +883,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<void> {
     const failure =
       retry.status === "done" ? undefined : describeFailure(retry, await this.storedFailureDetail(retry.operationId))
-    const fields = { number: pr.number, head: short(pr.head.sha), wrote: written.kind, ms: Date.now() - run.started }
+    const fields = { number: pr.number, head: shortSha(pr.head.sha), wrote: written.kind, ms: Date.now() - run.started }
     if (failure === undefined) {
       log("review.no_submission", {
         ...fields,
@@ -897,7 +895,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const note = renderUnpostedNote(written, retryOutcome(failure, retryRefusal))
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
-    await this.failOwnRun(run.deliveryId, note)
+    await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
   private async comment(incoming: CommentIncoming, callerVersion?: Version): Promise<void> {
@@ -953,7 +951,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       const pr = await this.currentPullRequest()
       const decision = decideApproval(await this.approvalState(pr))
-      const context = { number: pr.number, head: short(pr.head.sha), trigger, delivery: deliveryId }
+      const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
       if (decision.kind === "wait") return logWait(context, decision.reason)
       await this.approve(pr.head.sha, context)
     } catch (error) {
@@ -994,7 +992,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       return checksState(await (await this.github()).listCheckRuns(key, sha), this.botLogin())
     } catch (error) {
-      logError("approval.checks_failed", { head: short(sha), error: errorText(error) })
+      logError("approval.checks_failed", { head: shortSha(sha), error: errorText(error) })
       return "unknown"
     }
   }
@@ -1034,15 +1032,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async rewriteSummaryVerdict(headSha: string): Promise<void> {
     try {
-      const commentId = await this.ctx.storage.get("summaryCommentId")
-      if (!Value.Check(StoredCommentId, commentId)) return
+      const commentId = await this.summaryCommentId()
+      if (commentId === undefined) return
       const key = await this.key()
       const github = await this.github()
       const comment = await github.getIssueComment(key, commentId)
       const body = withApprovedVerdict(comment.body ?? "", headSha)
       if (body !== undefined) await github.updateIssueComment(key, commentId, body)
     } catch (error) {
-      logError("approval.summary_failed", { head: short(headSha), error: errorText(error) })
+      logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })
     }
   }
 
@@ -1067,8 +1065,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async key(): Promise<PullRequestKey> {
-    const key = await this.ctx.storage.get<PullRequestKey>("key")
-    if (!key) throw new Error("this object has not received an event yet")
+    const key = await this.ctx.storage.get("key")
+    if (!Value.Check(PullRequestKey, key)) throw new Error("this object has not received an event yet")
     return key
   }
 
@@ -1076,7 +1074,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     const github = await this.github()
     const ref: RepoRef = key
-    let commentId = await this.ctx.storage.get<number>("summaryCommentId")
+    let commentId = await this.summaryCommentId()
     if (commentId === undefined) {
       const existing = (await github.listIssueComments(ref, key.number)).find((c) => c.body?.startsWith(SUMMARY_MARKER))
       commentId = existing?.id
@@ -1094,8 +1092,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.put("summaryCommentId", created.id)
   }
 
+  private async summaryCommentId(): Promise<number | undefined> {
+    const stored = await this.ctx.storage.get("summaryCommentId")
+    return Value.Check(SummaryCommentId, stored) ? stored : undefined
+  }
+
   private async summaryCommentUrl(): Promise<string | undefined> {
-    const commentId = await this.ctx.storage.get<number>("summaryCommentId")
+    const commentId = await this.summaryCommentId()
     if (commentId === undefined) return undefined
     const key = await this.key()
     return summaryCommentLink(key, key.number, commentId)
@@ -1117,18 +1120,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     const created = await this.guardedCheck("create", async () => (await this.github()).createCheckRun(key, start))
     if (created === undefined) return undefined
-    log("check.started", { id: created.id, head: short(pr.head.sha), delivery: run.deliveryId })
+    log("check.started", { id: created.id, head: shortSha(pr.head.sha), delivery: run.deliveryId })
     return created.id
   }
 
-  private async completeOwnRun(deliveryId: string, update: UpdateCheckRun): Promise<void> {
+  private async endOwnRun(deliveryId: string, update: UpdateCheckRun): Promise<void> {
     const pending = await this.pendingFor(deliveryId)
-    if (pending?.checkRunId === undefined) return
-    await this.completeCheckRun(pending.checkRunId, pending, update)
-  }
-
-  private async failOwnRun(deliveryId: string, note: string): Promise<void> {
-    await this.completeOwnRun(deliveryId, await this.failedRun(note))
+    if (pending === undefined) return
+    await this.ctx.storage.delete(["pending", "scope"])
+    if (pending.checkRunId !== undefined) await this.completeCheckRun(pending.checkRunId, pending, update)
   }
 
   private async failedRun(note: string): Promise<UpdateCheckRun> {
@@ -1136,9 +1136,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async completeAsPostedEarlier(deliveryId: string, posted: PostedReview): Promise<void> {
-    const summary = `Review ${posted.reviewId} was posted by an earlier run of this head.`
-    const update = postedCheckRun(posted.event, [], summary, await this.summaryCommentUrl(), Date.now())
-    await this.completeOwnRun(deliveryId, update)
+    await this.endOwnRun(deliveryId, postedEarlierCheckRun(posted, await this.summaryCommentUrl(), Date.now()))
   }
 
   private async cancelUnrecordedRun(pr: PullRequestInfo, run: ReviewRun, checkRunId: number): Promise<void> {
@@ -1159,7 +1157,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     log("check.completed", {
       id: completed.id,
       conclusion: update.conclusion,
-      head: short(owner.headSha),
+      head: shortSha(owner.headSha),
       delivery: owner.deliveryId,
     })
   }
@@ -1203,7 +1201,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
-const GRACE_MS = 120_000
 const MOST_KEYS_PER_GET = 128
 
 function promptFor(
@@ -1233,7 +1230,7 @@ function coverageOf(scope: ReviewScope, headSha: string, resolved: number): Cove
 function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
   log("review.transcript", {
     number: pr.number,
-    head: short(pr.head.sha),
+    head: shortSha(pr.head.sha),
     after,
     status: result.status,
     ...transcriptFields(summarizeTranscript(result.messages)),
@@ -1251,18 +1248,6 @@ function retryOutcome(failure: string | undefined, refusal: string | undefined):
 }
 
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
-
-function short(sha: string): string {
-  return sha.slice(0, 7)
-}
-
-function ownsOperation(pending: PendingReview, operationId: string): boolean {
-  return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
-}
-
-function withinGrace(pending: PendingReview | undefined): boolean {
-  return pending !== undefined && Date.now() - pending.started < GRACE_MS
-}
 
 function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
   if (model === undefined || fingerprint === undefined) return undefined
