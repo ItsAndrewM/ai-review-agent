@@ -37,6 +37,7 @@ const ROOT_FILES = [
 const FRONTMATTER_BLOCK = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n([\s\S]*))?$/
 const APPLY_TO_LINE = /^applyTo:[ \t]*(.*)$/gm
 const SURROUNDING_QUOTES = /^(["'])(.*)\1$/
+const QUOTE_OR_COMMENT = /["']|\s#/
 const TRAILING_HIGH_SURROGATE = /[\uD800-\uDBFF]$/
 
 const Frontmatter = Type.Object({
@@ -78,11 +79,20 @@ export function instructionCandidates(entries: readonly TreeEntry[], changed: re
 
 const isFlowList = (value: string): boolean => value.startsWith("[")
 
-const textualApplyTo = (frontmatter: string): string | undefined => {
+const singleApplyToLine = (frontmatter: string): string | undefined => {
   const lines = [...frontmatter.matchAll(APPLY_TO_LINE)]
-  const value = lines.length === 1 ? lines[0]?.[1]?.trim() : undefined
-  if (value === undefined || isFlowList(value)) return undefined
-  return value.replace(SURROUNDING_QUOTES, "$2")
+  return lines.length === 1 ? lines[0]?.[1]?.trim() : undefined
+}
+
+const plainGlobList = (value: string): string | undefined => {
+  if (isFlowList(value)) return undefined
+  const unquoted = value.replace(SURROUNDING_QUOTES, "$2")
+  return QUOTE_OR_COMMENT.test(unquoted) ? undefined : unquoted
+}
+
+const textualApplyTo = (frontmatter: string): string | undefined => {
+  const value = singleApplyToLine(frontmatter)
+  return value === undefined ? undefined : plainGlobList(value)
 }
 
 const applyToOf = (frontmatter: string): string | string[] | undefined => {

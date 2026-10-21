@@ -253,6 +253,31 @@ describe("applyToKeeps", () => {
     expect(applyToKeeps(withApplyTo('["src/**"'), ["docs/guide.md"])).toBe(true)
     const text = '---\napplyTo: ["src/**", "lib/**"]\ndescription: a: b\n---\nBody.\n'
     expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
+    const unquoted = "---\napplyTo: [src/**, lib/**]\ndescription: a: b\n---\nBody.\n"
+    expect(applyToKeeps(unquoted, ["docs/guide.md"])).toBe(true)
+  })
+
+  it("keeps a file whose unquoted applyTo line ends in a comment, rather than reading the comment as part of a glob", () => {
+    expect(applyToKeeps(withApplyTo("**/*.py # python"), ["src/a.ts"])).toBe(true)
+    const quoted = '---\ndescription: a: b\napplyTo: "**/*.py" # python\n---\nBody.\n'
+    expect(applyToKeeps(quoted, ["src/a.ts"])).toBe(true)
+  })
+
+  it("leaves the comment of a quoted applyTo in valid frontmatter to YAML", () => {
+    const text = withApplyTo('"**/*.py" # python')
+    expect(applyToKeeps(text, ["src/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, ["lib/x.py"])).toBe(true)
+  })
+
+  it("reads a # with no whitespace before it as part of the glob", () => {
+    const text = withApplyTo("**/*#x.py")
+    expect(applyToKeeps(text, ["src/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, ["lib/a#x.py"])).toBe(true)
+  })
+
+  it("keeps a file whose applyTo line still holds quotes once the surrounding pair is gone, such as a list of quoted globs", () => {
+    expect(applyToKeeps(withApplyTo('"**/*.py", "**/*.pyi"'), ["src/a.ts"])).toBe(true)
+    expect(applyToKeeps(withApplyTo("'**/*.py', '**/*.pyi'"), ["src/a.ts"])).toBe(true)
   })
 
   it("keeps a file whose applyTo is not a string or a list of strings", () => {
@@ -308,6 +333,10 @@ describe("frontmatterStripped", () => {
 
   it("closes an empty block at its own closing line, not at a later --- line in the body", () => {
     expect(frontmatterStripped("---\n---\nBody\n---\nMore\n")).toBe("Body\n---\nMore\n")
+  })
+
+  it("closes a block with content at its first closing line, not at a later --- line in the body", () => {
+    expect(frontmatterStripped("---\na: 1\n---\nBody\n---\nMore\n")).toBe("Body\n---\nMore\n")
   })
 
   it("removes a block with Windows line endings and a block with nothing after it", () => {
