@@ -13,6 +13,15 @@ export function commandInThread(body: string, botLogin: string, thread: ReviewTh
   return { kind: "chat", text }
 }
 
+export function threadIgnoreReason(
+  botLogin: string,
+  thread: ReviewThread | undefined,
+): "thread_unknown" | "not_andabot_thread" | "blank_reply" {
+  if (thread === undefined) return "thread_unknown"
+  if (!opensWithBot(thread, botLogin)) return "not_andabot_thread"
+  return "blank_reply"
+}
+
 function opensWithBot(thread: ReviewThread | undefined, botLogin: string): boolean {
   return thread !== undefined && thread.authorIsBot && thread.authorLogin === botLogin
 }

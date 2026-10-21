@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
-import { commandInThread, threadOf } from "../src/review/thread-question.ts"
+import { commandInThread, threadIgnoreReason, threadOf } from "../src/review/thread-question.ts"
 
 const thread = (firstCommentId: number, authorLogin: string, authorIsBot: boolean) =>
   ({
@@ -50,5 +50,14 @@ describe("threadOf", () => {
   it("finds a thread by its first comment", () => {
     expect(threadOf([humanThread, botThread], 7)).toBe(botThread)
     expect(threadOf([humanThread, botThread], 404)).toBeUndefined()
+  })
+})
+
+describe("threadIgnoreReason", () => {
+  it("says why an unmentioned reply goes unanswered, so the log tells someone else's thread from a lost lookup", () => {
+    expect(threadIgnoreReason("andabot", undefined)).toBe("thread_unknown")
+    expect(threadIgnoreReason("andabot", humanThread)).toBe("not_andabot_thread")
+    expect(threadIgnoreReason("andabot", otherBotThread)).toBe("not_andabot_thread")
+    expect(threadIgnoreReason("andabot", botThread)).toBe("blank_reply")
   })
 })

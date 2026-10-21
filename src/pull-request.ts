@@ -124,7 +124,7 @@ import {
   type Verdict,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
-import { commandInThread, threadOf } from "./review/thread-question.ts"
+import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { shortSha } from "./sha.ts"
@@ -917,7 +917,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const command = incoming.thread
       ? commandInThread(incoming.body, this.botLogin(), thread)
       : parseCommand(incoming.body, this.botLogin())
-    if (!command) return
+    if (!command) {
+      this.ignored(incoming, thread, key.number)
+      return
+    }
     if (!canCommand(await github.getCollaboratorPermission(key, incoming.author))) {
       log("command.ignored", { reason: "no_write_access", author: incoming.author, number: key.number })
       return
@@ -1044,6 +1047,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } catch (error) {
       logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })
     }
+  }
+
+  private ignored(incoming: CommentIncoming, thread: ReviewThread | undefined, number: number): void {
+    const reason = incoming.thread ? threadIgnoreReason(this.botLogin(), thread) : "no_command"
+    log("command.ignored", { reason, author: incoming.author, number, root: incoming.thread?.rootId })
   }
 
   private async threadFor(
