@@ -75,6 +75,12 @@ describe("decideApproval", () => {
     expect(outcome({ ...ready, lastReview: { ...requested, event: "APPROVE", headSha: "aaa" } })).toBe("approved")
   })
 
+  it("approves a head whose last review commented only because it couldn't approve yet", () => {
+    expect(decideApproval({ ...ready, lastReview: { ...requested, event: "COMMENT", verdict: "approve" } })).toEqual({
+      kind: "approve",
+    })
+  })
+
   it("lets a review that only commented stand until the next review", () => {
     expect(outcome({ ...ready, lastReview: { ...requested, event: "COMMENT", verdict: "comment" } })).toBe(
       "review_stands",
