@@ -76,7 +76,7 @@ it("getTree rejects a response that is not a tree", …) // a body without `tree
   - `frontmatterStripped(text: string): string`.
   - `orderedStandards(loaded: readonly { path: string; text: string }[], changed: readonly string[], pathInstructions: readonly { path: string; instructions: string }[]): Standard[]`: `path_instructions` entries whose glob matches a changed path first (path shown as `.andabot.yaml: <glob>`), then the loaded files in candidate order with `.instructions.md` files kept by `applyToKeeps` and their frontmatter stripped.
   - `MAX_STANDARDS_CHARS = 12_000`
-  - `renderStandards(standards: readonly Standard[]): { text: string; used: string[]; cut: string[] }`: `## Repository standards` then, per entry, `### <path>` and the text; entries are added whole while the total stays at or under the cap; when any are cut, the section ends with `_Cut for length: <path>, <path>._`; with no standards at all it returns `{ text: "", used: [], cut: [] }`.
+  - `renderStandards(standards: readonly Standard[]): { text: string; used: string[]; cut: string[] }`: `## Repository standards` then, per entry, `### <path>` and the text; entries are added whole while the total stays at or under the cap, except that a first entry longer than the cap is truncated at the cap and counted in `used`; when any are cut or truncated, the section ends with `_Cut for length: <path>, <path>._` (a truncated entry listed as `<path> (truncated)`); with no standards at all it returns `{ text: "", used: [], cut: [] }`.
 
 - [ ] **Step 1: Write the failing tests** in `test/instructions.test.ts`, one `it` per behaviour above, with the Review Focus cases: the nested `apps/web/CLAUDE.md` ahead of root `CLAUDE.md` and `apps/api/CLAUDE.md` absent; the list-valued `applyTo`; `src/**` not matching `test/a.ts`; the cap keeping whole leading entries and naming the cut; `.github/copilot-instructions.md` before `CONTRIBUTING.md`; a directory with both `CLAUDE.md` and `AGENTS.md` listing `CLAUDE.md` first.
 - [ ] **Step 2: Run them, confirm they fail.**
@@ -119,7 +119,7 @@ it("getTree rejects a response that is not a tree", …) // a body without `tree
 - Test: `test/config.test.ts`
 
 **Interfaces:**
-- Produces: `AndabotConfig` TypeBox schema: `reviews: { auto: boolean (true), drafts: boolean (false), base_branches: string[] (default []: any), ignore_title_keywords: string[] ([]), request_changes_workflow: boolean | undefined (undefined: the Worker var), path_filters: string[] ([]), path_instructions: { path: string; instructions: string }[] ([]) }`, `model` accepted and ignored; `DEFAULT_CONFIG`; `parseConfig(text: string): { config: AndabotConfig; error: string | undefined }` (YAML parse errors and `Value.Check` failures both give the defaults and a one-line error naming the first problem via `Value.Errors`); `readConfig(github, ref, baseSha): Promise<{ config, error, present: boolean }>` through `getFileContent(ref, ".andabot.yaml", baseSha)`.
+- Produces: `AndabotConfig` TypeBox schema: `reviews: { auto: boolean (true), drafts: boolean (false), base_branches: string[] (default []: any), ignore_title_keywords: string[] ([]), request_changes_workflow: boolean | undefined (undefined: the Worker var), path_filters: string[] ([], each entry matching `^!` or the file is invalid), path_instructions: { path: string; instructions: string }[] ([]) }`, `model` accepted and ignored; `DEFAULT_CONFIG`; `parseConfig(text: string): { config: AndabotConfig; error: string | undefined }` (YAML parse errors and `Value.Check` failures both give the defaults and a one-line error naming the first problem via `Value.Errors`); `readConfig(github, ref, baseSha): Promise<{ config, error, present: boolean }>` through `getFileContent(ref, ".andabot.yaml", baseSha)`.
 
 - [ ] **Step 1: Write the failing tests**: the defaults for a missing file; a full valid file; `reviews: { auto: "yes" }` giving the defaults with an error that names `reviews.auto`; an unknown key under `reviews` rejected; `model` keys ignored.
 - [ ] **Step 2: Run them, confirm they fail.**
@@ -129,7 +129,7 @@ it("getTree rejects a response that is not a tree", …) // a body without `tree
 ### Task 6: Applying the settings
 
 **Files:**
-- Modify: `src/route.ts` (forward draft pull requests instead of ignoring them), `src/pull-request.ts`, `src/github/diff.ts` (`isFiltered(path, patterns)` beside `isGenerated`; `requiresWalkthrough` and the prompt's file list take the config's filters), `src/review/render.ts` (the config note in the summary), `docs/design.md`, `docs/setup.md`
+- Modify: `src/route.ts` (forward draft pull requests instead of ignoring them), `src/pull-request.ts`, `src/github/diff.ts` (`isFiltered(path, patterns)` beside `isGenerated`: true when any pattern, stripped of its leading `!`, matches the path with `minimatch` and `{ dot: true }`; `requiresWalkthrough` and the prompt's file list take the config's filters), `src/review/render.ts` (the config note in the summary), `docs/design.md`, `docs/setup.md`
 - Test: `test/route.test.ts`, `test/diff.test.ts`, `test/config.test.ts`, `test/findings.test.ts`
 
 **Interfaces:**
@@ -154,7 +154,7 @@ it("getTree rejects a response that is not a tree", …) // a body without `tree
 
 ### Task 8: The catalog re-test on GLM-5.3 Flash
 
-Operational, before any skills code: on a throwaway branch, reinstall the Agents SDK catalog (`skills([builtin])` with the existing `manifestSource`, as PR #17 had it before #20 removed it), deploy with a window announced to the peer sessions, run `@andabot full review` on #54 twice on GLM, and read `review.transcript` for `activate_skill` and `read_skill_resource` calls and the posted review. Ruling recorded in the spec's section D: catalog (on demand) when both runs post a review through `submit_review` with the catalog tools called cleanly; inline otherwise. Restore plain main; close nothing; the branch is deleted.
+Operational, before any skills code: on a throwaway branch, reinstall the Agents SDK catalog (`skills([builtin])` with the existing `manifestSource`, as PR #17 had it before #20 removed it), deploy with a window announced to the peer sessions, run `@andabot full review` on #54 twice on GLM, and read `review.transcript` for `activate_skill` and `read_skill_resource` calls and the posted review. Ruling recorded in the spec's section D: catalog (on demand) when both runs post a review through `submit_review` with `read_skill_resource` or `activate_skill` called and no raw tool-call text in the transcript; inline otherwise. No per-model switch either way. Restore plain main; close nothing; the branch is deleted.
 
 ### Task 9: The skill source and its installation
 
