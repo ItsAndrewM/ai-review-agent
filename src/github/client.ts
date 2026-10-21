@@ -69,6 +69,12 @@ const ComparisonResponse = Type.Object({
   files: Type.Optional(ChangedFiles),
 })
 
+const Tree = Type.Object({
+  sha: Type.String(),
+  truncated: Type.Boolean(),
+  tree: Type.Array(Type.Object({ path: Type.String(), type: Type.String(), sha: Type.String() })),
+})
+
 const PullRequestComments = Type.Array(
   Type.Object({
     id: Type.Integer(),
@@ -166,7 +172,21 @@ export interface CheckRunSummary {
   app: string | null
 }
 
+export interface TreeEntry {
+  path: string
+  type: "blob" | "tree"
+  sha: string
+}
+
+export interface RepositoryTree {
+  sha: string
+  entries: readonly TreeEntry[]
+  truncated: boolean
+}
+
 type CheckRunNode = Static<typeof CheckRunsPage>["check_runs"][number]
+
+type TreeNode = Static<typeof Tree>["tree"][number]
 
 type GraphQLVariables = Record<string, string | number | null>
 
@@ -335,6 +355,11 @@ export class GitHubClient {
     return { status, files: files ?? [] }
   }
 
+  async getTree(ref: RepoRef, sha: string): Promise<RepositoryTree> {
+    const listing = await this.json(Tree, `/repos/${ref.owner}/${ref.repo}/git/trees/${sha}?recursive=1`)
+    return { sha: listing.sha, entries: listing.tree.flatMap(blobOrTree), truncated: listing.truncated }
+  }
+
   async listReviewComments(ref: RepoRef, number: number, reviewId: number): Promise<PostedComment[]> {
     const comments: PostedComment[] = []
     for (let page = 1; page <= MOST_COMMENT_PAGES; page++) {
@@ -463,6 +488,10 @@ function flattenThread(node: Static<typeof ThreadNode>): ReviewThread[] {
 
 function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): CheckRunSummary {
   return { name, status, conclusion, app: app?.slug ?? null }
+}
+
+function blobOrTree({ path, type, sha }: TreeNode): TreeEntry[] {
+  return type === "blob" || type === "tree" ? [{ path, type, sha }] : []
 }
 
 function encodePath(path: string): string {

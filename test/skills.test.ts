@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join, relative } from "node:path"
 import type { SkillContent } from "agents/skills"
 import { describe, expect, it } from "vitest"
+import { renderStandards } from "../src/repository/instructions.ts"
 import { BUNDLED_SKILL_FILES, bundledSkills } from "../src/review/bundled-skills.ts"
 import {
   buildSkillManifest,
@@ -29,7 +30,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("5")
+    expect(review?.version).toBe("6")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -223,6 +224,22 @@ describe("bundledSkills", () => {
   it("tells the review to claim only what the code shows, since the model can't build or run it", async () => {
     const review = await (await bundledSkills()).source.load("review")
     expect(review?.body).toContain("You can't build, run or test the code")
+  })
+
+  it("points the standards check at the heading the host renders the repository's rules under, and has a standard finding's basis name the file and the rule", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    const heading = renderStandards([{ path: "CLAUDE.md", text: "Rules.", source: "root" }]).text.split("\n")[0]
+    expect(heading).toBe("## Repository standards")
+    expect(review?.body).toContain(`the repository's own rules under \`${heading}\` in your instructions, when present`)
+    expect(review?.body).toContain("A `standard` finding's basis names the file and the rule.")
+  })
+
+  it("skips only the smells tooling enforces, so a repository rule a linter enforces is still reported", async () => {
+    const smells = await (await bundledSkills()).source.readResource?.("review", "references/smells.md")
+    expect(smells?.content).toContain(
+      "Skip a smell that tooling already enforces; a repository rule under `## Repository standards` is reported even when a linter enforces it, since the review cannot run the linter.",
+    )
+    expect(smells?.content).not.toContain("Like any standard")
   })
 
   it("names the files that need a walkthrough row in an incremental review, in its step and in its completion criterion", async () => {

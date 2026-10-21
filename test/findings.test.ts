@@ -848,6 +848,7 @@ describe("renderSummaryComment", () => {
       accepted: [],
       droppedCount: 0,
       linkedIssues: [],
+      instructionFiles: [],
       since: {
         from: "abc1234567",
         to: "def5678901",
@@ -869,13 +870,19 @@ describe("renderSummaryComment", () => {
       accepted: [],
       droppedCount: 0,
       linkedIssues: [24],
+      instructionFiles: [],
       since: { from: "abc1234567", to: "def5678901", summary: "Fixed the total.", files: ["a.ts"], resolved: 0 },
     })
     expect(text).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
     expect(text.indexOf("### Since `abc1234`")).toBeLessThan(text.indexOf("<sub>Linked issues: #24</sub>"))
   })
 
-  const summaryWith = (attribution: { model?: string; skillsFingerprint?: string; linkedIssues?: number[] }) =>
+  const summaryWith = (attribution: {
+    model?: string
+    skillsFingerprint?: string
+    linkedIssues?: number[]
+    instructionFiles?: string[]
+  }) =>
     renderSummaryComment({
       botLogin: "andabot",
       headSha: "0123456789abcdef",
@@ -890,6 +897,7 @@ describe("renderSummaryComment", () => {
       accepted: [finding()],
       droppedCount: 1,
       linkedIssues: [],
+      instructionFiles: [],
       ...attribution,
     })
 
@@ -918,6 +926,7 @@ describe("renderSummaryComment", () => {
       accepted: [],
       droppedCount: 0,
       linkedIssues: [],
+      instructionFiles: [],
     })
     expect(text).toContain("**Merge danger:** one-way door · billing and the invoices table\n\n### Summary")
   })
@@ -926,7 +935,7 @@ describe("renderSummaryComment", () => {
     expect(summaryWith({})).not.toContain("Reviewed by")
     expect(summaryWith({ model: "@cf/openai/gpt-oss-120b" })).not.toContain("Reviewed by")
     expect(summaryWith({})).toContain(
-      "even after a retry.</sub>\n\n<sub>Linked issues: none</sub>\n<sub>Commands: `@andabot review`",
+      "even after a retry.</sub>\n\n<sub>Linked issues: none</sub>\n<sub>Standards: none</sub>\n<sub>Commands: `@andabot review`",
     )
   })
 
@@ -936,7 +945,35 @@ describe("renderSummaryComment", () => {
       skillsFingerprint: "89abcdef01234567",
       linkedIssues: [12, 14],
     })
-    expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: #12, #14</sub>\n<sub>Commands:")
+    expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: #12, #14</sub>\n<sub>Standards: none</sub>")
+  })
+
+  it("names the standards the review rendered on the line after the linked issues, each in backticks", () => {
+    const text = summaryWith({
+      linkedIssues: [12],
+      instructionFiles: ["CLAUDE.md", ".github/instructions/ts.instructions.md"],
+    })
+    expect(text).toContain(
+      "<sub>Linked issues: #12</sub>\n<sub>Standards: `CLAUDE.md`, `.github/instructions/ts.instructions.md`</sub>\n<sub>Commands:",
+    )
+  })
+
+  it("says none on the standards line when no standard was rendered", () => {
+    expect(summaryWith({ instructionFiles: [] })).toContain(
+      "<sub>Linked issues: none</sub>\n<sub>Standards: none</sub>\n<sub>Commands:",
+    )
+  })
+
+  it("keeps a path instruction's glob literal, since its stars would otherwise render as emphasis", () => {
+    expect(summaryWith({ instructionFiles: [".andabot.yaml: **/*.ts", "CLAUDE.md"] })).toContain(
+      "<sub>Standards: `.andabot.yaml: **/*.ts`, `CLAUDE.md`</sub>",
+    )
+  })
+
+  it("wraps a path that holds a backtick in a double-backtick span, so the footer's code span cannot end early", () => {
+    expect(summaryWith({ instructionFiles: ["docs/a`b.md", "CLAUDE.md"] })).toContain(
+      "<sub>Standards: `` docs/a`b.md ``, `CLAUDE.md`</sub>",
+    )
   })
 
   it("shows the wait as the verdict", () => {
@@ -948,6 +985,7 @@ describe("renderSummaryComment", () => {
       accepted: [],
       droppedCount: 0,
       linkedIssues: [],
+      instructionFiles: [],
     })
     expect(text).toContain("`0123456` · **Verdict:** Approval waits for the checks · 🔴 0 blocking")
   })
@@ -976,6 +1014,7 @@ describe("withApprovedVerdict", () => {
     accepted: [finding()],
     droppedCount: 0,
     linkedIssues: [],
+    instructionFiles: [],
   })
 
   it("rewrites a request for changes as the approval of its head and keeps the rest of the line", () => {
