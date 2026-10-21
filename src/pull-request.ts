@@ -832,13 +832,23 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const current = await this.readPending()
     const standing = runStanding(current, run.deliveryId, this.#incompleteDelivery)
     if (standing === "replaced") {
-      log(replacedExit(current, pr.head.sha), {
+      const newerHeadSha = current?.headSha ?? (await this.latestHeadSha(pr))
+      log(replacedExit(newerHeadSha, pr.head.sha), {
         number: pr.number,
         head: shortSha(pr.head.sha),
         delivery: run.deliveryId,
       })
     }
     return standing !== "in_flight"
+  }
+
+  private async latestHeadSha(pr: PullRequestInfo): Promise<string | undefined> {
+    try {
+      return (await this.freshPullRequest()).head.sha
+    } catch (error) {
+      logError("review.head_unreadable", { number: pr.number, error: errorText(error) })
+      return undefined
+    }
   }
 
   private async headMoved(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
