@@ -412,18 +412,18 @@ describe("routeWebhook for a description that tags the bot", () => {
     body: "Fixes the parser. @andabot, check the edge cases",
   }
   const review = { kind: "review", key: key3, deliveryId: "d", headSha: "abc", full: false }
-  const mention = { kind: "mention", key: key3, deliveryId: "d", nodeId: "PR_1" }
+  const reaction = { kind: "reaction", key: key3, deliveryId: "d", nodeId: "PR_1" }
 
   function pullRequestEvent(action: string, pullRequest: NonNullable<WebhookPayload["pull_request"]>) {
     return routeWebhook("pull_request", { ...base, action, pull_request: pullRequest }, "d", "andabot")
   }
 
   it("reacts to the pull request beside its review when it opens", () => {
-    expect(pullRequestEvent("opened", tagged)).toEqual({ kind: "handle", incoming: [mention, review] })
+    expect(pullRequestEvent("opened", tagged)).toEqual({ kind: "handle", incoming: [reaction, review] })
   })
 
   it("reacts to a draft's description, with no review", () => {
-    expect(pullRequestEvent("opened", { ...tagged, draft: true })).toEqual({ kind: "handle", incoming: [mention] })
+    expect(pullRequestEvent("opened", { ...tagged, draft: true })).toEqual({ kind: "handle", incoming: [reaction] })
   })
 
   it("reacts only when the pull request opens, and only to a description that tags the bot", () => {

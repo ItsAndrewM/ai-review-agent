@@ -178,8 +178,8 @@ describe("GitHubClient review threads", () => {
 })
 
 describe("GitHubClient reactions", () => {
-  it("adds 👀 to a comment, a review or a pull request by its node id with the GraphQL mutation", async () => {
-    reply(200, { data: { addReaction: { reaction: { content: "EYES" }, subject: { id: "IC_1" } } } })
+  it("adds 👀 to a subject by its node id with the GraphQL mutation", async () => {
+    reply(200, { data: { addReaction: { reaction: { content: "EYES" } } } })
     await expect(client().addEyesReaction("IC_1")).resolves.toBeUndefined()
     expect(last().url).toBe("/graphql")
     expect(JSON.parse(last().body)).toMatchObject({ variables: { subjectId: "IC_1" } })
