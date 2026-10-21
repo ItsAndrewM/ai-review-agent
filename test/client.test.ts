@@ -129,3 +129,82 @@ describe("getIssue", () => {
     ).toBeUndefined()
   })
 })
+
+function recordingFetch(body: string) {
+  const calls: string[] = []
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const { pathname, search } = new URL(String(input))
+    calls.push(`${init?.method ?? "GET"} ${pathname}${search}`)
+    return new Response(body, { status: 200 })
+  }
+  return { fetchImpl, calls }
+}
+
+describe("getTree", () => {
+  const treeAt = (fetchImpl: typeof fetch) =>
+    new GitHubClient("t", "https://api.example", fetchImpl).getTree(ref, "abc")
+
+  it("lists the tree recursively at a sha and keeps the truncated flag", async () => {
+    const { fetchImpl, calls } = recordingFetch(
+      JSON.stringify({
+        sha: "abc",
+        truncated: false,
+        tree: [
+          { path: "CLAUDE.md", type: "blob", sha: "1" },
+          { path: "src", type: "tree", sha: "2" },
+        ],
+      }),
+    )
+    expect(await treeAt(fetchImpl)).toEqual({
+      sha: "abc",
+      truncated: false,
+      entries: [
+        { path: "CLAUDE.md", type: "blob", sha: "1" },
+        { path: "src", type: "tree", sha: "2" },
+      ],
+    })
+    expect(calls).toEqual(["GET /repos/o/r/git/trees/abc?recursive=1"])
+  })
+
+  it("carries a truncated listing through as truncated, so a caller can tell it is incomplete", async () => {
+    const body = { sha: "abc", truncated: true, tree: [{ path: "a", type: "blob", sha: "1" }] }
+    const tree = await treeAt(respond(200, JSON.stringify(body)))
+    expect(tree.truncated).toBe(true)
+    expect(tree.entries).toEqual([{ path: "a", type: "blob", sha: "1" }])
+  })
+
+  it("keeps only a blob's and a tree's path, type and sha, and drops a submodule's commit entry", async () => {
+    const tree = await treeAt(
+      respond(
+        200,
+        JSON.stringify({
+          sha: "abc",
+          url: "https://api.github.com/repos/o/r/git/trees/abc",
+          truncated: false,
+          tree: [
+            { path: "CLAUDE.md", mode: "100644", type: "blob", sha: "1", size: 120, url: "https://api.github.com/b/1" },
+            { path: "vendor/lib", mode: "160000", type: "commit", sha: "3" },
+            { path: "src", mode: "040000", type: "tree", sha: "2", url: "https://api.github.com/t/2" },
+          ],
+        }),
+      ),
+    )
+    expect(tree.entries).toEqual([
+      { path: "CLAUDE.md", type: "blob", sha: "1" },
+      { path: "src", type: "tree", sha: "2" },
+    ])
+  })
+
+  it("rejects a response that is not a tree, naming the path it asked for", async () => {
+    const named = /GitHub \/repos\/o\/r\/git\/trees\/abc\?recursive=1: unexpected response/
+    await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", truncated: false })))).rejects.toThrow(named)
+    const withoutPath = { sha: "abc", truncated: false, tree: [{ type: "blob", sha: "1" }] }
+    await expect(treeAt(respond(200, JSON.stringify(withoutPath)))).rejects.toThrow(named)
+  })
+
+  it("throws with the status when GitHub refuses, so a missing tree is never read as an empty one", async () => {
+    await expect(treeAt(respond(404, JSON.stringify({ message: "Not Found" })))).rejects.toThrow(
+      /GitHub 404 .*Not Found/,
+    )
+  })
+})
