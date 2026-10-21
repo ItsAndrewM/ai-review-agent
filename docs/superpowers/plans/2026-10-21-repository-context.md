@@ -6,14 +6,14 @@
 
 **Architecture:** A `src/repository/` folder holds pure functions over a tree listing from one recursive trees call at the base commit: instruction-file discovery and ordering, the standards renderer with its cap, the config schema and reader, and the skill source. The Durable Object fetches the tree and the bodies once per base sha, caches them in storage, and appends a `## Repository standards` section (and, depending on the catalog ruling, `## Repository skills`) to the instructions it already builds from the bundled skill. The router stays config-free; the object applies the settings and logs each skip.
 
-**Tech Stack:** TypeScript on Cloudflare Workers with `nodejs_compat`, Pi Durable 1.3.0, TypeBox 1.3.27, `yaml` 2.9.1, `minimatch` 10.0.3 (new, pinned), vitest, oxlint with the repository's rules.
+**Tech Stack:** TypeScript on Cloudflare Workers with `nodejs_compat`, Pi Durable 1.3.0, TypeBox 1.3.27, `yaml` 2.9.1, `minimatch` 10.2.6 (new, pinned), vitest, oxlint with the repository's rules.
 
 **Spec:** `docs/superpowers/specs/2026-10-17-skills-design.md`, section D as decided on 21 Oct 2026, with sections A to C and E to K for what exists. Issues #29 and #28 carry the done-when lines.
 
 ## Global Constraints
 
 - `CLAUDE.md` rules: no comments in code (a reason goes in a name, a test title or `docs/design.md`); every GitHub response and stored value parsed with a TypeBox schema and `Value.Check`; no type assertions except `as const`; complexity at most 10 per function; no `vi.mock`, so a dependency is replaced through a real interface; no `unknown` parameters or returns except a caught error's `cause`; no `typeof`; no `...(cond ? {...} : {})`.
-- `@earendil-works/pi-durable` stays 1.3.0 and `agents` stays 0.28.1. New dependency: `minimatch` `10.0.3`, pinned exactly, typed by itself.
+- `@earendil-works/pi-durable` stays 1.3.0 and `agents` stays 0.28.1. New dependency: `minimatch` `10.2.6`, pinned exactly, typed by itself.
 - Everything a repository supplies is read at the base commit: the tree, instruction files, `.andabot.yaml`, skills.
 - The review skill body stays under 120 lines; each skill text change bumps `metadata.version` and waits for Andrew's read before its PR merges.
 - Caps: the standards section and the inline skills section are each capped at 12,000 characters, whole entries dropped from the end, a closing note naming what was cut.
@@ -56,7 +56,7 @@ it("getTree rejects a response that is not a tree", …) // a body without `tree
 
 - [ ] **Step 2: Run it, confirm it fails** (`pnpm vitest run test/client.test.ts`: `getTree is not a function`).
 - [ ] **Step 3: Implement `getTree`** beside `compareCommits`, through the client's `json()`/`parse()` path with a `Tree` TypeBox schema; map `tree[]` to `entries`, keeping only `blob` and `tree` types.
-- [ ] **Step 4: Add `minimatch` 10.0.3** (`pnpm add minimatch@10.0.3`) and write `test/globs.test.ts` pinning the behaviour the later tasks rely on: `minimatch("src/a.ts", "src/**")` true, `minimatch("test/a.ts", "src/**")` false, `minimatch("a/b/c.tsx", "**/*.{ts,tsx}")` true, `minimatch("CLAUDE.md", "**")` true, `minimatch(".github/x.md", "**", { dot: true })` true and `minimatch(".github/x.md", "**")` false, so the host always passes `{ dot: true }`.
+- [ ] **Step 4: Add `minimatch` 10.2.6** (`pnpm add minimatch@10.2.6`) and write `test/globs.test.ts` pinning the behaviour the later tasks rely on: `minimatch("src/a.ts", "src/**")` true, `minimatch("test/a.ts", "src/**")` false, `minimatch("a/b/c.tsx", "**/*.{ts,tsx}")` true, `minimatch("CLAUDE.md", "**")` true, `minimatch(".github/x.md", "**", { dot: true })` true and `minimatch(".github/x.md", "**")` false, so the host always passes `{ dot: true }`.
 - [ ] **Step 5: Run `pnpm check` and `pnpm exec wrangler deploy --dry-run --outdir /tmp/andabot-dry-run`**: both pass; the dry run proves `minimatch` bundles for Workers.
 - [ ] **Step 6: Commit** `Add the recursive trees call and pin minimatch for path globs`.
 

@@ -166,9 +166,10 @@ describe("getTree", () => {
     expect(calls).toEqual(["GET /repos/o/r/git/trees/abc?recursive=1"])
   })
 
-  it("carries a truncated listing through as truncated, so a caller can tell it is incomplete", async () => {
-    const body = { sha: "abc", truncated: true, tree: [{ path: "a", type: "blob", sha: "1" }] }
+  it("answers with the tree's own sha, not the commit sha it was asked for, and carries a truncated listing through", async () => {
+    const body = { sha: "def", truncated: true, tree: [{ path: "a", type: "blob", sha: "1" }] }
     const tree = await treeAt(respond(200, JSON.stringify(body)))
+    expect(tree.sha).toBe("def")
     expect(tree.truncated).toBe(true)
     expect(tree.entries).toEqual([{ path: "a", type: "blob", sha: "1" }])
   })
@@ -195,11 +196,12 @@ describe("getTree", () => {
     ])
   })
 
-  it("rejects a response that is not a tree, naming the path it asked for", async () => {
+  it("rejects a response that is not a tree, or has no truncated flag, naming the path it asked for", async () => {
     const named = /GitHub \/repos\/o\/r\/git\/trees\/abc\?recursive=1: unexpected response/
     await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", truncated: false })))).rejects.toThrow(named)
     const withoutPath = { sha: "abc", truncated: false, tree: [{ type: "blob", sha: "1" }] }
     await expect(treeAt(respond(200, JSON.stringify(withoutPath)))).rejects.toThrow(named)
+    await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", tree: [] })))).rejects.toThrow(named)
   })
 
   it("throws with the status when GitHub refuses, so a missing tree is never read as an empty one", async () => {
