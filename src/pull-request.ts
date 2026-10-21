@@ -8,7 +8,7 @@ import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
-import { helpText, parseCommand, type Command } from "./commands.ts"
+import { helpText, parseCommand, skippedReviewText, type Command, type ReviewSkip } from "./commands.ts"
 import { createAppJwt, fetchInstallationToken, InstallationToken } from "./github/app-auth.ts"
 import {
   canCommand,
@@ -22,6 +22,7 @@ import {
 import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
+import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
   CONTEXT_PREFIX,
@@ -175,7 +176,14 @@ export type Incoming =
       deliveryId: string
       author: string
       body: string
+      nodeId: string | undefined
       thread?: ThreadContext
+    }
+  | {
+      kind: "reaction"
+      key: PullRequestKey
+      deliveryId: string
+      nodeId: string
     }
   | {
       kind: "approval"
@@ -548,25 +556,28 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async handle(incoming: Incoming, callerVersion?: Version): Promise<void> {
     switch (incoming.kind) {
       case "review":
-        return this.review(incoming, callerVersion)
+        await this.review(incoming, callerVersion)
+        return
       case "comment":
         return this.comment(incoming, callerVersion)
+      case "reaction":
+        return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
       case "approval":
         await this.evaluateApproval(incoming.trigger, incoming.deliveryId)
         return
     }
   }
 
-  private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<void> {
+  private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<ReviewSkip | undefined> {
     if (pausesReview(incoming, await this.isPaused())) {
       log("review.skip", { reason: "paused", head: shortSha(incoming.headSha), number: incoming.key.number })
-      return
+      return "paused"
     }
     const staleBuild = isOlder(this.version(), callerVersion)
     const pr = await this.freshPullRequest()
     if (pr.state !== "open") {
       log("review.skip", { reason: "not_open", state: pr.state, number: pr.number })
-      return
+      return "not_open"
     }
     if (pr.head.sha !== incoming.headSha) {
       log("review.skip", {
@@ -575,17 +586,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         now: shortSha(pr.head.sha),
         number: pr.number,
       })
-      return
+      return "superseded"
     }
     if (!incoming.full && (await this.isPosted(pr))) {
       log("review.skip", { reason: "already_reviewed", head: shortSha(pr.head.sha), number: pr.number })
-      return
+      return "already_reviewed"
     }
     const skillsFingerprint = (await bundledSkills()).fingerprint
     const flight = await this.clearFlight(pr.head.sha)
     if (flight.kind === "skip") {
       log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
-      return
+      return "in_progress"
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
     const run = {
@@ -606,6 +617,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ...(await this.usageBaseline()),
     })
     await this.runReview(pr, incoming, run)
+    return undefined
   }
 
   private async clearFlight(headSha: string): Promise<FlightDecision> {
@@ -1079,6 +1091,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("command.ignored", { reason: "no_write_access", author: incoming.author, number: key.number })
       return
     }
+    await reactWithEyes(github, incoming.nodeId, key.number)
     const where = incoming.thread ? "thread" : "conversation"
     log("command.received", { kind: command.kind, author: incoming.author, number: key.number, where })
     await this.runCommand(command, { github, key, incoming, thread }, callerVersion)
@@ -1089,11 +1102,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "help":
         await this.respond(call.github, call.key, call.incoming, helpText(this.botLogin()))
         return
-      case "review": {
-        const pr = await this.freshPullRequest()
-        await this.review(requestedReview(call, pr.head.sha, command.full), callerVersion)
+      case "review":
+        await this.reviewOnRequest(call, command.full, callerVersion)
         return
-      }
       case "chat":
         await this.answer(call.github, call.key, call.incoming, command.text, call.thread)
         return
@@ -1107,6 +1118,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         await this.resolve(call)
         return
     }
+  }
+
+  private async reviewOnRequest(call: CommandCall, full: boolean, callerVersion?: Version): Promise<void> {
+    const pr = await this.freshPullRequest()
+    const skipped = await this.review(requestedReview(call, pr.head.sha, full), callerVersion)
+    if (skipped === undefined) return
+    const text = skippedReviewText(skipped, pr.head.sha, this.botLogin())
+    if (text !== undefined) await this.respond(call.github, call.key, call.incoming, text)
   }
 
   private async pause(call: CommandCall): Promise<void> {

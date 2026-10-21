@@ -47,10 +47,11 @@ Events the App subscribes to:
 
 | Event | Action | Handler |
 | --- | --- | --- |
-| `pull_request` | opened, synchronize, reopened, ready_for_review | review (incremental on synchronize) |
+| `pull_request` | opened, synchronize, reopened, ready_for_review | review (incremental on synchronize); on opened, a 👀 on a description that tags andabot, draft or not |
 | `pull_request` | closed | archive: stop alarms, keep transcript |
-| `issue_comment` | created, on a PR | command or chat turn |
-| `pull_request_review_comment` | created | a mention, or a reply in one of andabot's threads: answer in that thread, with its file, line and hunk |
+| `issue_comment` | created, on a PR | a 👀, then a command or chat turn |
+| `pull_request_review` | submitted | a summary that tags andabot: a 👀, then a command or chat turn answered in the conversation |
+| `pull_request_review_comment` | created | a mention, or a reply in one of andabot's threads: a 👀, then the answer in that thread, with its file, line and hunk |
 | `pull_request_review_thread` | resolved, unresolved | re-evaluate approval; ignored on a draft or when a bot sent it, so andabot's own resolutions are left to the review that made them |
 | `check_run` / `check_suite` | rerequested | full review of each listed pull request; dormant, since GitHub shows no Re-run on andabot's runs (#8) |
 | `check_suite` | requested | ignored: the pull request event starts the review |
@@ -192,11 +193,13 @@ The evaluation logs `approval.decided` with its trigger, the head and the reason
 
 ### Commands and chat
 
-`@andabot <command>` in an issue comment or review comment. The App's login is `andabot[bot]`; GitHub resolves the mention `@andabot` to it. Commands: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`. Anything else is a chat turn in the PR's Pi session, which already holds the review transcript, so "why is this a problem?" on a thread works without re-reading the PR. Replies to a review comment go back on that thread.
+`@andabot <command>` in an issue comment, a review comment or a review's summary, which is answered in the conversation. The App's login is `andabot[bot]`; GitHub resolves the mention `@andabot` to it. Commands: `review`, `full review`, `summary`, `resolve`, `pause`, `resume`, `help`. Anything else is a chat turn in the PR's Pi session, which already holds the review transcript, so "why is this a problem?" on a thread works without re-reading the PR. Replies to a review comment go back on that thread.
 
 A reply in a review thread whose first comment is andabot's is a question about that finding and needs no mention; in any other review thread, `@andabot` asks. The router passes every review comment that mentions the bot or replies in a thread, and the object looks the thread up through GraphQL `reviewThreads` to tell whose it is. The answer's prompt carries the thread's file, line, diff hunk and opening comment, and the answer goes under the thread's first comment, since GitHub takes replies only to a thread's top-level comment.
 
 Only users with write access to the repo can issue commands; the object checks the commenter's permission before acting.
+
+A comment that passes that check gets a 👀 before andabot acts on it, so whoever wrote it sees andabot is on it. The 👀 always means a reply or a review follows, so a comment andabot ignores gets none, and neither does an edit, since andabot reads only new comments. A `review` with nothing to do says why: the head was already reviewed, with a pointer to `full review`, or the pull request is closed. One that finds a review already running for the head, or the head moved, says nothing, since that review posts. The reaction is GraphQL `addReaction` on the comment's node id, which works for a review's summary too, where REST has no reactions endpoint. The object logs `reaction.added`, or `reaction.failed`, which never stops the command. A pull request whose description tags andabot gets a 👀 when it opens, from anyone, since andabot reviews every pull request once it's ready. An untagged description gets none, as the review's check run already shows andabot at work.
 
 ### Configuration file
 

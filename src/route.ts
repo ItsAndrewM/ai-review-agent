@@ -19,14 +19,24 @@ export const WebhookPayload = Type.Object({
   pull_request: Type.Optional(
     Type.Object({
       number: Type.Integer(),
+      node_id: Type.Optional(Type.String()),
       draft: Type.Optional(Type.Boolean()),
+      body: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       head: Type.Object({ sha: Type.String() }),
     }),
   ),
   issue: Type.Optional(Type.Object({ number: Type.Integer(), pull_request: Type.Optional(Type.Object({})) })),
+  review: Type.Optional(
+    Type.Object({
+      node_id: Type.Optional(Type.String()),
+      body: Type.Union([Type.String(), Type.Null()]),
+      user: Type.Union([Account, Type.Null()]),
+    }),
+  ),
   comment: Type.Optional(
     Type.Object({
       id: Type.Optional(Type.Integer()),
+      node_id: Type.Optional(Type.String()),
       in_reply_to_id: Type.Optional(Type.Integer()),
       body: Type.String(),
       user: Type.Union([Account, Type.Null()]),
@@ -45,6 +55,7 @@ type PullRequestEvent = NonNullable<WebhookPayload["pull_request"]>
 type CommentEvent = NonNullable<WebhookPayload["comment"]>
 type CheckTarget = Static<typeof CheckTarget>
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
+type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 type RepoKey = Omit<PullRequestKey, "number">
 
 interface Delivery {
@@ -69,12 +80,15 @@ export function routeWebhook(eventName: string, payload: WebhookPayload, deliver
 }
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
-  if (eventName === "pull_request" && payload.pull_request) return routePullRequest(payload.pull_request, delivery)
+  if (eventName === "pull_request" && payload.pull_request) {
+    return routePullRequest(payload.pull_request, delivery, botLogin)
+  }
   if (eventName === "pull_request_review_thread" && payload.pull_request) {
     return routeThread(payload.pull_request, delivery)
   }
   if (eventName === "issue_comment") return routeComment(payload, delivery, botLogin)
   if (eventName === "pull_request_review_comment") return routeReviewComment(payload, delivery, botLogin)
+  if (eventName === "pull_request_review") return routeReview(payload, delivery, botLogin)
   const target = checkTarget(eventName, payload)
   if (target) return routeCheck(eventName, target, delivery, payload.sender?.login)
   return ignore(`event ${eventName}`)
@@ -97,21 +111,37 @@ function checkTarget(eventName: string, payload: WebhookPayload): CheckTarget | 
   return undefined
 }
 
-function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery): Routed {
+function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Routed {
   const action = delivery.action ?? ""
   if (!REVIEW_ACTIONS.has(action)) return ignore(`pull_request ${action}`)
-  if (pullRequest.draft) return ignore("draft pull request")
+  const reaction = action === "opened" ? descriptionReaction(pullRequest, delivery, botLogin) : undefined
+  if (pullRequest.draft) return reaction ? { kind: "handle", incoming: [reaction] } : ignore("draft pull request")
+  const review = reviewOf(pullRequest, delivery)
+  return { kind: "handle", incoming: reaction ? [reaction, review] : [review] }
+}
+
+function descriptionReaction(
+  pullRequest: PullRequestEvent,
+  delivery: Delivery,
+  botLogin: string,
+): Incoming | undefined {
+  const { node_id: nodeId, body } = pullRequest
+  if (nodeId === undefined || !mentions(body ?? "", botLogin)) return undefined
   return {
-    kind: "handle",
-    incoming: [
-      {
-        kind: "review",
-        key: { ...delivery.repo, number: pullRequest.number },
-        deliveryId: delivery.deliveryId,
-        headSha: pullRequest.head.sha,
-        full: false,
-      },
-    ],
+    kind: "reaction",
+    key: { ...delivery.repo, number: pullRequest.number },
+    deliveryId: delivery.deliveryId,
+    nodeId,
+  }
+}
+
+function reviewOf(pullRequest: PullRequestEvent, delivery: Delivery): Incoming {
+  return {
+    kind: "review",
+    key: { ...delivery.repo, number: pullRequest.number },
+    deliveryId: delivery.deliveryId,
+    headSha: pullRequest.head.sha,
+    full: false,
   }
 }
 
@@ -125,14 +155,29 @@ function routeComment(payload: WebhookPayload, delivery: Delivery, botLogin: str
   return {
     kind: "handle",
     incoming: [
-      {
-        kind: "comment",
-        key: { ...delivery.repo, number: issue.number },
-        deliveryId: delivery.deliveryId,
-        author: comment.user.login,
-        body: comment.body,
-      },
+      commentOf(delivery, issue.number, { author: comment.user.login, body: comment.body, nodeId: comment.node_id }),
     ],
+  }
+}
+
+function commentOf(
+  delivery: Delivery,
+  number: number,
+  comment: Pick<CommentIncoming, "author" | "body" | "nodeId">,
+): CommentIncoming {
+  return { kind: "comment", key: { ...delivery.repo, number }, deliveryId: delivery.deliveryId, ...comment }
+}
+
+function routeReview(payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
+  const { pull_request: pullRequest, review } = payload
+  if (delivery.action !== "submitted") return ignore(`pull_request_review ${delivery.action ?? ""}`)
+  if (!pullRequest || !review) return ignore("review without its pull request")
+  const body = review.body ?? ""
+  if (!mentions(body, botLogin)) return ignore("no mention")
+  if (!review.user) return ignore("review without an author")
+  return {
+    kind: "handle",
+    incoming: [commentOf(delivery, pullRequest.number, { author: review.user.login, body, nodeId: review.node_id })],
   }
 }
 
@@ -144,19 +189,12 @@ function routeReviewComment(payload: WebhookPayload, delivery: Delivery, botLogi
   const thread = threadContextOf(comment)
   if (!thread) return ignore("review comment without its thread")
   if (!mentions(comment.body, botLogin) && comment.in_reply_to_id === undefined) return ignore("no mention")
-  return {
-    kind: "handle",
-    incoming: [
-      {
-        kind: "comment",
-        key: { ...delivery.repo, number: pullRequest.number },
-        deliveryId: delivery.deliveryId,
-        author: comment.user.login,
-        body: comment.body,
-        thread,
-      },
-    ],
-  }
+  const asked = commentOf(delivery, pullRequest.number, {
+    author: comment.user.login,
+    body: comment.body,
+    nodeId: comment.node_id,
+  })
+  return { kind: "handle", incoming: [{ ...asked, thread }] }
 }
 
 function threadContextOf(comment: CommentEvent): ThreadContext | undefined {

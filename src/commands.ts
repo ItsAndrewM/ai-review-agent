@@ -1,3 +1,5 @@
+import { shortSha } from "./sha.ts"
+
 export type Command =
   | { kind: "review"; full: boolean }
   | { kind: "help" }
@@ -17,6 +19,8 @@ const COMMAND_BY_TEXT = new Map<string, Command>([
   ["pause", { kind: "pause" }],
   ["resume", { kind: "resume" }],
 ])
+
+export type ReviewSkip = "paused" | "not_open" | "superseded" | "already_reviewed" | "in_progress"
 
 export function parseCommand(body: string, botLogin: string): Command | undefined {
   const mention = new RegExp(`(?:^|\\s)@${escapeRegExp(botLogin)}(?![\\w-])\\s*([\\s\\S]*)`, "i")
@@ -41,6 +45,14 @@ export function helpText(botLogin: string): string {
     `Anything else after \`@${botLogin}\` is a question for the reviewer about this pull request.`,
     "Reply under one of my inline comments to ask about it, and I'll answer in that thread.",
   ].join("\n")
+}
+
+export function skippedReviewText(reason: ReviewSkip, headSha: string, botLogin: string): string | undefined {
+  if (reason === "already_reviewed") {
+    return `Nothing new to review: I already reviewed \`${shortSha(headSha)}\`. \`@${botLogin} full review\` reviews it again from the start.`
+  }
+  if (reason === "not_open") return "This pull request is closed, so there's nothing to review."
+  return undefined
 }
 
 function escapeRegExp(text: string): string {
