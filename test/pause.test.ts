@@ -80,6 +80,42 @@ describe("withoutPausedLine", () => {
     ].join("\n")
     expect(withoutPausedLine(twice)).toBe(summary)
   })
+
+  const quotingLines = [
+    "The pause adds `<!-- andabot:paused -->` under the header.",
+    "",
+    "| File | Change |",
+    "| --- | --- |",
+    "| `src/review/pause.ts` | adds `<!-- andabot:paused -->` |",
+  ]
+  const quoting = [SUMMARY_MARKER, "## andabot review", "", "**Head:** `abc1234`", "", ...quotingLines].join("\n")
+
+  it("keeps a summary line that quotes the paused marker", () => {
+    expect(withoutPausedLine(quoting)).toBe(quoting)
+    expect(withPausedLine(quoting, line)).toBe(
+      [SUMMARY_MARKER, "## andabot review", "", line, "", "**Head:** `abc1234`", "", ...quotingLines].join("\n"),
+    )
+    expect(withoutPausedLine(withPausedLine(quoting, line))).toBe(quoting)
+  })
+
+  it("takes out only a line that opens like the paused line and ends with its marker", () => {
+    const body = [
+      SUMMARY_MARKER,
+      "## andabot review",
+      "",
+      `${line} Pushes stay paused.`,
+      "",
+      "Pushes are skipped <!-- andabot:paused -->",
+    ].join("\n")
+    expect(withoutPausedLine(body)).toBe(body)
+    expect(withoutPausedLine(withPausedLine(body, line))).toBe(body)
+  })
+
+  it("finds its paused line through whitespace after the marker", () => {
+    const padded = withPausedLine(summary, `${line}  `)
+    expect(withoutPausedLine(padded)).toBe(summary)
+    expect(withPausedLine(padded, line)).toBe(withPausedLine(summary, line))
+  })
 })
 
 describe("pauseReply", () => {

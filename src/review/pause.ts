@@ -6,13 +6,15 @@ export const PausedBy = Type.String()
 
 export const PAUSED_MARKER = "<!-- andabot:paused -->"
 
+const PAUSED_OPENING = "⏸️ Paused"
+
 export function pausesReview(review: { requestedBy?: string }, paused: boolean): boolean {
   return paused && review.requestedBy === undefined
 }
 
 export function pausedLine(by: string | undefined, botLogin: string): string {
-  const who = by === undefined ? "Paused" : `Paused by @${by}`
-  return `⏸️ ${who}: pushes don't start reviews. \`@${botLogin} resume\` to resume. ${PAUSED_MARKER}`
+  const who = by === undefined ? "" : ` by @${by}`
+  return `${PAUSED_OPENING}${who}: pushes don't start reviews. \`@${botLogin} resume\` to resume. ${PAUSED_MARKER}`
 }
 
 export function withPausedLine(body: string, line: string): string {
@@ -26,10 +28,14 @@ export function withPausedLine(body: string, line: string): string {
 export function withoutPausedLine(body: string): string {
   const kept: string[] = []
   for (const text of body.split("\n")) {
-    if (!text.includes(PAUSED_MARKER)) kept.push(text)
+    if (!isPausedLine(text)) kept.push(text)
     else if (kept.at(-1) === "") kept.pop()
   }
   return kept.join("\n")
+}
+
+function isPausedLine(text: string): boolean {
+  return text.startsWith(PAUSED_OPENING) && text.trimEnd().endsWith(PAUSED_MARKER)
 }
 
 export function pauseReply(alreadyPaused: boolean, botLogin: string): string {
