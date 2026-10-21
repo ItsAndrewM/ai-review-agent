@@ -19,14 +19,24 @@ export const WebhookPayload = Type.Object({
   pull_request: Type.Optional(
     Type.Object({
       number: Type.Integer(),
+      node_id: Type.Optional(Type.String()),
       draft: Type.Optional(Type.Boolean()),
+      body: Type.Optional(Type.Union([Type.String(), Type.Null()])),
       head: Type.Object({ sha: Type.String() }),
     }),
   ),
   issue: Type.Optional(Type.Object({ number: Type.Integer(), pull_request: Type.Optional(Type.Object({})) })),
+  review: Type.Optional(
+    Type.Object({
+      node_id: Type.Optional(Type.String()),
+      body: Type.Union([Type.String(), Type.Null()]),
+      user: Type.Union([Account, Type.Null()]),
+    }),
+  ),
   comment: Type.Optional(
     Type.Object({
       id: Type.Optional(Type.Integer()),
+      node_id: Type.Optional(Type.String()),
       in_reply_to_id: Type.Optional(Type.Integer()),
       body: Type.String(),
       user: Type.Union([Account, Type.Null()]),
@@ -69,12 +79,15 @@ export function routeWebhook(eventName: string, payload: WebhookPayload, deliver
 }
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
-  if (eventName === "pull_request" && payload.pull_request) return routePullRequest(payload.pull_request, delivery)
+  if (eventName === "pull_request" && payload.pull_request) {
+    return routePullRequest(payload.pull_request, delivery, botLogin)
+  }
   if (eventName === "pull_request_review_thread" && payload.pull_request) {
     return routeThread(payload.pull_request, delivery)
   }
   if (eventName === "issue_comment") return routeComment(payload, delivery, botLogin)
   if (eventName === "pull_request_review_comment") return routeReviewComment(payload, delivery, botLogin)
+  if (eventName === "pull_request_review") return routeReview(payload, delivery, botLogin)
   const target = checkTarget(eventName, payload)
   if (target) return routeCheck(eventName, target, delivery, payload.sender?.login)
   return ignore(`event ${eventName}`)
@@ -97,21 +110,29 @@ function checkTarget(eventName: string, payload: WebhookPayload): CheckTarget | 
   return undefined
 }
 
-function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery): Routed {
+function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Routed {
   const action = delivery.action ?? ""
   if (!REVIEW_ACTIONS.has(action)) return ignore(`pull_request ${action}`)
-  if (pullRequest.draft) return ignore("draft pull request")
+  const incoming = action === "opened" ? descriptionMention(pullRequest, delivery, botLogin) : []
+  if (!pullRequest.draft) incoming.push(reviewOf(pullRequest, delivery))
+  return incoming.length > 0 ? { kind: "handle", incoming } : ignore("draft pull request")
+}
+
+function descriptionMention(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Incoming[] {
+  const { node_id: nodeId, body } = pullRequest
+  if (nodeId === undefined || !mentions(body ?? "", botLogin)) return []
+  return [
+    { kind: "mention", key: { ...delivery.repo, number: pullRequest.number }, deliveryId: delivery.deliveryId, nodeId },
+  ]
+}
+
+function reviewOf(pullRequest: PullRequestEvent, delivery: Delivery): Incoming {
   return {
-    kind: "handle",
-    incoming: [
-      {
-        kind: "review",
-        key: { ...delivery.repo, number: pullRequest.number },
-        deliveryId: delivery.deliveryId,
-        headSha: pullRequest.head.sha,
-        full: false,
-      },
-    ],
+    kind: "review",
+    key: { ...delivery.repo, number: pullRequest.number },
+    deliveryId: delivery.deliveryId,
+    headSha: pullRequest.head.sha,
+    full: false,
   }
 }
 
@@ -131,6 +152,29 @@ function routeComment(payload: WebhookPayload, delivery: Delivery, botLogin: str
         deliveryId: delivery.deliveryId,
         author: comment.user.login,
         body: comment.body,
+        nodeId: comment.node_id,
+      },
+    ],
+  }
+}
+
+function routeReview(payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
+  const { pull_request: pullRequest, review } = payload
+  if (delivery.action !== "submitted") return ignore(`pull_request_review ${delivery.action ?? ""}`)
+  if (!pullRequest || !review) return ignore("review without its pull request")
+  const body = review.body ?? ""
+  if (!mentions(body, botLogin)) return ignore("no mention")
+  if (!review.user) return ignore("review without an author")
+  return {
+    kind: "handle",
+    incoming: [
+      {
+        kind: "comment",
+        key: { ...delivery.repo, number: pullRequest.number },
+        deliveryId: delivery.deliveryId,
+        author: review.user.login,
+        body,
+        nodeId: review.node_id,
       },
     ],
   }
@@ -153,6 +197,7 @@ function routeReviewComment(payload: WebhookPayload, delivery: Delivery, botLogi
         deliveryId: delivery.deliveryId,
         author: comment.user.login,
         body: comment.body,
+        nodeId: comment.node_id,
         thread,
       },
     ],

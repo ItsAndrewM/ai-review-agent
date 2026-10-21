@@ -176,3 +176,18 @@ describe("GitHubClient review threads", () => {
     await expect(client().resolveReviewThread("t1")).rejects.toThrow(/nope/)
   })
 })
+
+describe("GitHubClient reactions", () => {
+  it("adds 👀 to a comment, a review or a pull request by its node id with the GraphQL mutation", async () => {
+    reply(200, { data: { addReaction: { reaction: { content: "EYES" }, subject: { id: "IC_1" } } } })
+    await expect(client().addEyesReaction("IC_1")).resolves.toBeUndefined()
+    expect(last().url).toBe("/graphql")
+    expect(JSON.parse(last().body)).toMatchObject({ variables: { subjectId: "IC_1" } })
+    expect(last().body).toContain("content: EYES")
+  })
+
+  it("throws when GitHub can't add the reaction", async () => {
+    reply(200, { data: null, errors: [{ message: "Could not resolve to a node with the global id of 'IC_1'" }] })
+    await expect(client().addEyesReaction("IC_1")).rejects.toThrow(/Could not resolve to a node/)
+  })
+})

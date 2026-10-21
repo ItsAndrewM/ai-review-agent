@@ -22,6 +22,7 @@ import {
 import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
+import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
   CONTEXT_PREFIX,
@@ -159,7 +160,14 @@ export type Incoming =
       deliveryId: string
       author: string
       body: string
+      nodeId: string | undefined
       thread?: ThreadContext
+    }
+  | {
+      kind: "mention"
+      key: PullRequestKey
+      deliveryId: string
+      nodeId: string
     }
   | {
       kind: "approval"
@@ -526,6 +534,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return this.review(incoming, callerVersion)
       case "comment":
         return this.comment(incoming, callerVersion)
+      case "mention":
+        return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
       case "approval":
         return this.evaluateApproval(incoming.trigger, incoming.deliveryId)
     }
@@ -1049,6 +1059,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("command.ignored", { reason: "no_write_access", author: incoming.author, number: key.number })
       return
     }
+    await reactWithEyes(github, incoming.nodeId, key.number)
     const where = incoming.thread ? "thread" : "conversation"
     log("command.received", { kind: command.kind, author: incoming.author, number: key.number, where })
     switch (command.kind) {

@@ -120,6 +120,10 @@ const ResolvedThread = Type.Object({
   data: Type.Object({ resolveReviewThread: Type.Object({ thread: Type.Object({ id: Type.String() }) }) }),
 })
 
+const AddedReaction = Type.Object({
+  data: Type.Object({ addReaction: Type.Object({ reaction: Type.Object({ content: Type.String() }) }) }),
+})
+
 const GraphQLErrors = Type.Object({ errors: Type.Array(Type.Object({ message: Type.String() })) })
 
 const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -135,6 +139,10 @@ const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: In
 
 const RESOLVE_THREAD_MUTATION = `mutation($threadId: ID!) {
   resolveReviewThread(input: { threadId: $threadId }) { thread { id } }
+}`
+
+const ADD_EYES_MUTATION = `mutation($subjectId: ID!) {
+  addReaction(input: { subjectId: $subjectId, content: EYES }) { reaction { content } }
 }`
 
 export type CompareStatus = Static<typeof ComparisonResponse>["status"]
@@ -404,6 +412,10 @@ export class GitHubClient {
 
   async resolveReviewThread(threadId: string): Promise<void> {
     await this.graphql(ResolvedThread, RESOLVE_THREAD_MUTATION, { threadId })
+  }
+
+  async addEyesReaction(subjectId: string): Promise<void> {
+    await this.graphql(AddedReaction, ADD_EYES_MUTATION, { subjectId })
   }
 
   async getCollaboratorPermission(ref: RepoRef, username: string): Promise<string> {
