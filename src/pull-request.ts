@@ -1186,9 +1186,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return resumeStep({
       open: pr.state === "open",
       draft: pr.draft === true,
-      reviewRunning: (await this.readPending())?.headSha === pr.head.sha,
+      reviewRunning: await this.reviewRunning(pr.head.sha),
       reviewed: headReviewed(pr.head.sha, (await this.readReviewed())?.headSha, await this.isPosted(pr)),
     })
+  }
+
+  private async reviewRunning(headSha: string): Promise<boolean> {
+    const pending = await this.readPending()
+    const running = (await this.operationsOf(pending)).length > 0
+    return decideFlight(pending, headSha, { running, now: Date.now() }).kind === "skip"
   }
 
   private async catchUp(
