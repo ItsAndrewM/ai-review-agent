@@ -174,7 +174,9 @@ describe("parseConfig", () => {
     ["an unknown key beside valid ones", "reviews:\n  auto: false\n  mode: strict\n", "/reviews/mode schema is false"],
     ["a model that is not a mapping", "model: glm-5.3-flash\n", "/model must be object"],
     ["a model that is a list", "model:\n  - glm\n", "/model must be object"],
+    ["a model key with nothing under it", "model:\n", "/model must be object"],
     ["a reviews that is not a mapping", "reviews: always\n", "/reviews must be object"],
+    ["a reviews key with nothing under it", "reviews:\n", "/reviews must be object"],
     ["a base_branches that is not a list", "reviews:\n  base_branches: main\n", "/reviews/base_branches must be array"],
     [
       "a base_branches entry that is not a string",
@@ -215,6 +217,11 @@ describe("parseConfig", () => {
       "a path_instructions entry without a path",
       "reviews:\n  path_instructions:\n    - instructions: Be kind.\n",
       "/reviews/path_instructions/0 must have required properties path",
+    ],
+    [
+      "a path_instructions entry with an unknown key",
+      "reviews:\n  path_instructions:\n    - path: 'docs/**'\n      instructions: Be kind.\n      severity: high\n",
+      "/reviews/path_instructions/0/severity schema is false",
     ],
   ])("gives the defaults and names the first problem, for %s", (_name, text, error) => {
     expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error })

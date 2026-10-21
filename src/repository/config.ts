@@ -5,10 +5,13 @@ import { parse } from "yaml"
 import type { GitHubClient, RepoRef } from "../github/client.ts"
 import { errorText } from "../log.ts"
 
-const PathInstructionEntry = Type.Object({
-  path: Type.String({ minLength: 1 }),
-  instructions: Type.String({ minLength: 1 }),
-})
+const PathInstructionEntry = Type.Object(
+  {
+    path: Type.String({ minLength: 1 }),
+    instructions: Type.String({ minLength: 1 }),
+  },
+  { additionalProperties: false },
+)
 
 const Reviews = Type.Object(
   {
