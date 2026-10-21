@@ -1,6 +1,6 @@
 # Skills for andabot: design
 
-Status: decided in a grilling session on 17 Oct 2026. Open points for the deferred slice are marked provisional. The implementation plan follows from this document.
+Status: decided in a grilling session on 17 Oct 2026; section D (slice 3) decided on 21 Oct 2026. The implementation plans follow from this document.
 
 ## Why
 
@@ -21,7 +21,7 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 3. The spec axis exists: the host fetches linked issues and offers a tool for others.
 4. Every review records which skills, fingerprint and model produced it, in the summary footer and in logs.
 5. The system prompt shrinks to identity and tool etiquette. Each rule lives in one place.
-6. Deferred: repo-provided skills and instruction files from the reviewed repository, read at the base commit and offered through the catalog.
+6. Repository-provided skills and instruction files from the reviewed repository, read at the base commit, as section D decides (slice 3).
 
 ## Non-goals
 
@@ -29,14 +29,14 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 - The verify pass as a second session. Phase 2; the planted-bug run decides whether it comes next. The layout leaves a `verify` skill slot.
 - The bot writing to the reviewed repository (learnings, out-of-scope records). It proposes text in comments at most.
 - The Agents Vite plugin. The build stays wrangler-only.
-- The `.andabot.yaml` config file. It is phase 2 work in `docs/design.md`; its `path_instructions` join the Standards sources when it exists.
+- `.andabot.yaml`'s `model` section, which waits for the verify pass (#31). The file's review settings and its `path_instructions` are section D's.
 - Author identity checks. A single user runs the bot on their own repositories.
 
 ## Anti-goals
 
 - Skill text that competes with the diff. Budget: the review skill body stays under 120 lines. Until slice 3, the four references render inline after the skill (section C, #19), trading the on-demand budget for a tool set gpt-oss posts with.
 - A rule stated twice. Anchoring rules already live in the `submit_review` schema; the skill points at them.
-- Rules a linter could enforce. Those wait for the sandbox tier.
+- Enforcing a linter's rules from the baseline. The baseline smells skip what tooling enforces; a repository's own written rules are reported even when its linter enforces them, as section D decides.
 - Model-chosen activation for the core procedure.
 
 ## Constraints, verified
@@ -90,14 +90,16 @@ Andrew reads and approves the skill texts before they are wired in. That read is
 - **Carried in the turn, for answers.** A question's prompt carries the answer skill in the user turn and leaves `instructions` alone. The review owns `instructions`; a question posted mid-review would otherwise swap the review's system section at its next model request, since `configure()` applies immediately while the question itself queues until the review ends. The answer skill is short, and the review transcript stays in the root session for "why is this a problem?".
 - **Catalog.** `skills([builtin])` and its two tools, `activate_skill` and `read_skill_resource`, are not installed until slice 3 brings repo-provided skills (section D). Until then the review skill's four references render inline after the skill body, each in the `<skill_resource>` wrapper `read_skill_resource` returns, and the model has only `read_file`, `list_changed_files` and `submit_review`, the tools gpt-oss-120b posted with on every run before slice 1, plus slice 2's `get_issue`. Offered the catalog's tools, it printed its first `read_skill_resource` call as raw Harmony text, then its whole `submit_review` call, and never posted a review of #9 (#19).
 
-### D. Repository context (deferred, provisional)
+### D. Repository context (slice 3)
 
-Scheduled when a second repository uses the bot. Provisional decisions, to revisit then:
+Decided on 21 Oct 2026 for issues #29 and #28 and the repository skills. Everything a repository supplies is read at the pull request's base commit, so a pull request cannot change the rules it is reviewed by, and `docs/design.md`'s configuration section changes to match.
 
-- `GitHubSkillSource(client, repo, baseSha)`: lists `.github/skills/*/SKILL.md`, `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` with one recursive trees call at the base commit, loads bodies and resources on demand through the contents API, refuses `..` in paths, and reports the tree SHA of those directories as its fingerprint, cached in the object's storage. The `agents.skills` extension is reinstalled per review with `[builtin, repo]`, built-in first, so a repo skill named `review` is shadowed with a logged warning.
-- Instruction files at the base commit: `CLAUDE.md`, `AGENTS.md`, `CODING_STANDARDS.md`, `CONTRIBUTING.md`, `REVIEW.md`, `.github/copilot-instructions.md`, `.github/instructions/*.instructions.md` filtered by `applyTo` against the changed files, then `path_instructions` once `.andabot.yaml` exists. Rendered after the skill as "Repository standards", capped at 12,000 characters with a note naming what was cut.
-- Trust: base commit only, for skills, instruction files and the config file alike. `docs/design.md` currently reads `.andabot.yaml` from the head; it changes to match when the config lands.
-- A repository's own review skill, such as the two-axis `code-review` that `install-code-review-skill` puts in `.github/skills`, supplements the built-in rubric: the review skill states that its procedure and `submit_review` stay in force, a repository skill supplies checks and vocabulary, and a tool it names that the bot lacks is skipped.
+- **Instruction files.** One recursive trees call at the base commit finds them: at the root, `CLAUDE.md`, `AGENTS.md`, `REVIEW.md`, `CODING_STANDARDS.md`, `.github/copilot-instructions.md` and `CONTRIBUTING.md`; `.github/instructions/*.instructions.md`, kept when the `applyTo` glob in its frontmatter matches a changed file and when it has none; and a nested `CLAUDE.md` or `AGENTS.md` in any directory that is an ancestor of a changed file. Bodies load through the contents API, and the listing and the bodies are cached in the object's storage by base sha. Globs are matched with `minimatch`, pinned.
+- **Rendering.** They render in the instructions after the skill and its references, as `## Repository standards`, each file under a heading with its path, in this order: `path_instructions` entries whose glob matches a changed file, then matching `.github/instructions` files, then nested `CLAUDE.md` and `AGENTS.md` deepest first, then root `CLAUDE.md`, `AGENTS.md`, `REVIEW.md`, `CODING_STANDARDS.md`, `.github/copilot-instructions.md` and `CONTRIBUTING.md`. The section is capped at 12,000 characters: whole entries are dropped from the end until it fits, except that a first entry larger than the cap is truncated at the cap, and a closing note names what was cut or truncated. The review skill's standards check names the section; a `standard` finding's basis names the file and the rule. Repository rules are reported even when a linter enforces them, since the review cannot run the linter and #29 asks for exactly that; `references/smells.md`'s sentence about skipping what tooling enforces scopes to the smells. A `standard` finding stays a suggestion or a nitpick. The footer line `Standards: CLAUDE.md, .github/instructions/ts.instructions.md` (or `none`) and `review.start` (`instructionFiles`, their count) say what was used.
+- **Config.** `.andabot.yaml` at the base commit, parsed with `yaml` and a TypeBox schema. A missing file gives the defaults; an invalid one gives the defaults and a summary note naming the error. Under `reviews`: `auto` (default `true`; `false` means pushes start no review and only commands do), `drafts` (default `false`: a draft waits until it is ready for review), `base_branches` (default any; a list restricts reviews to pull requests against those branches), `ignore_title_keywords` (default none; a match skips the pull request), `request_changes_workflow` (overrides the Worker var), `path_filters` (a list of `!`-prefixed minimatch globs naming paths to leave out of the review, such as `!**/*.snap`, matched with `dot: true` and joining `isGenerated`; an entry without the `!` makes the file invalid), `path_instructions` (a list of `{ path, instructions }`, each applied when its glob matches a changed file). `model.*` waits for the verify pass (#31). The router stays config-free: it forwards draft pull requests too, and the object applies the settings before planning. A title or base edit does not re-trigger a review; the next push or a command does, and a command bypasses every filter. A skipped push logs `review.skip` with the setting's name.
+- **Repository skills.** `GitHubSkillSource(client, repo, baseSha)` lists `.github/skills/*/SKILL.md`, `.agents/skills/*/SKILL.md` and `.claude/skills/*/SKILL.md` from the same trees call, in that order with names sorted within each and no relevance rule, loads bodies and resources through the contents API, refuses `..` and absolute paths, and reports the tree SHA of those directories as its fingerprint, shown in the footer as `repo@<8>`. Built-in skills come first, so a repository skill named `review` or `answer` is shadowed with a logged warning. How they reach the model is settled by a re-test of the Agents SDK catalog (`skills([builtin, repo])`, `activate_skill`, `read_skill_resource`) on GLM-5.3 Flash, the default model, before the skills task starts. The re-test reinstalls `skills([builtin])` as PR #17 had it, with the built-in references on demand, on a throwaway branch; it passes when two of two runs post through `submit_review` with the catalog tools called and no raw tool-call text in the transcript. If it passes, repository skills load on demand through the catalog while the built-in review skill and its references stay inline; if it does not, repository skill bodies render inline after the standards, under `## Repository skills`, capped at 12,000 characters the same way, and their resources load through `read_file`. The catalog tools are offered only when the repository has skills, and there is no per-model switch: a model that cannot use them is not the default.
+- **Supplementing, not replacing.** The review skill states that a repository skill supplements the built-in rubric: the procedure and `submit_review` stay in force, a repository skill supplies checks and vocabulary, and a tool it names that the bot lacks is skipped.
+- **Measurement.** Two fixtures, answer keys on #2, never merged: a pull request to this repository that adds a comment and a type assertion, expecting two `standard` findings whose basis names `CLAUDE.md`; and a pull request against a throwaway base branch that carries a `.github/skills/code-review/SKILL.md`, expecting that skill's checks in the review and `repo@<8>` in the footer.
 
 ### E. Spec axis
 
@@ -146,7 +148,7 @@ All of it branches from `main` after PR #5 (lint and format) merges, so every fi
 1. **Baseline.** Open #2's planted-bug pull request from a throwaway branch: five defects of known kind and line. Review it on the current build with gpt-oss-120b and Kimi K2.7 Code and record the results in #2. The PR stays open, unmerged, for the later runs.
 2. **Slice 1: infrastructure and the review skill.** Sections A, B, C, G, H, and a "Skills" section in `docs/design.md` pointing at this spec with the phases updated. No schema change. Andrew approves the skill texts before wiring. Then `@andabot full review` on the planted PR, both models.
 3. **Slice 2: basis, coverage, spec axis.** Section E and the remainder of F. #12 has merged and shipped #4's anchors: numbered patch lines, the `quote` field, the suggestion rules, every rejection returned once, and approval held back while a blocking finding stands rejected. Slice 2 builds basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues on top of them, in one PR that closes only its own issue. Then the planted PR again, both models.
-4. **Slice 3: repository context.** Deferred; section D holds the provisional decisions.
+4. **Slice 3: repository context.** Section D, decided on 21 Oct 2026; Parts A to C in `docs/superpowers/plans/2026-10-21-repository-context.md`.
 
 One issue per slice. This spec is committed on slice 1's branch.
 

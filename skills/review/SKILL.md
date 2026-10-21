@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "5"
+  version: "6"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -17,7 +17,7 @@ Take the files in the diff's order and read every hunk. Call `read_file` when a 
 
 - **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario.
 - **Spec**: what the linked issues ask for. A departure is a spec finding once you can name the issue line it rests on; that line is the finding's `basis`, and `quote` stays the diff line. When the prompt says no issue is linked, this check passes: requirements come only from linked issues.
-- **Standards**: the repository's documented standards, when the prompt supplies them, and the smells in `references/smells.md`, below. When a hunk adds or reshapes logic, match the hunks against the smells.
+- **Standards**: the repository's own rules under `## Repository standards` in your instructions, when present, and the smells in `references/smells.md`, below. A `standard` finding's basis names the file and the rule. When a hunk adds or reshapes logic, match the hunks against the smells.
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
 
 Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.

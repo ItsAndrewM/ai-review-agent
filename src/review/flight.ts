@@ -16,6 +16,7 @@ export const StoredPending = Type.Object({
   rejectionsReturned: Type.Optional(Type.Boolean()),
   linkedIssues: Type.Optional(Type.Array(Type.Integer())),
   usageBefore: Type.Optional(UsageTotals),
+  instructionFiles: Type.Optional(Type.Array(Type.String())),
 })
 
 export type StoredPending = Static<typeof StoredPending>

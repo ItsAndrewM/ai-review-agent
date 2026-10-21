@@ -24,6 +24,19 @@ import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
+  CONTEXT_PREFIX,
+  contextInputs,
+  contextKey,
+  loadRepositoryContext,
+  readRepositoryContext,
+  reviewInstructions,
+  reviewStandards,
+  staleContextKeys,
+  StoredRepositoryContext,
+  type RepositoryContext,
+  type ReviewStandards,
+} from "./repository/context.ts"
+import {
   checksState,
   decideApproval,
   evaluatesAfterReview,
@@ -392,6 +405,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       skillsFingerprint: attribution?.fingerprint,
       spend,
       linkedIssues: pending.linkedIssues ?? [],
+      instructionFiles: pending.instructionFiles ?? [],
       since: reviewed.since,
     })
     await this.upsertSummary(summary)
@@ -630,18 +644,74 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, linkedIssues })
   }
 
+  private async repositoryStandards(pr: PullRequestInfo, files: readonly ChangedFile[]): Promise<ReviewStandards> {
+    const { baseSha, changed } = contextInputs(pr, files)
+    const context = await this.repositoryContext(pr.number, baseSha, changed)
+    return reviewStandards(context, changed, [])
+  }
+
+  private async repositoryContext(
+    number: number,
+    baseSha: string,
+    changed: readonly string[],
+  ): Promise<RepositoryContext | undefined> {
+    const github = await this.github()
+    const key = await this.key()
+    const cached = await this.cachedContext(baseSha)
+    const fields = { number, base: shortSha(baseSha) }
+    const unreadableFile = (path: string, error: string): void =>
+      logError("context.unreadable", { ...fields, path, error })
+    const context = await readRepositoryContext(
+      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
+      (error) => logError("context.unreadable", { ...fields, error }),
+    )
+    if (context !== undefined && context !== cached) await this.cacheContext(context)
+    return context
+  }
+
+  private async cachedContext(baseSha: string): Promise<RepositoryContext | undefined> {
+    const key = contextKey(baseSha)
+    const stored = await this.ctx.storage.get(key)
+    if (Value.Check(StoredRepositoryContext, stored)) return stored
+    if (stored !== undefined) await this.ctx.storage.delete(key)
+    return undefined
+  }
+
+  private async cacheContext(context: RepositoryContext): Promise<void> {
+    try {
+      const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
+      const stale = staleContextKeys([...listed.keys()], context.baseSha)
+      if (stale.length > 0) await this.ctx.storage.delete(stale)
+      await this.ctx.storage.put(contextKey(context.baseSha), context)
+    } catch (error) {
+      logError("context.uncached", { base: shortSha(context.baseSha), error: errorText(error) })
+    }
+  }
+
+  private async recordInstructionFiles(deliveryId: string, used: readonly string[]): Promise<void> {
+    const pending = await this.pendingFor(deliveryId)
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, instructionFiles: [...used] })
+  }
+
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
       await this.recordLinkedIssues(run.deliveryId, issues)
+      const standards = await this.repositoryStandards(pr, files)
+      await this.recordInstructionFiles(run.deliveryId, standards.used)
       const { scope, since } = await this.planReview(pr, files, incoming, run)
       const prompt = promptFor(pr, files, scope, since, issues)
       log("review.start", {
         number: pr.number,
         head: shortSha(pr.head.sha),
+        base: shortSha(pr.base.sha),
         files: files.length,
         linkedIssues: issues.length,
+        instructionFiles: standards.used.length,
+        standardsCut: standards.cut.length,
+        instructionLoadsSkipped: standards.loadsSkipped,
+        treeTruncated: standards.treeTruncated,
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
         thinkingLevel: this.env.REVIEW_THINKING_LEVEL,
@@ -661,7 +731,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
-      await this.configureReview()
+      await this.configureReview(standards.text)
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       logTranscript(pr, "review", result)
@@ -768,14 +838,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
-  private async configureReview(): Promise<void> {
+  private async configureReview(standards: string): Promise<void> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "review")
     const references = await loadReferences(source, skill)
     const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
     await root.configure(
       {
-        instructions: renderSkillWithResources(skill, references),
+        instructions: reviewInstructions(renderSkillWithResources(skill, references), standards),
         thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
       },
       BACKGROUND_CONTEXT,

@@ -62,6 +62,7 @@ export function renderSummaryComment(input: {
   skillsFingerprint?: string | undefined
   spend?: ReviewSpend | undefined
   linkedIssues: readonly number[]
+  instructionFiles: readonly string[]
   since?: SinceSection | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
@@ -99,6 +100,7 @@ export function renderSummaryComment(input: {
     ...reviewedBy(input.model, input.skillsFingerprint),
     ...spendLines(input.spend),
     linkedIssuesLine(input.linkedIssues),
+    standardsLine(input.instructionFiles),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
   ].join("\n")
 }
@@ -148,6 +150,15 @@ function spendLines(spend: ReviewSpend | undefined): string[] {
 function linkedIssuesLine(numbers: readonly number[]): string {
   const listed = numbers.length === 0 ? "none" : numbers.map((number) => `#${number}`).join(", ")
   return `<sub>Linked issues: ${listed}</sub>`
+}
+
+function standardsLine(paths: readonly string[]): string {
+  const listed = paths.length === 0 ? "none" : paths.map(codeSpan).join(", ")
+  return `<sub>Standards: ${listed}</sub>`
+}
+
+function codeSpan(text: string): string {
+  return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {
