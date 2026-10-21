@@ -1,16 +1,8 @@
 import { Type, type Static } from "typebox"
 
-export interface PendingReview {
-  headSha: string
-  deliveryId: string
-  operationId: string
-  started: number
-  checkRunId?: number
-  model?: string
-  fingerprint?: string
-  rejectionsReturned?: boolean
-  linkedIssues?: number[]
-}
+export const GRACE_MS = 120_000
+
+const STARTED_OUTSIDE_ANY_GRACE = 0
 
 export const StoredPending = Type.Object({
   headSha: Type.String(),
@@ -26,20 +18,42 @@ export const StoredPending = Type.Object({
 
 export type StoredPending = Static<typeof StoredPending>
 
+export type PendingReview = StoredPending & { operationId: string; started: number }
+
 export function migratePending(stored: StoredPending): PendingReview {
-  return { ...stored, operationId: stored.operationId ?? `review:${stored.deliveryId}`, started: stored.started ?? 0 }
+  return {
+    ...stored,
+    operationId: stored.operationId ?? `review:${stored.deliveryId}`,
+    started: stored.started ?? STARTED_OUTSIDE_ANY_GRACE,
+  }
 }
 
 export type FlightDecision =
   | { kind: "start" }
-  | { kind: "skip"; reason: "in_progress" }
+  | { kind: "skip" }
   | { kind: "replace"; previous: PendingReview; because: "superseded" | "dead" }
 
-export function decideFlight(pending: PendingReview | undefined, headSha: string, live: boolean): FlightDecision {
+export interface Liveness {
+  running: boolean
+  now: number
+}
+
+export function decideFlight(pending: PendingReview | undefined, headSha: string, liveness: Liveness): FlightDecision {
   if (pending === undefined) return { kind: "start" }
   if (pending.headSha !== headSha) return { kind: "replace", previous: pending, because: "superseded" }
-  if (live) return { kind: "skip", reason: "in_progress" }
+  if (liveness.running || liveness.now - pending.started < GRACE_MS) return { kind: "skip" }
   return { kind: "replace", previous: pending, because: "dead" }
+}
+
+export function ownsOperation(pending: PendingReview, operationId: string): boolean {
+  return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
+}
+
+export function replacedExit(
+  current: PendingReview | undefined,
+  headSha: string,
+): "review.superseded" | "review.withdrawn" {
+  return current !== undefined && current.headSha !== headSha ? "review.superseded" : "review.withdrawn"
 }
 
 export type RunStanding = "in_flight" | "ended" | "replaced"

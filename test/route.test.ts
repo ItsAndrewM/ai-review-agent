@@ -180,6 +180,10 @@ describe("routeWebhook for checks", () => {
         reason: "check_run completed",
       },
     )
+    expect(routeWebhook("check_run", { ...base, action: "created", check_run: checkTarget }, "d", "andabot")).toEqual({
+      kind: "ignore",
+      reason: "check_run created",
+    })
     expect(
       routeWebhook("check_suite", { ...base, action: "requested", check_suite: checkTarget }, "d", "andabot"),
     ).toEqual({

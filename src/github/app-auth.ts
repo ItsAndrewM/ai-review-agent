@@ -1,10 +1,9 @@
-import { Type } from "typebox"
+import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 
-export interface InstallationToken {
-  token: string
-  expiresAt: number
-}
+export const InstallationToken = Type.Object({ token: Type.String(), expiresAt: Type.Number() })
+
+export type InstallationToken = Static<typeof InstallationToken>
 
 const InstallationTokenResponse = Type.Object({ token: Type.String(), expires_at: Type.String() })
 

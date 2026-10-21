@@ -6,6 +6,8 @@ import type {
   ReviewEvent,
   UpdateCheckRun,
 } from "../github/client.ts"
+import type { PostedReview } from "../records.ts"
+import { shortSha } from "../sha.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
 import { VERDICT_LABEL } from "./render.ts"
 
@@ -44,7 +46,19 @@ export function postedCheckRun(
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  return completedCheckRun("success", checkOutput(checkRunTitle(event, accepted), summary), detailsUrl, completedAt)
+  const title = checkRunTitle(event, countBySeverity(accepted))
+  return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
+}
+
+export function postedEarlierCheckRun(
+  posted: Pick<PostedReview, "reviewId" | "event" | "counts">,
+  detailsUrl: string | undefined,
+  completedAt: number,
+): UpdateCheckRun {
+  const title = posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
+  const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
+  const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
+  return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
 }
 
 export function failedCheckRun(reason: string, detailsUrl: string | undefined, completedAt: number): UpdateCheckRun {
@@ -71,8 +85,7 @@ export function replacedCheckRun(completedAt: number): UpdateCheckRun {
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
-export function checkRunTitle(event: ReviewEvent, accepted: readonly FindingInput[]): string {
-  const counts = countBySeverity(accepted)
+export function checkRunTitle(event: ReviewEvent, counts: Record<FindingInput["severity"], number>): string {
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking`)
   if (counts.suggestion > 0) parts.push(counted(counts.suggestion, "suggestion"))
@@ -108,8 +121,4 @@ function checkOutput(title: string, summary: string): CheckRunOutput {
 
 function counted(count: number, noun: string): string {
   return `${count} ${count === 1 ? noun : `${noun}s`}`
-}
-
-function shortSha(sha: string): string {
-  return sha.slice(0, 7)
 }
