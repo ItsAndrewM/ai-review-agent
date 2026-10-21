@@ -63,12 +63,15 @@ describe("ownsOperation", () => {
 })
 
 describe("replacedExit", () => {
-  it("is superseded when the review that replaced this one is of another head", () => {
-    expect(replacedExit({ ...pending, headSha: "bbb", deliveryId: "d-2" }, "aaa")).toBe("review.superseded")
+  it("is superseded when the newer review, or the pull request when its record isn't written yet, is at another head", () => {
+    expect(replacedExit("bbb", "aaa")).toBe("review.superseded")
   })
 
-  it("is withdrawn when a newer review of the same head replaced it, or the record is gone", () => {
-    expect(replacedExit({ ...pending, deliveryId: "d-2" }, "aaa")).toBe("review.withdrawn")
+  it("is withdrawn when a newer review of the same head replaced it", () => {
+    expect(replacedExit("aaa", "aaa")).toBe("review.withdrawn")
+  })
+
+  it("is withdrawn when the newer head can't be read, rather than guessing a push", () => {
     expect(replacedExit(undefined, "aaa")).toBe("review.withdrawn")
   })
 })
