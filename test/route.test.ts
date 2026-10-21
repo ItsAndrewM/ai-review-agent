@@ -268,3 +268,79 @@ describe("routeWebhook for approval", () => {
     expect(completedSuite({ ...checkTarget, app: {} })).toMatchObject({ kind: "handle" })
   })
 })
+
+describe("routeWebhook for review comments", () => {
+  const reviewPayload = { ...base, action: "created", pull_request: { number: 3, head: { sha: "abc" } } }
+  const asked = {
+    id: 11,
+    body: "@andabot why?",
+    user: { login: "andrew" },
+    path: "src/a.ts",
+    line: 12,
+    diff_hunk: "@@ -1 +1 @@",
+  }
+
+  it("accepts a review comment with its thread's fields", () => {
+    const reply = { ...reviewPayload, comment: { ...asked, body: "x", in_reply_to_id: 7, line: null } }
+    expect(Value.Check(WebhookPayload, reply)).toBe(true)
+  })
+
+  it("rejects a review comment whose line is neither a number nor null", () => {
+    expect(Value.Check(WebhookPayload, { ...reviewPayload, comment: { ...asked, line: "12" } })).toBe(false)
+  })
+
+  it("routes a review comment that mentions the bot, with its path, line and hunk", () => {
+    expect(routeWebhook("pull_request_review_comment", { ...reviewPayload, comment: asked }, "d1", "andabot")).toEqual({
+      kind: "handle",
+      incoming: [
+        {
+          kind: "comment",
+          key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+          deliveryId: "d1",
+          author: "andrew",
+          body: "@andabot why?",
+          thread: { commentId: 11, rootId: 11, path: "src/a.ts", line: 12, diffHunk: "@@ -1 +1 @@" },
+        },
+      ],
+    })
+  })
+
+  it("routes a reply in a review thread without a mention, for the object to check whose thread it is", () => {
+    const reply = { ...reviewPayload, comment: { ...asked, body: "why?", in_reply_to_id: 7 } }
+    expect(routeWebhook("pull_request_review_comment", reply, "d1", "andabot")).toMatchObject({
+      kind: "handle",
+      incoming: [{ kind: "comment", body: "why?", thread: { commentId: 11, rootId: 7 } }],
+    })
+  })
+
+  it("ignores a top-level review comment that doesn't mention the bot", () => {
+    const remark = { ...reviewPayload, comment: { ...asked, body: "lgtm" } }
+    expect(routeWebhook("pull_request_review_comment", remark, "d1", "andabot")).toEqual({
+      kind: "ignore",
+      reason: "no mention",
+    })
+  })
+
+  it("ignores an edited review comment", () => {
+    const edited = { ...reviewPayload, action: "edited", comment: asked }
+    expect(routeWebhook("pull_request_review_comment", edited, "d1", "andabot")).toMatchObject({
+      reason: "pull_request_review_comment edited",
+    })
+  })
+
+  it("ignores the bot's own reply in a thread", () => {
+    const own = {
+      ...reviewPayload,
+      sender: { login: "andabot[bot]", type: "Bot" },
+      comment: { ...asked, body: "Because the caller drops it.", in_reply_to_id: 7 },
+    }
+    expect(routeWebhook("pull_request_review_comment", own, "d1", "andabot")).toMatchObject({ reason: "sent by a bot" })
+  })
+
+  it("ignores a review comment that arrives without its thread's id, path or hunk", () => {
+    const bare = { ...reviewPayload, comment: { body: "@andabot why?", user: { login: "andrew" } } }
+    expect(routeWebhook("pull_request_review_comment", bare, "d1", "andabot")).toMatchObject({
+      reason: "review comment without its thread",
+    })
+  })
+})

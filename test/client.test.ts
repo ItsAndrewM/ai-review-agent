@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
-import { GitHubClient, type CreateCheckRun, type UpdateCheckRun } from "../src/github/client.ts"
+import { canCommand, GitHubClient, type CreateCheckRun, type UpdateCheckRun } from "../src/github/client.ts"
 
 interface Received {
   method: string | undefined
@@ -208,5 +208,12 @@ describe("getTree", () => {
     await expect(treeAt(respond(404, JSON.stringify({ message: "Not Found" })))).rejects.toThrow(
       /GitHub 404 .*Not Found/,
     )
+  })
+})
+
+describe("canCommand", () => {
+  it("lets admins, maintainers and writers command the bot, and no one else", () => {
+    for (const permission of ["admin", "maintain", "write"]) expect(canCommand(permission)).toBe(true)
+    for (const permission of ["triage", "read", "none"]) expect(canCommand(permission)).toBe(false)
   })
 })

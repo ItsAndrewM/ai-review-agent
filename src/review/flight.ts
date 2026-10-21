@@ -51,10 +51,10 @@ export function ownsOperation(pending: PendingReview, operationId: string): bool
 }
 
 export function replacedExit(
-  current: PendingReview | undefined,
+  newerHeadSha: string | undefined,
   headSha: string,
 ): "review.superseded" | "review.withdrawn" {
-  return current !== undefined && current.headSha !== headSha ? "review.superseded" : "review.withdrawn"
+  return newerHeadSha !== undefined && newerHeadSha !== headSha ? "review.superseded" : "review.withdrawn"
 }
 
 export type RunStanding = "in_flight" | "ended" | "replaced"

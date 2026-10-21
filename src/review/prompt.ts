@@ -207,3 +207,25 @@ const RESUBMIT_REQUEST = "Call submit_review now with the review, and don't writ
 export function answerPrompt(author: string, text: string, skill: string): string {
   return `${skill}\n\n${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly, in text.`
 }
+
+export interface ThreadQuestion {
+  path: string
+  line: number | null
+  diffHunk: string
+  opening: string | undefined
+}
+
+export function threadAnswerPrompt(author: string, text: string, skill: string, thread: ThreadQuestion): string {
+  const where =
+    thread.line === null
+      ? `on \`${thread.path}\`, on a line the latest push no longer shows`
+      : `on \`${thread.path}\` line ${thread.line}`
+  const fence = fenceFor(thread.diffHunk)
+  const opening = thread.opening === undefined ? "" : `The thread opens with this comment:\n\n${thread.opening}\n\n`
+  return `${skill}\n\n${author} replies in a review thread ${where}:\n\n${fence}diff\n${thread.diffHunk}\n${fence}\n\n${opening}${author}'s reply:\n\n${text}\n\nAnswer them directly, in text.`
+}
+
+function fenceFor(text: string): string {
+  const longest = Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length))
+  return "`".repeat(Math.max(3, longest + 1))
+}

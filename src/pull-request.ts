@@ -16,6 +16,7 @@ import {
   type Comparison,
   type PullRequestInfo,
   type RepoRef,
+  type ReviewThread,
   type UpdateCheckRun,
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
@@ -118,6 +119,7 @@ import {
   problemsText,
   resubmitPrompt,
   reviewPrompt,
+  threadAnswerPrompt,
 } from "./review/prompt.ts"
 import {
   approvalBody,
@@ -135,6 +137,7 @@ import {
   type Verdict,
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
+import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { shortSha } from "./sha.ts"
@@ -155,6 +158,7 @@ export type Incoming =
       deliveryId: string
       author: string
       body: string
+      thread?: ThreadContext
     }
   | {
       kind: "approval"
@@ -162,6 +166,14 @@ export type Incoming =
       deliveryId: string
       trigger: WebhookTrigger
     }
+
+export interface ThreadContext {
+  commentId: number
+  rootId: number
+  path: string
+  line: number | null
+  diffHunk: string
+}
 
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
@@ -902,13 +914,23 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const current = await this.readPending()
     const standing = runStanding(current, run.deliveryId, this.#incompleteDelivery)
     if (standing === "replaced") {
-      log(replacedExit(current, pr.head.sha), {
+      const newerHeadSha = current?.headSha ?? (await this.latestHeadSha(pr))
+      log(replacedExit(newerHeadSha, pr.head.sha), {
         number: pr.number,
         head: shortSha(pr.head.sha),
         delivery: run.deliveryId,
       })
     }
     return standing !== "in_flight"
+  }
+
+  private async latestHeadSha(pr: PullRequestInfo): Promise<string | undefined> {
+    try {
+      return (await this.freshPullRequest()).head.sha
+    } catch (error) {
+      logError("review.head_unreadable", { number: pr.number, error: errorText(error) })
+      return undefined
+    }
   }
 
   private async headMoved(pr: PullRequestInfo, run: ReviewRun): Promise<boolean> {
@@ -969,18 +991,25 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async comment(incoming: CommentIncoming, callerVersion?: Version): Promise<void> {
-    const command = parseCommand(incoming.body, this.botLogin())
-    if (!command) return
     const key = await this.key()
     const github = await this.github()
+    const thread = await this.threadFor(github, key, incoming.thread)
+    const command = incoming.thread
+      ? commandInThread(incoming.body, this.botLogin(), thread)
+      : parseCommand(incoming.body, this.botLogin())
+    if (!command) {
+      this.ignored(incoming, thread, key.number)
+      return
+    }
     if (!canCommand(await github.getCollaboratorPermission(key, incoming.author))) {
       log("command.ignored", { reason: "no_write_access", author: incoming.author, number: key.number })
       return
     }
-    log("command.received", { kind: command.kind, author: incoming.author, number: key.number })
+    const where = incoming.thread ? "thread" : "conversation"
+    log("command.received", { kind: command.kind, author: incoming.author, number: key.number, where })
     switch (command.kind) {
       case "help":
-        await github.createIssueComment(key, key.number, helpText(this.botLogin()))
+        await this.respond(github, key, incoming, helpText(this.botLogin()))
         return
       case "review": {
         const pr = await this.freshPullRequest()
@@ -997,23 +1026,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         )
         return
       }
-      case "chat": {
-        await this.harness.session().setModel(this.reviewModel())
-        const operationId = `chat:${incoming.deliveryId}`
-        const skill = await loadSkill((await bundledSkills()).source, "answer")
-        const prompt = answerPrompt(incoming.author, command.text, renderActivatedSkill(skill))
-        const result = await this.harness.prompt(prompt, { operationId })
-        const answer =
-          result.status === "done" && result.text?.trim()
-            ? result.text.trim()
-            : `I could not answer that: ${
-                result.status === "done"
-                  ? "the model returned nothing"
-                  : describeFailure(result, await this.storedFailureDetail(operationId))
-              }.`
-        await github.createIssueComment(key, key.number, `@${incoming.author} ${answer}`)
+      case "chat":
+        await this.answer(github, key, incoming, command.text, thread)
         return
-      }
     }
   }
 
@@ -1112,6 +1127,60 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } catch (error) {
       logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })
     }
+  }
+
+  private ignored(incoming: CommentIncoming, thread: ReviewThread | undefined, number: number): void {
+    const reason = incoming.thread ? threadIgnoreReason(this.botLogin(), thread) : "no_command"
+    log("command.ignored", { reason, author: incoming.author, number, root: incoming.thread?.rootId })
+  }
+
+  private async threadFor(
+    github: GitHubClient,
+    key: PullRequestKey,
+    context: ThreadContext | undefined,
+  ): Promise<ReviewThread | undefined> {
+    if (!context) return undefined
+    try {
+      return threadOf(await github.listReviewThreads(key, key.number), context.rootId)
+    } catch (error) {
+      logError("thread.lookup_failed", { number: key.number, root: context.rootId, error: errorText(error) })
+      return undefined
+    }
+  }
+
+  private async answer(
+    github: GitHubClient,
+    key: PullRequestKey,
+    incoming: CommentIncoming,
+    text: string,
+    thread: ReviewThread | undefined,
+  ): Promise<void> {
+    await this.harness.session().setModel(this.reviewModel())
+    const operationId = `chat:${incoming.deliveryId}`
+    const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
+    const prompt = incoming.thread
+      ? threadAnswerPrompt(incoming.author, text, skill, {
+          path: incoming.thread.path,
+          line: incoming.thread.line,
+          diffHunk: incoming.thread.diffHunk,
+          opening: thread?.firstCommentBody,
+        })
+      : answerPrompt(incoming.author, text, skill)
+    const result = await this.harness.prompt(prompt, { operationId })
+    const answer =
+      result.status === "done" && result.text?.trim()
+        ? result.text.trim()
+        : `I could not answer that: ${
+            result.status === "done"
+              ? "the model returned nothing"
+              : describeFailure(result, await this.storedFailureDetail(operationId))
+          }.`
+    await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+  }
+
+  private async respond(github: GitHubClient, key: PullRequestKey, incoming: CommentIncoming, body: string) {
+    if (incoming.thread) await github.replyToReviewComment(key, key.number, incoming.thread.rootId, body)
+    else await github.createIssueComment(key, key.number, body)
   }
 
   private async storedFailureDetail(operationId: string): Promise<string | undefined> {
