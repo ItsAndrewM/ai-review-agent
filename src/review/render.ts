@@ -145,8 +145,12 @@ function linkedIssuesLine(numbers: readonly number[]): string {
 }
 
 function standardsLine(paths: readonly string[]): string {
-  const listed = paths.length === 0 ? "none" : paths.map((path) => `\`${path}\``).join(", ")
+  const listed = paths.length === 0 ? "none" : paths.map(codeSpan).join(", ")
   return `<sub>Standards: ${listed}</sub>`
+}
+
+function codeSpan(text: string): string {
+  return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
 }
 
 export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {

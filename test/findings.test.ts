@@ -970,6 +970,12 @@ describe("renderSummaryComment", () => {
     )
   })
 
+  it("wraps a path that holds a backtick in a double-backtick span, so the footer's code span cannot end early", () => {
+    expect(summaryWith({ instructionFiles: ["docs/a`b.md", "CLAUDE.md"] })).toContain(
+      "<sub>Standards: `` docs/a`b.md ``, `CLAUDE.md`</sub>",
+    )
+  })
+
   it("shows the wait as the verdict", () => {
     const text = renderSummaryComment({
       botLogin: "andabot",

@@ -1,6 +1,6 @@
 # Skills for andabot: design
 
-Status: decided in a grilling session on 17 Oct 2026. Open points for the deferred slice are marked provisional. The implementation plan follows from this document.
+Status: decided in a grilling session on 17 Oct 2026; section D (slice 3) decided on 21 Oct 2026. The implementation plans follow from this document.
 
 ## Why
 
@@ -21,7 +21,7 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 3. The spec axis exists: the host fetches linked issues and offers a tool for others.
 4. Every review records which skills, fingerprint and model produced it, in the summary footer and in logs.
 5. The system prompt shrinks to identity and tool etiquette. Each rule lives in one place.
-6. Deferred: repo-provided skills and instruction files from the reviewed repository, read at the base commit and offered through the catalog.
+6. Repository-provided skills and instruction files from the reviewed repository, read at the base commit, as section D decides (slice 3).
 
 ## Non-goals
 
@@ -29,14 +29,14 @@ The bot reviews one person's own pull requests. Nothing here defends against a h
 - The verify pass as a second session. Phase 2; the planted-bug run decides whether it comes next. The layout leaves a `verify` skill slot.
 - The bot writing to the reviewed repository (learnings, out-of-scope records). It proposes text in comments at most.
 - The Agents Vite plugin. The build stays wrangler-only.
-- The `.andabot.yaml` config file. It is phase 2 work in `docs/design.md`; its `path_instructions` join the Standards sources when it exists.
+- `.andabot.yaml`'s `model` section, which waits for the verify pass (#31). The file's review settings and its `path_instructions` are section D's.
 - Author identity checks. A single user runs the bot on their own repositories.
 
 ## Anti-goals
 
 - Skill text that competes with the diff. Budget: the review skill body stays under 120 lines. Until slice 3, the four references render inline after the skill (section C, #19), trading the on-demand budget for a tool set gpt-oss posts with.
 - A rule stated twice. Anchoring rules already live in the `submit_review` schema; the skill points at them.
-- Rules a linter could enforce. Those wait for the sandbox tier.
+- Enforcing a linter's rules from the baseline. The baseline smells skip what tooling enforces; a repository's own written rules are reported even when its linter enforces them, as section D decides.
 - Model-chosen activation for the core procedure.
 
 ## Constraints, verified
@@ -148,7 +148,7 @@ All of it branches from `main` after PR #5 (lint and format) merges, so every fi
 1. **Baseline.** Open #2's planted-bug pull request from a throwaway branch: five defects of known kind and line. Review it on the current build with gpt-oss-120b and Kimi K2.7 Code and record the results in #2. The PR stays open, unmerged, for the later runs.
 2. **Slice 1: infrastructure and the review skill.** Sections A, B, C, G, H, and a "Skills" section in `docs/design.md` pointing at this spec with the phases updated. No schema change. Andrew approves the skill texts before wiring. Then `@andabot full review` on the planted PR, both models.
 3. **Slice 2: basis, coverage, spec axis.** Section E and the remainder of F. #12 has merged and shipped #4's anchors: numbered patch lines, the `quote` field, the suggestion rules, every rejection returned once, and approval held back while a blocking finding stands rejected. Slice 2 builds basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues on top of them, in one PR that closes only its own issue. Then the planted PR again, both models.
-4. **Slice 3: repository context.** Deferred; section D holds the provisional decisions.
+4. **Slice 3: repository context.** Section D, decided on 21 Oct 2026; Parts A to C in `docs/superpowers/plans/2026-10-21-repository-context.md`.
 
 One issue per slice. This spec is committed on slice 1's branch.
 
