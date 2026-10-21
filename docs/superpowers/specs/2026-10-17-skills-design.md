@@ -103,7 +103,7 @@ Scheduled when a second repository uses the bot. Provisional decisions, to revis
 
 - The host parses linked issues in this order: closing keywords in the body (`Closes #n`, `Fixes #n`, `Resolves #n`), then the branch name's `GH-n` keys, then a trailing `.n` on the branch name whose dot follows a non-digit, so a version such as `v1.2` is no key. Bare `#n` mentions in the body count only when none of those exists, since a mention in passing does not make an issue the spec. It fetches up to three with a new `getIssue` parsed by TypeBox, and renders title and body, capped, under "Linked issues" in the review prompt, marked as data like the description.
 - A read-only `get_issue(number)` tool, `replay: "safe"`, for issues the model meets in commits or comments.
-- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms.
+- The skill: a spec finding quotes the issue line it rests on. With no linked issue the prompt says "No linked issue" and the footer shows "Linked issues: none"; the summary does not repeat it. Requirements are never inferred from the code, so the host rejects a `spec` finding on a pull request with no linked issue, with a reason that offers the `defect` kind for code that is wrong on its own terms. A requirement the diff leaves out is named in the summary, in the issue's words.
 
 ### F. Anchors, findings and the submit loop
 
@@ -124,7 +124,7 @@ Left for slice 2:
 - `ReviewSubmission` gains `merge_danger`: `door` (`one-way` or `two-way`) and `blast_radius`, one line. Required. The summary's "Merge danger" line follows the stored `reviewed` record, not the latest submission: a full review stores its own judgement, and an incremental review (#24), which sees only its push, stores the stricter door of the record's and the push's, the push's judgement when the doors are equal. A push that touches nothing risky therefore leaves a one-way door in place.
 - Every changed file not filtered as generated has a walkthrough row. An incremental review (#24) needs rows only for the files it covers, and none when it only re-checks threads, since the summary keeps the stored rows of the other files. Missing rows are returned with the other rejections. If the second submission still misses files, nothing posts: the summary comment says the review did not complete and names the files, ten at most and then a count of the rest, and the run is logged as `review.incomplete`. A retry's JSON counts as the second submission, so rows missing from it end the review the same way; the resubmit prompt names the files that need rows when the first run gave the host nothing to check.
 
-Rendering: a finding's comment carries `_Basis: …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
+Rendering: a finding's comment carries `_Basis (<kind>): …_` after the body and before any suggestion block; the summary gets a "Merge danger" line under the verdict.
 
 ### G. Attribution and logs
 

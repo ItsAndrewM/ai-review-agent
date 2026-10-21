@@ -482,7 +482,7 @@ describe("basis", () => {
   it("renders the basis after the body and before the suggestion", () => {
     const comment = toReviewComment(finding({ suggestion: "const b = 4;" }))
     expect(comment.body).toBe(
-      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis: with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
+      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis (defect): with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
     )
   })
 })
@@ -594,7 +594,20 @@ describe("toReviewComment", () => {
     const comment = toReviewComment(finding({ start_line: 1, line: 2, suggestion: "const b = 4;\n" }))
     expect(comment).toMatchObject({ path: "src/x.ts", line: 2, side: "RIGHT", start_line: 1, start_side: "RIGHT" })
     expect(comment.body).toBe(
-      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis: with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
+      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis (defect): with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
+    )
+  })
+
+  it("shows each finding's basis kind in its basis line, so a spec or test finding is recognisable without reading the quote", () => {
+    const specComment = toReviewComment(specFinding())
+    const testComment = toReviewComment(
+      finding({ basis_kind: "test", basis: "checkout has no test", severity: "suggestion" }),
+    )
+    expect(specComment.body).toBe(
+      "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis (spec): #7: totals are never NaN_",
+    )
+    expect(testComment.body).toBe(
+      "**🟡 Suggestion: b changed**\n\nWhy did b change?\n\n_Basis (test): checkout has no test_",
     )
   })
 })

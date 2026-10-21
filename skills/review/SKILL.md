@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "4"
+  version: "5"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -40,7 +40,7 @@ Grade every finding's `severity` by `references/severity.md`, below.
 
 ## 5. Submit
 
-The summary says what the code shows. You can't build, run or test the code, so don't say it compiles or its tests pass: that is for CI, and a claim the description makes is the author's, not yours.
+The summary says what the code shows. When an issue is linked, the summary names each of its requirements the diff leaves out, in the issue's words. You can't build, run or test the code, so don't say it compiles or its tests pass: that is for CI, and a claim the description makes is the author's, not yours.
 
 Judge the merge danger by `references/merge-danger.md`, below. State its door and blast radius in `merge_danger`, which the host prints above the summary. Submit with `submit_review`. When it returns rejected findings or files without a walkthrough row, resubmit the whole review with each rejected finding fixed or dropped and a row for each of those files.
 
