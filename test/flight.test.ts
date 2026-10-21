@@ -126,6 +126,13 @@ describe("migratePending", () => {
     expect(Value.Check(StoredPending, { ...pending, linkedIssues: ["#12"] })).toBe(false)
   })
 
+  it("keeps the instruction files the standards were rendered from, which the summary footer reads back", () => {
+    const standards: PendingReview = { ...pending, instructionFiles: ["apps/web/CLAUDE.md", "CLAUDE.md"] }
+    expect(Value.Check(StoredPending, standards)).toBe(true)
+    expect(migratePending(standards)).toEqual(standards)
+    expect(Value.Check(StoredPending, { ...pending, instructionFiles: "CLAUDE.md" })).toBe(false)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)

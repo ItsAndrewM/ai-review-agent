@@ -3,7 +3,7 @@
 A fixed set of Fowler code smells (_Refactoring_, ch.3) that applies even when a repo documents nothing. Two rules bind it:
 
 - **The repo overrides.** A documented repo standard always wins; where it endorses something the baseline would flag, suppress the smell.
-- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), graded `suggestion` or `nitpick`. Like any standard, skip anything tooling already enforces.
+- **Always a judgement call.** Each smell is a labelled heuristic ("possible Feature Envy"), graded `suggestion` or `nitpick`. Skip a smell that tooling already enforces; a repository rule under `## Repository standards` is reported even when a linter enforces it, since the review cannot run the linter.
 
 Each smell reads *what it is* → *how to fix*; match it against the diff:
 

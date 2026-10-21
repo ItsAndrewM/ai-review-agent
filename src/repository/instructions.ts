@@ -72,6 +72,8 @@ const nestedPaths = (blobs: ReadonlySet<string>, changed: readonly string[]): st
 
 const rootPaths = (blobs: ReadonlySet<string>): string[] => ROOT_FILES.filter((path) => blobs.has(path))
 
+export const isRootFile = (path: string): boolean => ROOT_FILES.includes(path)
+
 export function instructionCandidates(entries: readonly TreeEntry[], changed: readonly string[]): string[] {
   const blobs = new Set(entries.filter(({ type }) => type === "blob").map(({ path }) => path))
   return [...instructionPaths(blobs), ...nestedPaths(blobs, changed), ...rootPaths(blobs)]
@@ -145,7 +147,7 @@ export function frontmatterStripped(text: string): string {
 
 const sourceOf = (path: string): StandardSource => {
   if (path.endsWith(INSTRUCTIONS_SUFFIX)) return "instructions"
-  return ROOT_FILES.includes(path) ? "root" : "nested"
+  return isRootFile(path) ? "root" : "nested"
 }
 
 const fileStandards = (path: string, text: string, changed: readonly string[]): Standard[] => {
