@@ -4,12 +4,15 @@ import { describe, expect, it } from "vitest"
 import {
   callsByModel,
   ReviewSpend,
+  reviewSpend,
+  usageBaseline,
   spendFields,
   spendLine,
   spendSince,
   UsageTotals,
   usageTotals,
   type ModelSpend,
+  type UsageLedger,
 } from "../src/review/cost.ts"
 
 const GLM = "cloudflare/@cf/zai-org/glm-5.3-flash"
@@ -151,6 +154,13 @@ describe("spendLine", () => {
     )
   })
 
+  it("calls the cost unknown when the only model with tokens is unpriced, beside one whose calls reported none", () => {
+    const silent = spend({ inputTokens: 0, cachedTokens: 0, outputTokens: 0, usd: 0, priced: true })
+    expect(spendLine([spend({ model: KIMI, usd: 0, priced: false }), silent])).toBe(
+      "6 model calls · 61k in / 4.8k out tokens · cost unknown",
+    )
+  })
+
   it("says the usage went unreported when no call counted a token", () => {
     expect(spendLine([spend({ inputTokens: 0, cachedTokens: 0, outputTokens: 0, usd: 0 })])).toBe(
       "3 model calls · usage not reported",
@@ -190,5 +200,44 @@ describe("spendFields", () => {
 
   it("logs nothing for a review with no recorded spend", () => {
     expect(spendFields(undefined)).toEqual({})
+  })
+})
+
+describe("reading the ledger", () => {
+  const ledger = (state: { models: Record<string, Usage> }, calls: AssistantMessage[]): UsageLedger => ({
+    usage: async () => state,
+    messages: async () => calls.map((message) => ({ model: [message] })),
+  })
+  const broken: UsageLedger = {
+    usage: async () => Promise.reject(new Error("storage closed")),
+    messages: async () => Promise.reject(new Error("storage closed")),
+  }
+
+  it("takes the baseline as the ledger stands", async () => {
+    const state = { models: { [GLM]: usage({ input: 20, output: 5, usd: 0.25 }) } }
+    expect(await usageBaseline(ledger(state, []))).toEqual({
+      [GLM]: { input: 20, output: 5, cacheRead: 0, cacheWrite: 0, usd: 0.25 },
+    })
+  })
+
+  it("starts the review with no baseline when the ledger can't be read, rather than failing it", async () => {
+    expect(await usageBaseline(broken)).toBeUndefined()
+  })
+
+  it("measures the spend since the baseline, with the calls from the transcript", async () => {
+    const before = { [GLM]: { input: 20, output: 5, cacheRead: 0, cacheWrite: 0, usd: 0.25 } }
+    const state = { models: { [GLM]: usage({ input: 120, output: 25, usd: 0.5 }) } }
+    expect(await reviewSpend(ledger(state, [call(GLM), call(GLM)]), before)).toEqual([
+      { model: GLM, calls: 2, inputTokens: 100, cachedTokens: 0, outputTokens: 20, usd: 0.25, priced: true },
+    ])
+  })
+
+  it("has no spend for a review that started with no baseline, so the summary posts without a cost line", async () => {
+    const state = { models: { [GLM]: usage({ input: 120, output: 25, usd: 0.5 }) } }
+    expect(await reviewSpend(ledger(state, [call(GLM)]), undefined)).toEqual([])
+  })
+
+  it("has no spend when the ledger can't be read at the end, so the review still posts", async () => {
+    expect(await reviewSpend(broken, {})).toEqual([])
   })
 })

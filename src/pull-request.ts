@@ -48,14 +48,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
-import {
-  callsByModel,
-  spendFields,
-  spendSince,
-  usageTotals,
-  type ReviewSpend,
-  type UsageTotals,
-} from "./review/cost.ts"
+import { reviewSpend, spendFields, usageBaseline, type ReviewSpend, type UsageLedger } from "./review/cost.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -899,28 +892,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return (await this.ctx.storage.get(`posted:${pr.head.sha}`)) !== undefined
   }
 
-  private async usageNow(): Promise<UsageTotals> {
-    return usageTotals(await (await this.harness.pi()).usage(BACKGROUND_CONTEXT))
+  private usageLedger(): UsageLedger {
+    return {
+      usage: async () => (await this.harness.pi()).usage(BACKGROUND_CONTEXT),
+      messages: () => this.harness.session().messages(),
+    }
   }
 
   private async usageBaseline(): Promise<Pick<StoredPending, "usageBefore">> {
-    try {
-      return { usageBefore: await this.usageNow() }
-    } catch (error) {
-      logError("review.usage_unreadable", { when: "start", error: errorText(error) })
-      return {}
-    }
+    const usageBefore = await usageBaseline(this.usageLedger())
+    return usageBefore === undefined ? {} : { usageBefore }
   }
 
-  private async spendOf(pending: PendingReview): Promise<ReviewSpend> {
-    if (pending.usageBefore === undefined) return []
-    try {
-      const calls = callsByModel(await this.harness.session().messages())
-      return spendSince(pending.usageBefore, await this.usageNow(), calls)
-    } catch (error) {
-      logError("review.usage_unreadable", { when: "spend", error: errorText(error) })
-      return []
-    }
+  private spendOf(pending: PendingReview): Promise<ReviewSpend> {
+    return reviewSpend(this.usageLedger(), pending.usageBefore)
   }
 
   private async runSpend(deliveryId: string): Promise<ReviewSpend> {

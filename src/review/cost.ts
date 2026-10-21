@@ -1,7 +1,7 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai"
 import type { EntryRecord, UsageState } from "@earendil-works/pi-durable"
 import { Type, type Static } from "typebox"
-import type { LogFields } from "../log.ts"
+import { errorText, logError, type LogFields } from "../log.ts"
 
 const USD_PER_THOUSAND_NEURONS = 0.011
 
@@ -36,6 +36,31 @@ export const ReviewSpend = Type.Array(ModelSpend)
 export type ReviewSpend = Static<typeof ReviewSpend>
 
 const NO_USAGE: UsageTally = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0 }
+
+export interface UsageLedger {
+  usage(): Promise<Pick<UsageState, "models">>
+  messages(): Promise<readonly Pick<EntryRecord, "model">[]>
+}
+
+export async function usageBaseline(ledger: UsageLedger): Promise<UsageTotals | undefined> {
+  try {
+    return usageTotals(await ledger.usage())
+  } catch (error) {
+    logError("review.usage_unreadable", { when: "start", error: errorText(error) })
+    return undefined
+  }
+}
+
+export async function reviewSpend(ledger: UsageLedger, before: UsageTotals | undefined): Promise<ReviewSpend> {
+  if (before === undefined) return []
+  try {
+    const calls = callsByModel(await ledger.messages())
+    return spendSince(before, usageTotals(await ledger.usage()), calls)
+  } catch (error) {
+    logError("review.usage_unreadable", { when: "spend", error: errorText(error) })
+    return []
+  }
+}
 
 export function usageTotals(state: Pick<UsageState, "models">): UsageTotals {
   return Object.fromEntries(
@@ -107,11 +132,11 @@ export function spendLine(spend: ReviewSpend): string | undefined {
   const calls = `${totals.calls} model call${totals.calls === 1 ? "" : "s"}`
   if (tokensOf(totals) === 0) return `${calls} · usage not reported`
   const tokens = `${tokenCount(totals.inputTokens)} in / ${tokenCount(totals.outputTokens)} out tokens`
-  return [calls, tokens, priceText(totals, spend.length)].join(" · ")
+  return [calls, tokens, priceText(totals, spend.filter((model) => tokensOf(model) > 0).length)].join(" · ")
 }
 
-function priceText(totals: SpendTotals, models: number): string {
-  if (totals.unpriced.length === models) return "cost unknown"
+function priceText(totals: SpendTotals, modelsWithTokens: number): string {
+  if (totals.unpriced.length === modelsWithTokens) return "cost unknown"
   const price = `${neuronText(neuronsOf(totals.usd))} (${dollarText(totals.usd)})`
   if (totals.unpriced.length === 0) return price
   return `${price} + unpriced ${totals.unpriced.map(modelName).join(", ")}`
