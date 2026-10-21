@@ -49,7 +49,48 @@ export interface ConfigRead extends ParsedConfig {
   present: boolean
 }
 
+export const StoredConfig = Type.Object({
+  baseSha: Type.String(),
+  config: AndabotConfig,
+  error: Type.Optional(Type.String()),
+  present: Type.Boolean(),
+})
+
+export type StoredConfig = Static<typeof StoredConfig>
+
+export type ConfigStatus = "missing" | "file" | "invalid" | "unreadable"
+
+export type ReviewTrigger = "push" | "command"
+
+export type SkipReason = "auto" | "draft" | "base_branch" | "title_keyword"
+
+export type ReviewDecision = { review: true } | { review: false; reason: SkipReason }
+
+export interface PullRequestFacts {
+  draft: boolean
+  baseRef: string
+  title: string
+}
+
+export interface PullRequestSource {
+  draft?: boolean | undefined
+  base: { ref: string }
+  title: string
+}
+
+export interface ReviewRequest {
+  full: boolean
+  requestedBy?: string | undefined
+}
+
+export interface RunSettings {
+  requestChangesWorkflow: boolean
+  configError?: string
+}
+
 type ReportUnreadable = (error: string) => void
+
+type Reviews = Static<typeof Reviews>
 
 export const DEFAULT_CONFIG: AndabotConfig = {
   reviews: {
@@ -62,7 +103,9 @@ export const DEFAULT_CONFIG: AndabotConfig = {
   },
 }
 
-const CONFIG_FILE = ".andabot.yaml"
+export const CONFIG_FILE = ".andabot.yaml"
+
+export const CONFIG_PREFIX = "config:"
 
 const LINE_BREAK = /\r?\n/
 
@@ -112,4 +155,65 @@ export async function readConfig(
   }
   if (text === undefined) return { config: defaults(), error: undefined, present: false }
   return { ...parseConfig(text), present: true }
+}
+
+export function configStatus({ present, error }: ConfigRead): ConfigStatus {
+  if (error === undefined) return present ? "file" : "missing"
+  return present ? "invalid" : "unreadable"
+}
+
+export const isCacheable = (read: ConfigRead): boolean => configStatus(read) !== "unreadable"
+
+export const configKey = (baseSha: string): string => `${CONFIG_PREFIX}${baseSha}`
+
+export function staleConfigKeys(keys: readonly string[], baseSha: string): string[] {
+  const current = configKey(baseSha)
+  return keys.filter((key) => key.startsWith(CONFIG_PREFIX) && key !== current)
+}
+
+export function storedConfig(baseSha: string, { config, error, present }: ConfigRead): StoredConfig {
+  const record = { baseSha, config, present }
+  return error === undefined ? record : { ...record, error }
+}
+
+export const configReadOf = ({ config, error, present }: StoredConfig): ConfigRead => ({ config, error, present })
+
+export const pullRequestFacts = ({ draft, base, title }: PullRequestSource): PullRequestFacts => ({
+  draft: draft === true,
+  baseRef: base.ref,
+  title,
+})
+
+export const reviewTrigger = ({ full, requestedBy }: ReviewRequest): ReviewTrigger =>
+  full || requestedBy !== undefined ? "command" : "push"
+
+const ignoredKeywords = (keywords: readonly string[]): string[] =>
+  keywords.map((keyword) => keyword.trim().toLowerCase()).filter((keyword) => keyword !== "")
+
+const holdsIgnoredKeyword = (title: string, keywords: readonly string[]): boolean => {
+  const lowered = title.toLowerCase()
+  return ignoredKeywords(keywords).some((keyword) => lowered.includes(keyword))
+}
+
+const outsideBaseBranches = (baseRef: string, branches: readonly string[]): boolean =>
+  branches.length > 0 && !branches.includes(baseRef)
+
+function skipReason(reviews: Reviews, pr: PullRequestFacts): SkipReason | undefined {
+  if (!reviews.auto) return "auto"
+  if (pr.draft && !reviews.drafts) return "draft"
+  if (outsideBaseBranches(pr.baseRef, reviews.base_branches)) return "base_branch"
+  return holdsIgnoredKeyword(pr.title, reviews.ignore_title_keywords) ? "title_keyword" : undefined
+}
+
+export function shouldReview(config: AndabotConfig, pr: PullRequestFacts, trigger: ReviewTrigger): ReviewDecision {
+  const reason = trigger === "command" ? undefined : skipReason(config.reviews, pr)
+  return reason === undefined ? { review: true } : { review: false, reason }
+}
+
+export const requestChangesWorkflow = (override: boolean | undefined, variable: string | undefined): boolean =>
+  override ?? variable === "true"
+
+export function runSettings({ config, error }: ConfigRead, variable: string | undefined): RunSettings {
+  const settings = { requestChangesWorkflow: requestChangesWorkflow(config.reviews.request_changes_workflow, variable) }
+  return error === undefined ? settings : { ...settings, configError: error }
 }

@@ -1,4 +1,5 @@
 import type { ReviewEvent } from "../github/client.ts"
+import { CONFIG_FILE } from "../repository/config.ts"
 import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
   countBySeverity,
@@ -24,6 +25,7 @@ export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 const MOST_HELD_BACK_LISTED = 5
 const MOST_MISSING_LISTED = 10
 const MOST_LISTED_CHARS = 100
+const MOST_CONFIG_ERROR_CHARS = 300
 
 export type Verdict = ReviewEvent | "AWAITING_CHECKS"
 
@@ -64,6 +66,7 @@ export function renderSummaryComment(input: {
   linkedIssues: readonly number[]
   instructionFiles: readonly string[]
   since?: SinceSection | undefined
+  configError?: string | undefined
 }): string {
   const counts = countBySeverity(input.accepted)
   const { door, blast_radius } = input.submission.merge_danger
@@ -102,7 +105,13 @@ export function renderSummaryComment(input: {
     linkedIssuesLine(input.linkedIssues),
     standardsLine(input.instructionFiles),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
+    ...configNoteLines(input.configError),
   ].join("\n")
+}
+
+function configNoteLines(error: string | undefined): string[] {
+  if (error === undefined) return []
+  return ["", `_${CONFIG_FILE} was ignored: ${clipped(error, MOST_CONFIG_ERROR_CHARS)}; the defaults applied._`]
 }
 
 function sinceLines(since: SinceSection | undefined): string[] {
@@ -238,13 +247,16 @@ function heldBack(rejected: readonly Rejected[]): string | undefined {
     `${blocking.length} blocking finding(s) couldn't be posted inline and hold approval back:`,
     ...blocking
       .slice(0, MOST_HELD_BACK_LISTED)
-      .map((r) => `- **${clipped(r.finding.title)}** in \`${clipped(r.finding.path)}\``),
+      .map(
+        (r) =>
+          `- **${clipped(r.finding.title, MOST_LISTED_CHARS)}** in \`${clipped(r.finding.path, MOST_LISTED_CHARS)}\``,
+      ),
   ].join("\n")
 }
 
-function clipped(text: string): string {
+function clipped(text: string, most: number): string {
   const flat = oneLine(text)
-  return flat.length > MOST_LISTED_CHARS ? `${flat.slice(0, MOST_LISTED_CHARS)}…` : flat
+  return flat.length > most ? `${flat.slice(0, most)}…` : flat
 }
 
 function inlineSummary(event: Verdict, accepted: readonly FindingInput[]): string {

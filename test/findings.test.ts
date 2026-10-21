@@ -499,7 +499,7 @@ describe("missingWalkthrough", () => {
       { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
     ]
     const submission = { ...base, walkthrough: [{ path: "src/x.ts", summary: "s" }] }
-    expect(missingWalkthrough(submission, walkthroughPaths(files))).toEqual(["logo.png"])
+    expect(missingWalkthrough(submission, walkthroughPaths(files, []))).toEqual(["logo.png"])
   })
 
   it("counts a row whose path has surrounding spaces or a leading ./", () => {
@@ -509,13 +509,18 @@ describe("missingWalkthrough", () => {
 })
 
 describe("walkthroughPaths", () => {
+  const files = [
+    { filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch },
+    { filename: "logo.png", status: "added", additions: 0, deletions: 0 },
+    { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
+  ]
+
   it("lists the files that need a walkthrough row, in diff order, and skips generated ones", () => {
-    const files = [
-      { filename: "src/x.ts", status: "modified", additions: 1, deletions: 0, patch },
-      { filename: "logo.png", status: "added", additions: 0, deletions: 0 },
-      { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0 },
-    ]
-    expect(walkthroughPaths(files)).toEqual(["src/x.ts", "logo.png"])
+    expect(walkthroughPaths(files, [])).toEqual(["src/x.ts", "logo.png"])
+  })
+
+  it("skips the files a path filter leaves out of the review", () => {
+    expect(walkthroughPaths(files, ["!**/*.png"])).toEqual(["src/x.ts"])
   })
 })
 
@@ -884,6 +889,7 @@ describe("renderSummaryComment", () => {
     linkedIssues?: number[]
     spend?: ReviewSpend
     instructionFiles?: string[]
+    configError?: string
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -976,6 +982,34 @@ describe("renderSummaryComment", () => {
     expect(summaryWith({ instructionFiles: ["docs/a`b.md", "CLAUDE.md"] })).toContain(
       "<sub>Standards: `` docs/a`b.md ``, `CLAUDE.md`</sub>",
     )
+  })
+
+  it("ends with a note naming the error under the footer lines when .andabot.yaml was ignored", () => {
+    expect(summaryWith({ configError: "/reviews/auto must be boolean" })).toMatch(
+      /<sub>Commands: [^\n]*<\/sub>\n\n_\.andabot\.yaml was ignored: \/reviews\/auto must be boolean; the defaults applied\._$/,
+    )
+  })
+
+  it("flattens the error's whitespace onto the note's one line", () => {
+    const error = "Error: GitHub 502 : <html>\n  <body>bad\tgateway</body>\r\n</html>\n"
+    expect(summaryWith({ configError: error })).toContain(
+      "\n\n_.andabot.yaml was ignored: Error: GitHub 502 : <html> <body>bad gateway</body> </html>; the defaults applied._",
+    )
+  })
+
+  it("cuts an error longer than 300 characters to 300 and an ellipsis", () => {
+    expect(summaryWith({ configError: "x".repeat(301) })).toContain(
+      `_.andabot.yaml was ignored: ${"x".repeat(300)}…; the defaults applied._`,
+    )
+    expect(summaryWith({ configError: "y".repeat(300) })).toContain(
+      `_.andabot.yaml was ignored: ${"y".repeat(300)}; the defaults applied._`,
+    )
+  })
+
+  it("adds no note when the file was missing or valid", () => {
+    const text = summaryWith({})
+    expect(text).not.toContain(".andabot.yaml was ignored")
+    expect(text).toMatch(/<sub>Commands: [^\n]*<\/sub>$/)
   })
 
   it("says what the review cost on the line after the skills claim", () => {

@@ -1,3 +1,4 @@
+import { minimatch } from "minimatch"
 import { Type, type Static } from "typebox"
 
 export type Side = "LEFT" | "RIGHT"
@@ -141,12 +142,23 @@ const GENERATED = [
   /(^|\/)(dist|build|\.wrangler)\//,
 ]
 
+const FILTER_MARK = /^!/
+const FILTER_OPTIONS = { dot: true }
+
 export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
 }
 
-export function requiresWalkthrough(file: ChangedFile): boolean {
-  return !isGenerated(file.filename)
+export function isFiltered(path: string, patterns: readonly string[]): boolean {
+  return patterns.some((pattern) => minimatch(path, pattern.replace(FILTER_MARK, ""), FILTER_OPTIONS))
+}
+
+export function requiresWalkthrough(file: ChangedFile, patterns: readonly string[]): boolean {
+  return !isGenerated(file.filename) && !isFiltered(file.filename, patterns)
+}
+
+export function reviewableFiles(files: readonly ChangedFile[], patterns: readonly string[]): ChangedFile[] {
+  return files.filter((file) => !isFiltered(file.filename, patterns))
 }
 
 export function renderPatches(

@@ -47,11 +47,12 @@ Events the App subscribes to:
 
 | Event | Action | Handler |
 | --- | --- | --- |
-| `pull_request` | opened, synchronize, reopened, ready_for_review | review (incremental on synchronize) |
+| `pull_request` | opened, synchronize, reopened, ready_for_review | review (incremental on synchronize); a draft is forwarded too, and the object applies `reviews.drafts` from `.andabot.yaml` |
+| `pull_request` | edited | ignored, so a title or base edit starts no review; the next push or a command does |
 | `pull_request` | closed | archive: stop alarms, keep transcript |
 | `issue_comment` | created, on a PR | command or chat turn |
 | `pull_request_review_comment` | created | a mention, or a reply in one of andabot's threads: answer in that thread, with its file, line and hunk |
-| `pull_request_review_thread` | resolved, unresolved | re-evaluate approval; ignored on a draft or when a bot sent it, so andabot's own resolutions are left to the review that made them |
+| `pull_request_review_thread` | resolved, unresolved | re-evaluate approval; ignored when a bot sent it, so andabot's own resolutions are left to the review that made them; a draft's is forwarded, and the evaluation waits as `not_open` |
 | `check_run` / `check_suite` | rerequested | full review of each listed pull request; dormant, since GitHub shows no Re-run on andabot's runs (#8) |
 | `check_suite` | requested | ignored: the pull request event starts the review |
 | `check_suite` | completed | re-evaluate approval for each listed pull request, skipping andabot's own suite; routed even when a bot sent it, since GitHub Actions' suites arrive from `github-actions[bot]` |
@@ -66,12 +67,12 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `reviewed`: the head of the last review, the base branch's name, the mode it ran in, the last full review's summary and walkthrough, and the merge danger the summary shows, which an incremental review updates to the stricter door, with a `since` section from the latest incremental one. The next push diffs against that head, and a different base branch (a retargeted pull request) means a full review.
 - `summary_comment_id`: the one issue comment that is edited in place on every push.
 - `finding:<commentId>`: the severity, title and quoted line of each inline comment the bot posted. Thread state isn't stored. Whether a thread is resolved or outdated, and where it sits now, is read live from GitHub on each review, so a thread a person resolved is always seen as resolved. These records only supply what GitHub doesn't: the quote to catch a repeat, and the severity that gates approval.
-- `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, and the threads to re-check. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
+- `scope`: the plan of the review in flight. It holds the mode, the range, the marked lines of each covered file, every one of the bot's open threads with its handle, the threads to re-check, and the `path_filters` that left files out of the prompt. `submitReview` applies it to the submission, so a review is validated against what its prompt showed.
 - `last_review`, stored as `lastReview`: the id, event (`REQUEST_CHANGES`, `COMMENT`, `APPROVE`) and head of the review the bot last submitted, the approval evaluation's own approvals included, with the model's verdict and the count of blocking findings the review couldn't post inline. The approval evaluation reads it.
-- `config`: the parsed `.andabot.yaml` from the PR head, refreshed on each push.
 - `paused`: set by `pause`, cleared by `resume` (#27). The approval evaluation reads it.
-- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the numbers of the linked issues its prompt carried, the paths of the instruction files its standards were rendered from, and whether its rejected findings, duplicates and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
+- `pending`: the review in flight, with its head, delivery id, operation id, start time and check run id, the model and skill fingerprint that attribute it, the request-changes workflow it runs under, the error of an `.andabot.yaml` it ignored, the numbers of the linked issues its prompt carried, the paths of the instruction files its standards were rendered from, and whether its rejected findings, duplicates and missing walkthrough rows have gone back to the model; one per object, because reviews are single-flight.
 - `context:<baseSha>`: the repository at a pull request's base commit, as the review's standards read it: the trees listing, kept to the blobs that may be instruction files and those under `.github/skills/`, `.agents/skills/` and `.claude/skills/`, and the instruction files loaded so far, a file missing at that commit as an empty body. A new base replaces it, and a record that fails its schema is deleted and fetched again, which is how its format changes.
+- `config:<baseSha>`: the `.andabot.yaml` at a pull request's base commit as it was read: its settings with the defaults filled in, whether a file was there, and the error that made it ignored. A file GitHub failed to serve is never stored, so the next review reads it again. A new base replaces the record, and a record that fails its schema is deleted and read again.
 
 Methods, each an idempotent Pi submission:
 
@@ -124,7 +125,7 @@ The spec is the issues a pull request links, up to three: the closing keywords i
 
 A repository's own rules join the review as standards (#29). After the skill and its references, the host renders the instruction files from step 1 of the pipeline as `## Repository standards`, each under a heading with its path, the most specific first: the matching `.github/instructions` files, then nested files deepest first, then the root files. The section is capped at 12,000 characters: whole files are dropped from the end, a first file longer than the cap is truncated, and a closing note names what was cut. The skill's standards check names the section, and a `standard` finding's basis names the file and the rule. The summary footer's `Standards:` line names the files used, or `none`.
 
-One recursive trees call at the base commit lists the instruction files, and the contents API loads their bodies. The object caches both under `context:<baseSha>`, keeping from the listing only the blobs that may be instruction files and those under the three skills roots, since a whole tree can pass the 2 MB a stored value may hold. A file missing at that commit is kept as an empty body, so a later review of the same base loads only the bodies it lacks, and a new base replaces the record. A review loads at most 24 bodies, since each one is a subrequest and the section rarely has room for more: the root files first, then nested files, which always apply, then `.github/instructions` files, which their `applyTo` may filter out; a later review of the same base loads the rest. The section still renders in the order above, and the cap still cuts from its end, whatever loaded first. A body GitHub fails to serve for any reason but a missing file is skipped, logged as `context.unreadable` with its path, and left uncached, so a later review tries it again; the other files still render. When the tree itself can't be read, the review goes ahead without standards, its footer says `none`, and `context.unreadable` is logged without a path. Storing the record is best effort and logs `context.uncached` when it fails. A tree GitHub truncated at 100,000 entries is used as listed. `review.start` logs the `base` and `instructionFiles`, `standardsCut`, `instructionLoadsSkipped` and `treeTruncated`.
+One recursive trees call at the base commit lists the instruction files, and the contents API loads their bodies. The object caches both under `context:<baseSha>`, keeping from the listing only the blobs that may be instruction files and those under the three skills roots, since a whole tree can pass the 2 MB a stored value may hold. A file missing at that commit is kept as an empty body, so a later review of the same base loads only the bodies it lacks, and a new base replaces the record. A review loads at most 24 bodies, since each one is a subrequest and the section rarely has room for more: the root files first, then nested files, which always apply, then `.github/instructions` files, which their `applyTo` may filter out; a later review of the same base loads the rest. The section still renders in the order above, and the cap still cuts from its end, whatever loaded first. A body GitHub fails to serve for any reason but a missing file is skipped, logged as `context.unreadable` with its path, and left uncached, so a later review tries it again; the other files still render. When the tree itself can't be read, the review goes ahead without the instruction files, `context.unreadable` is logged without a path, and the standards hold only `.andabot.yaml`'s matching path instructions, since the config is read on its own; with none of those, the footer says `none`. Storing the record is best effort and logs `context.uncached` when it fails. A tree GitHub truncated at 100,000 entries is used as listed. `review.start` logs the `base` and `instructionFiles`, `standardsCut`, `instructionLoadsSkipped` and `treeTruncated`.
 
 `renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, and `renderSkillWithResources` wraps each reference as its `read_skill_resource` does, so re-check both against the SDK on every `agents` bump.
 
@@ -168,7 +169,7 @@ The summary comment keeps the last full review's summary and walkthrough. An inc
 
 `evaluateApproval` decides whether to approve the current head without a push (#25). It runs when a thread is resolved or unresolved, when a check suite other than andabot's finishes, and after a posted review that didn't approve, except one that just posted a blocking finding, whose thread is certainly open and may not show in GitHub's list yet. It makes no model call. `decideApproval` in `src/review/approval.ts` is a pure function of what the object reads live, and it waits for the first of these that holds:
 
-1. `workflow_off`: `REQUEST_CHANGES_WORKFLOW` isn't `true`.
+1. `workflow_off`: the request-changes workflow is off: `.andabot.yaml`'s `request_changes_workflow` at the pull request's base is `false`, or the file doesn't set it and `REQUEST_CHANGES_WORKFLOW` isn't `true`.
 2. `paused`.
 3. `not_open`: the pull request is closed, merged or a draft.
 4. `review_in_flight`: a review is pending. It evaluates when it ends.
@@ -200,7 +201,7 @@ Only users with write access to the repo can issue commands; the object checks t
 
 ### Configuration file
 
-`.andabot.yaml` at the PR head, optional:
+`.andabot.yaml` is optional and is read at the pull request's base commit, like the instruction files, so a pull request cannot change the rules it is reviewed by: one that turns `auto` off, adds a title keyword or filters out its own files is still reviewed under the base's settings, and its change applies once it is on the base branch. The object reads it on its own, not with the tree, so a tree GitHub fails to serve leaves the settings in force. `docs/setup.md` lists every setting with its default.
 
 ```yaml
 reviews:
@@ -217,6 +218,14 @@ model:
   draft: "@cf/zai-org/glm-5.3-flash"
   verify: "@cf/moonshotai/kimi-k2.7-code"
 ```
+
+`src/repository/config.ts` parses it with `yaml` and a TypeBox schema. A missing file gives the defaults. An invalid one, whether YAML that doesn't parse, a key the schema doesn't know, a value of the wrong type or a `path_filters` entry without its `!`, gives the defaults with none of its settings applied, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`, the problem flattened onto one line and cut at 300 characters. A file GitHub fails to serve for any reason but a 404 gives the defaults and the same note, logs `config.unreadable` with the base, and is not cached, so the next review reads it again and a passing 5xx doesn't pin the defaults until the base moves. Every other read is cached under `config:<baseSha>`, and storing it is best effort, logging `config.uncached` when it fails. A review keeps the request-changes workflow and the error it started with in `pending`, so the summary it posts describes the settings its prompt was built with. `review.start` logs `config` as `missing`, `file`, `invalid` or `unreadable`.
+
+- **Whether a push is reviewed.** `shouldReview` checks `auto` (default `true`), then `drafts` (default `false`), then `base_branches` (default any), then `ignore_title_keywords` (default none), after the skips for a closed pull request, a moved head and a head already reviewed, and before the review touches the one in flight or opens its check run. A push one of them skips logs `review.skip` with the reason `auto`, `draft`, `base_branch` or `title_keyword`, completes nothing, and leaves any pending review and the last posted one standing. A base branch matches by its exact name, not as a glob. A keyword matches anywhere in the title, ignoring case and its own surrounding spaces, and a blank keyword matches nothing. A command, whether `@andabot review`, `full review` or a check re-run, bypasses all four. The router stays config-free: it forwards drafts and leaves the decision to the object, and since it doesn't route `edited`, a title or base edit starts no review; the next push or a command does.
+- **`request_changes_workflow`**, when set, overrides `REQUEST_CHANGES_WORKFLOW` for both the review's event and the approval evaluation, which reads the file at the pull request's current base. Overriding only the review would leave a repository that turns the workflow on, under a Worker that has it off, with requested changes that resolving the threads never lifts.
+- **`path_filters`** are `!`-prefixed minimatch globs, matched with `dot: true`, naming files to leave out of the review. A filtered file gets no patch or listing in the prompt, needs no walkthrough row, and counts toward no incremental review's coverage, so a push that changed only filtered files has nothing to review. The review's `scope` keeps the filters, so `submitReview` asks for the rows the prompt asked for. Filtered files still scope the instruction files and the path instructions, and still count in the in-progress check run's "Reviewing N files" and in `review.start`'s `files`, beside `filesFiltered`, which counts how many were left out.
+- **`path_instructions`** join the standards ahead of the instruction files, each labelled `.andabot.yaml: <glob>` and applied when its glob matches a changed file, and they apply even when the tree can't be read.
+- **`model`** takes any mapping and is ignored until the verify pass (#31).
 
 ## Models
 
@@ -269,7 +278,6 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 
 ## Open questions
 
-- Where the config file lives when the PR head doesn't have one: default branch, then built-in defaults.
 - How to mark findings as blocking versus optional in a way the model follows reliably; the verify pass is the place to decide severity, not the draft.
 - Review of very large PRs: a cap on files reviewed with an explicit "skipped" list in the summary, or chunked sub-sessions through Pi's subagents.
 

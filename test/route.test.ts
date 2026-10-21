@@ -61,28 +61,41 @@ describe("routeWebhook", () => {
     })
   })
 
-  it("ignores drafts, closed events, bots and other events", () => {
-    const pr = { number: 3, draft: true, head: { sha: "abc" } }
-    expect(routeWebhook("pull_request", { ...base, action: "opened", pull_request: pr }, "d", "andabot")).toMatchObject(
-      { kind: "ignore", reason: "draft pull request" },
+  it("forwards a draft pull request, since the object applies reviews.drafts from the base's .andabot.yaml", () => {
+    for (const action of ["opened", "synchronize"]) {
+      const pr = { number: 3, draft: true, head: { sha: "abc" } }
+      expect(routeWebhook("pull_request", { ...base, action, pull_request: pr }, "d", "andabot")).toEqual({
+        kind: "handle",
+        incoming: [
+          {
+            kind: "review",
+            key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+            deliveryId: "d",
+            headSha: "abc",
+            full: false,
+          },
+        ],
+      })
+    }
+  })
+
+  it("leaves an edited pull request unrouted, so a title or base edit starts no review", () => {
+    const pr = { number: 3, draft: false, head: { sha: "abc" } }
+    expect(routeWebhook("pull_request", { ...base, action: "edited", pull_request: pr }, "d", "andabot")).toEqual({
+      kind: "ignore",
+      reason: "pull_request edited",
+    })
+  })
+
+  it("ignores closed events, bots and other events", () => {
+    const pr = { number: 3, draft: false, head: { sha: "abc" } }
+    expect(routeWebhook("pull_request", { ...base, action: "closed", pull_request: pr }, "d", "andabot")).toMatchObject(
+      { kind: "ignore" },
     )
     expect(
       routeWebhook(
         "pull_request",
-        { ...base, action: "closed", pull_request: { ...pr, draft: false } },
-        "d",
-        "andabot",
-      ),
-    ).toMatchObject({ kind: "ignore" })
-    expect(
-      routeWebhook(
-        "pull_request",
-        {
-          ...base,
-          sender: { login: "andabot[bot]", type: "Bot" },
-          action: "opened",
-          pull_request: { ...pr, draft: false },
-        },
+        { ...base, sender: { login: "andabot[bot]", type: "Bot" }, action: "opened", pull_request: pr },
         "d",
         "andabot",
       ),
@@ -221,10 +234,10 @@ describe("routeWebhook for approval", () => {
     })
   })
 
-  it("ignores a thread event on a draft, from a bot, or with another action", () => {
+  it("forwards a thread event on a draft, whose evaluation waits as not_open, and ignores one from a bot or with another action", () => {
     expect(threadEvent({ pull_request: { ...threadPr, draft: true } })).toEqual({
-      kind: "ignore",
-      reason: "draft pull request",
+      kind: "handle",
+      incoming: [{ kind: "approval", key: key3, deliveryId: "d", trigger: "thread_resolved" }],
     })
     expect(threadEvent({ sender: { login: "andabot[bot]", type: "Bot" } })).toEqual({
       kind: "ignore",

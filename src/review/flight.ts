@@ -17,6 +17,8 @@ export const StoredPending = Type.Object({
   linkedIssues: Type.Optional(Type.Array(Type.Integer())),
   usageBefore: Type.Optional(UsageTotals),
   instructionFiles: Type.Optional(Type.Array(Type.String())),
+  requestChangesWorkflow: Type.Optional(Type.Boolean()),
+  configError: Type.Optional(Type.String()),
 })
 
 export type StoredPending = Static<typeof StoredPending>

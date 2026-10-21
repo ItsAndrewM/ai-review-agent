@@ -87,6 +87,7 @@ export const ReviewScope = Type.Object({
   open: Type.Array(OpenThread),
   threadsKnown: Type.Boolean(),
   changed: Type.Optional(Type.Array(Type.String())),
+  pathFilters: Type.Optional(Type.Array(Type.String())),
 })
 
 export type ReviewScope = Static<typeof ReviewScope>
@@ -130,6 +131,7 @@ export interface ScopeInput {
   covered: ReadonlyMap<string, MarkedLines>
   threads: ThreadPlan | undefined
   changed?: readonly string[]
+  pathFilters?: readonly string[]
 }
 
 export interface NextReviewedInput {
@@ -363,6 +365,7 @@ export function buildScope(input: ScopeInput): ReviewScope {
     covered: [...input.covered].map(([path, marked]) => ({ path, right: [...marked.right], left: [...marked.left] })),
     ...threadFields(input.threads),
     changed: [...(input.changed ?? [])],
+    pathFilters: [...(input.pathFilters ?? [])],
   }
   return input.mode === "incremental" && input.from !== undefined ? { ...scope, from: input.from } : scope
 }
@@ -381,9 +384,13 @@ export function nothingToReview(scope: ReviewScope): boolean {
 }
 
 export function pathsNeedingRows(scope: ReviewScope, files: readonly ChangedFile[]): string[] {
-  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(files)
+  const pathFilters = scope.pathFilters ?? []
+  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(files, pathFilters)
   const covered = new Set(scope.covered.map((file) => file.path))
-  return walkthroughPaths(files.filter((file) => covered.has(file.filename)))
+  return walkthroughPaths(
+    files.filter((file) => covered.has(file.filename)),
+    pathFilters,
+  )
 }
 
 export function promptFiles(

@@ -47,7 +47,7 @@ Variables in `wrangler.jsonc`:
 | `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. |
 | `REVIEW_MODEL` | `@cf/zai-org/glm-5.3-flash` | Workers AI model. GLM 5.x, the default included, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash also run on Free. Workers AI's free 10,000 neurons a day cover about 15 to 28 reviews on GLM-5.3 Flash, as measured on #2. |
 | `MAX_OUTPUT_TOKENS` | `16000` | Most output tokens one model call may ask for, reasoning included; the model's own maximum and its context still cap it. Raise it, for example with `--var MAX_OUTPUT_TOKENS:32000` on deploy, when large pull requests get cut-off reviews. Anything but a positive whole number falls back to 16,000. `review.start` logs the value in effect as `maxOutputTokens`. |
-| `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. |
+| `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. A repository's `.andabot.yaml` overrides it with `reviews.request_changes_workflow` (section 6). |
 
 ## 3. Local development
 
@@ -63,9 +63,9 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 
 ## 4. What happens on a pull request
 
-1. GitHub posts `pull_request` (opened, reopened, ready for review, synchronize) to `/webhook`.
+1. GitHub posts `pull_request` (opened, reopened, ready for review, synchronize) to `/webhook`, drafts included.
 2. The Worker verifies the signature and hands the event to the Durable Object named `<installation>/<owner>/<repo>#<number>`.
-3. The object fetches the PR and its files.
+3. The object fetches the PR and reads `.andabot.yaml` at its base commit (section 6). When the file's settings skip the push, a draft by default among them, it logs `review.skip` with the reason and stops there; otherwise it fetches the files.
 4. It opens a check run named after the bot on the head commit, titled "Review in progress", and prompts the Pi session with the diff.
 5. The model reads what it needs with `read_file`, then calls `submit_review`.
 6. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review. A clean approve verdict makes it an approval once the head's other checks pass; until they do, the review posts as a comment that says approval waits for the checks. The run completes with the verdict in its title; a review that does not complete fails the run, and a push mid-review cancels it as superseded by the new head.
@@ -89,3 +89,43 @@ gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'JSON'
 }
 JSON
 ```
+
+## 6. Per-repository settings: `.andabot.yaml`
+
+A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pull request's base commit, never the head, so a pull request cannot change the rules it is reviewed by: one that edits the file is reviewed under the base's version, and the edit applies once it is on the base branch. Every setting is optional, and a repository without the file gets the defaults.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `reviews.auto` | `true` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
+| `reviews.drafts` | `false` | `false`: a draft waits until it is marked ready for review. `true`: a draft is reviewed like any pull request. |
+| `reviews.base_branches` | `[]`: any base | Review only pull requests whose base branch is listed, by its exact name: `release/*` names a branch called `release/*`, not every release branch. |
+| `reviews.ignore_title_keywords` | `[]` | Skip a pull request whose title contains one of these anywhere, ignoring case. `WIP` also matches `Wipe`, so `WIP:` or `[WIP]` is more precise. A blank entry matches nothing. |
+| `reviews.request_changes_workflow` | unset: the Worker's `REQUEST_CHANGES_WORKFLOW` | `true` or `false` for this repository, for both the review's event and the approval that follows resolved threads and passing checks. |
+| `reviews.path_filters` | `[]` | Files to leave out of the review, each a [minimatch](https://github.com/isaacs/minimatch) glob that starts with `!`. A filtered file gets no patch in the prompt and needs no walkthrough row. |
+| `reviews.path_instructions` | `[]` | Entries of a `path` glob and its `instructions`, added to the review's standards, ahead of the repository's instruction files, when the glob matches a changed file. |
+| `model` | none | Accepted and ignored until the verify pass (#31). It takes a mapping only: `model: {}` or keys under `model:`, never `model: <name>`. |
+
+```yaml
+reviews:
+  drafts: true
+  base_branches: ["main"]
+  ignore_title_keywords: ["[WIP]"]
+  path_filters:
+    - "!**/*.snap"
+    - "!**/pnpm-lock.yaml"
+  path_instructions:
+    - path: "apps/worker/**"
+      instructions: "Receipts must stay decodable for 24 hours after a deploy."
+```
+
+`auto`, `drafts`, `base_branches` and `ignore_title_keywords` decide what a push does, checked in that order. A command (`@andabot review`, `@andabot full review`) bypasses all four. Editing a pull request's title or base starts no review; the next push or a command does. A skipped push logs `review.skip` with the reason `auto`, `draft`, `base_branch` or `title_keyword`, and leaves the last review standing.
+
+What makes the file invalid, or match less than meant:
+
+- **Every `path_filters` entry starts with `!`.** An entry without it makes the whole file invalid. Quote each one, as in `"!**/*.snap"`: unquoted, YAML reads a leading `!` as a tag and a leading `*` as an alias, and the file fails to parse or is rejected.
+- **A glob without a slash matches at the root only.** `!pnpm-lock.yaml` leaves out the root lock file, and `!**/pnpm-lock.yaml` leaves out every one. Dotfiles and files under dot directories match like any other.
+- **Booleans are `true` and `false`.** The file is YAML 1.2, where `yes`, `no`, `on` and `off` are strings, and a string where a boolean belongs makes the file invalid.
+- **A key with nothing under it is invalid.** `reviews:` with every line under it commented out reads as null, and so does a bare `model:`. Delete the key, or keep at least one setting under it.
+- **An unknown key is invalid**, under `reviews` or at the top level, so a typo such as `draft: true` is reported rather than silently ignored.
+
+An invalid file applies none of its settings: the review runs with the defaults, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`. The problem names its place in the file, as in `/reviews/auto must be boolean`; an unknown key reads as `/reviews/draft schema is false`. A file GitHub fails to serve gets the same note, the defaults for that review only, and a `config.unreadable` log. `review.start` in Workers Logs shows which applied: `config` is `missing`, `file`, `invalid` or `unreadable`.

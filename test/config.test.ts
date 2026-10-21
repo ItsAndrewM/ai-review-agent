@@ -1,7 +1,27 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient } from "../src/github/client.ts"
-import { AndabotConfig, DEFAULT_CONFIG, parseConfig, readConfig } from "../src/repository/config.ts"
+import {
+  AndabotConfig,
+  CONFIG_FILE,
+  CONFIG_PREFIX,
+  configKey,
+  configReadOf,
+  configStatus,
+  DEFAULT_CONFIG,
+  isCacheable,
+  parseConfig,
+  pullRequestFacts,
+  readConfig,
+  requestChangesWorkflow,
+  reviewTrigger,
+  runSettings,
+  shouldReview,
+  staleConfigKeys,
+  StoredConfig,
+  storedConfig,
+  type ConfigRead,
+} from "../src/repository/config.ts"
 
 const ref = { owner: "o", repo: "r" }
 const BASE = "ba5e5".repeat(8)
@@ -334,5 +354,215 @@ describe("readConfig", () => {
     unreadable.config.reviews.base_branches.push("first")
     expect(DEFAULT_CONFIG).toEqual(LITERAL_DEFAULTS)
     expect((await readConfig(missing.github, ref, BASE, failOnUnreadable)).config).toEqual(LITERAL_DEFAULTS)
+  })
+
+  it("reads the one file name the standards' labels use too", () => {
+    expect(CONFIG_FILE).toBe(".andabot.yaml")
+  })
+})
+
+const OTHER_BASE = "0".repeat(40)
+
+const MISSING: ConfigRead = { config: LITERAL_DEFAULTS, error: undefined, present: false }
+const VALID: ConfigRead = { config: FULL_CONFIG, error: undefined, present: true }
+const INVALID: ConfigRead = { config: LITERAL_DEFAULTS, error: "/reviews/auto must be boolean", present: true }
+const UNREADABLE: ConfigRead = { config: LITERAL_DEFAULTS, error: "Error: GitHub 502 : boom", present: false }
+
+const READY = { draft: false, baseRef: "main", title: "Read the config at the base" }
+
+const withReviews = (reviews: Partial<AndabotConfig["reviews"]>): AndabotConfig => ({
+  reviews: { ...LITERAL_DEFAULTS.reviews, ...reviews },
+})
+
+describe("shouldReview", () => {
+  const draft = { ...READY, draft: true }
+
+  it("reviews a push on a ready pull request under the defaults", () => {
+    expect(shouldReview(LITERAL_DEFAULTS, READY, "push")).toEqual({ review: true })
+  })
+
+  it("starts no review on a push when auto is false, and still reviews on a command", () => {
+    const manual = withReviews({ auto: false })
+    expect(shouldReview(manual, READY, "push")).toEqual({ review: false, reason: "auto" })
+    expect(shouldReview(manual, READY, "command")).toEqual({ review: true })
+  })
+
+  it("waits on a draft by default, reviews one when drafts is true, and reviews one on a command either way", () => {
+    expect(shouldReview(LITERAL_DEFAULTS, draft, "push")).toEqual({ review: false, reason: "draft" })
+    expect(shouldReview(withReviews({ drafts: true }), draft, "push")).toEqual({ review: true })
+    expect(shouldReview(LITERAL_DEFAULTS, draft, "command")).toEqual({ review: true })
+  })
+
+  it("reviews only pull requests against a listed base branch, matching its name exactly rather than as a glob", () => {
+    const listed = withReviews({ base_branches: ["main", "release/*"] })
+    expect(shouldReview(listed, READY, "push")).toEqual({ review: true })
+    expect(shouldReview(listed, { ...READY, baseRef: "release/*" }, "push")).toEqual({ review: true })
+    for (const baseRef of ["develop", "release/1.0", "Main"]) {
+      expect(shouldReview(listed, { ...READY, baseRef }, "push")).toEqual({ review: false, reason: "base_branch" })
+    }
+    expect(shouldReview(listed, { ...READY, baseRef: "develop" }, "command")).toEqual({ review: true })
+  })
+
+  it("reviews against any base branch when the list is empty", () => {
+    expect(shouldReview(LITERAL_DEFAULTS, { ...READY, baseRef: "develop" }, "push")).toEqual({ review: true })
+  })
+
+  it("skips a title that holds an ignored keyword anywhere, ignoring case and the keyword's surrounding spaces", () => {
+    const ignoring = withReviews({ ignore_title_keywords: ["WIP", " [skip review] "] })
+    for (const title of ["WIP: read the config", "wip read the config", "Read it [Skip Review]", "Wipe the cache"]) {
+      expect(shouldReview(ignoring, { ...READY, title }, "push")).toEqual({ review: false, reason: "title_keyword" })
+    }
+    expect(shouldReview(ignoring, READY, "push")).toEqual({ review: true })
+    expect(shouldReview(ignoring, { ...READY, title: "WIP" }, "command")).toEqual({ review: true })
+  })
+
+  it("matches no title with an empty or blank keyword", () => {
+    expect(shouldReview(withReviews({ ignore_title_keywords: [""] }), READY, "push")).toEqual({ review: true })
+    expect(shouldReview(withReviews({ ignore_title_keywords: ["  ", "\t"] }), READY, "push")).toEqual({ review: true })
+    const mixed = withReviews({ ignore_title_keywords: ["", "WIP"] })
+    expect(shouldReview(mixed, { ...READY, title: "WIP: x" }, "push")).toEqual({
+      review: false,
+      reason: "title_keyword",
+    })
+  })
+
+  it("checks auto, then drafts, then the base branch, then the title, and names the first that skips", () => {
+    const strict = withReviews({ drafts: false, base_branches: ["main"], ignore_title_keywords: ["WIP"] })
+    const manual = { reviews: { ...strict.reviews, auto: false } }
+    const everything = { draft: true, baseRef: "develop", title: "WIP: x" }
+    expect(shouldReview(manual, everything, "push")).toEqual({ review: false, reason: "auto" })
+    expect(shouldReview(strict, everything, "push")).toEqual({ review: false, reason: "draft" })
+    expect(shouldReview(strict, { ...everything, draft: false }, "push")).toEqual({
+      review: false,
+      reason: "base_branch",
+    })
+    expect(shouldReview(strict, { ...everything, draft: false, baseRef: "main" }, "push")).toEqual({
+      review: false,
+      reason: "title_keyword",
+    })
+  })
+
+  it("lets a command through every setting at once", () => {
+    const closed = withReviews({ auto: false, base_branches: ["main"], ignore_title_keywords: ["WIP"] })
+    expect(shouldReview(closed, { draft: true, baseRef: "develop", title: "WIP: x" }, "command")).toEqual({
+      review: true,
+    })
+  })
+})
+
+describe("reviewTrigger", () => {
+  it("calls a review nobody asked for a push", () => {
+    expect(reviewTrigger({ full: false })).toBe("push")
+  })
+
+  it("calls a review someone asked for a command: @andabot review, full review, or a check re-run", () => {
+    expect(reviewTrigger({ full: false, requestedBy: "andrew" })).toBe("command")
+    expect(reviewTrigger({ full: true, requestedBy: "andrew" })).toBe("command")
+    expect(reviewTrigger({ full: true })).toBe("command")
+  })
+})
+
+describe("pullRequestFacts", () => {
+  it("takes the draft flag, the base branch's name and the title, and reads a missing draft flag as ready", () => {
+    const pr = { title: "Read the config", base: { ref: "main", sha: BASE }, draft: true }
+    expect(pullRequestFacts(pr)).toEqual({ draft: true, baseRef: "main", title: "Read the config" })
+    expect(pullRequestFacts({ title: "Read the config", base: { ref: "main" } })).toEqual({
+      draft: false,
+      baseRef: "main",
+      title: "Read the config",
+    })
+  })
+})
+
+describe("configStatus", () => {
+  it("names a read by whether a file was there and whether it had an error", () => {
+    expect(configStatus(MISSING)).toBe("missing")
+    expect(configStatus(VALID)).toBe("file")
+    expect(configStatus(INVALID)).toBe("invalid")
+    expect(configStatus(UNREADABLE)).toBe("unreadable")
+  })
+
+  it("names each of readConfig's outcomes", async () => {
+    const statusOf = async (respond: () => Response) =>
+      configStatus(await readConfig(fakeGitHub(respond).github, ref, BASE, recorder().report))
+    expect(await statusOf(() => new Response("", { status: 404 }))).toBe("missing")
+    expect(await statusOf(served(FULL_FILE))).toBe("file")
+    expect(await statusOf(served("reviews: always\n"))).toBe("invalid")
+    expect(await statusOf(() => new Response("boom", { status: 502 }))).toBe("unreadable")
+  })
+})
+
+describe("isCacheable", () => {
+  it("caches a missing, valid or invalid file, and never an unreadable one, so a passing failure can't pin the defaults", () => {
+    expect(isCacheable(MISSING)).toBe(true)
+    expect(isCacheable(VALID)).toBe(true)
+    expect(isCacheable(INVALID)).toBe(true)
+    expect(isCacheable(UNREADABLE)).toBe(false)
+  })
+})
+
+describe("the config cache", () => {
+  it("keys a read by the base commit sha", () => {
+    expect(CONFIG_PREFIX).toBe("config:")
+    expect(configKey(BASE)).toBe(`config:${BASE}`)
+  })
+
+  it("names every other base's record as stale, and no other key, the context's included", () => {
+    const keys = ["pending", `config:${OTHER_BASE}`, configKey(BASE), `context:${OTHER_BASE}`, "config:abc"]
+    expect(staleConfigKeys(keys, BASE)).toEqual([`config:${OTHER_BASE}`, "config:abc"])
+    expect(staleConfigKeys([configKey(BASE)], BASE)).toEqual([])
+  })
+
+  it.each<[string, ConfigRead]>([
+    ["missing", MISSING],
+    ["valid", VALID],
+    ["invalid", INVALID],
+  ])("reads back the record of a %s file as it was read", (_name, read) => {
+    const stored = structuredClone(storedConfig(BASE, read))
+    expect(Value.Check(StoredConfig, stored)).toBe(true)
+    expect(stored.baseSha).toBe(BASE)
+    expect(configReadOf(stored)).toEqual(read)
+  })
+
+  it("refuses a record a read could not have written", () => {
+    const stored = storedConfig(BASE, VALID)
+    expect(Value.Check(StoredConfig, { ...stored, config: { reviews: { auto: true } } })).toBe(false)
+    expect(Value.Check(StoredConfig, { ...stored, error: 5 })).toBe(false)
+    expect(Value.Check(StoredConfig, { baseSha: BASE, config: FULL_CONFIG })).toBe(false)
+  })
+})
+
+describe("requestChangesWorkflow", () => {
+  it("follows the file's setting over the Worker var", () => {
+    expect(requestChangesWorkflow(true, undefined)).toBe(true)
+    expect(requestChangesWorkflow(true, "false")).toBe(true)
+    expect(requestChangesWorkflow(false, "true")).toBe(false)
+  })
+
+  it("follows the Worker var when the file sets nothing, on only for the exact text true", () => {
+    expect(requestChangesWorkflow(undefined, "true")).toBe(true)
+    expect(requestChangesWorkflow(undefined, "false")).toBe(false)
+    expect(requestChangesWorkflow(undefined, "TRUE")).toBe(false)
+    expect(requestChangesWorkflow(undefined, undefined)).toBe(false)
+  })
+})
+
+describe("runSettings", () => {
+  it("carries the request-changes workflow a run starts with, the file's over the var", () => {
+    const off = { ...parseConfig("reviews:\n  request_changes_workflow: false\n"), present: true }
+    expect(runSettings(off, "true")).toEqual({ requestChangesWorkflow: false })
+    expect(runSettings(VALID, "false")).toEqual({ requestChangesWorkflow: true })
+    expect(runSettings(MISSING, "true")).toEqual({ requestChangesWorkflow: true })
+  })
+
+  it("carries the error of a file the run ignored, invalid or unreadable, with the var's workflow, since the defaults applied", () => {
+    expect(runSettings(INVALID, "true")).toEqual({
+      requestChangesWorkflow: true,
+      configError: "/reviews/auto must be boolean",
+    })
+    expect(runSettings(UNREADABLE, "false")).toEqual({
+      requestChangesWorkflow: false,
+      configError: "Error: GitHub 502 : boom",
+    })
   })
 })

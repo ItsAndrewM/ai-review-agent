@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest"
 import {
   commentableLines,
   deltaLines,
+  isFiltered,
   isGenerated,
   markedLines,
   renderPatches,
   requiresWalkthrough,
+  reviewableFiles,
 } from "../src/github/diff.ts"
 
 const patch = [
@@ -172,13 +174,67 @@ describe("isGenerated", () => {
   })
 })
 
+describe("isFiltered", () => {
+  it("leaves out the root lock file with !pnpm-lock.yaml, and a nested one only with a **/ glob", () => {
+    expect(isFiltered("pnpm-lock.yaml", ["!pnpm-lock.yaml"])).toBe(true)
+    expect(isFiltered("apps/web/pnpm-lock.yaml", ["!pnpm-lock.yaml"])).toBe(false)
+    expect(isFiltered("apps/web/pnpm-lock.yaml", ["!**/pnpm-lock.yaml"])).toBe(true)
+  })
+
+  it("leaves out a snapshot in any directory with !**/*.snap, and nothing that only resembles one", () => {
+    for (const path of ["a.snap", "test/__snapshots__/route.test.ts.snap"])
+      expect(isFiltered(path, ["!**/*.snap"])).toBe(true)
+    for (const path of ["a.snap.ts", "src/snap.ts", "snap"]) expect(isFiltered(path, ["!**/*.snap"])).toBe(false)
+  })
+
+  it("matches dotfiles and paths through dot directories", () => {
+    expect(isFiltered(".storybook/__snapshots__/b.snap", ["!**/*.snap"])).toBe(true)
+    expect(isFiltered("docs/.vitepress/config.ts", ["!docs/**"])).toBe(true)
+    expect(isFiltered(".env.example", ["!*.example"])).toBe(true)
+  })
+
+  it("leaves out a path any one pattern matches, and none when there is no pattern", () => {
+    expect(isFiltered("dist/a.js", ["!**/*.snap", "!dist/**"])).toBe(true)
+    expect(isFiltered("src/index.ts", ["!**/*.snap", "!dist/**"])).toBe(false)
+    expect(isFiltered("src/index.ts", [])).toBe(false)
+  })
+})
+
 describe("requiresWalkthrough", () => {
+  const source = { filename: "src/index.ts", status: "modified", additions: 1, deletions: 0, patch }
+  const binary = { filename: "logo.png", status: "added", additions: 0, deletions: 0 }
+  const lock = { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0, patch: "+x" }
+
   it("asks for a row on a source file and on a binary file with no patch, not on a lock file", () => {
-    const source = { filename: "src/index.ts", status: "modified", additions: 1, deletions: 0, patch }
-    const binary = { filename: "logo.png", status: "added", additions: 0, deletions: 0 }
-    const lock = { filename: "pnpm-lock.yaml", status: "modified", additions: 1, deletions: 0, patch: "+x" }
-    expect(requiresWalkthrough(source)).toBe(true)
-    expect(requiresWalkthrough(binary)).toBe(true)
-    expect(requiresWalkthrough(lock)).toBe(false)
+    expect(requiresWalkthrough(source, [])).toBe(true)
+    expect(requiresWalkthrough(binary, [])).toBe(true)
+    expect(requiresWalkthrough(lock, [])).toBe(false)
+  })
+
+  it("asks for no row on a file a path filter leaves out", () => {
+    expect(requiresWalkthrough(source, ["!src/**"])).toBe(false)
+    expect(requiresWalkthrough(binary, ["!**/*.png"])).toBe(false)
+    expect(requiresWalkthrough(source, ["!**/*.png"])).toBe(true)
+  })
+})
+
+describe("reviewableFiles", () => {
+  const files = ["src/index.ts", "a.snap", "pnpm-lock.yaml", "docs/guide.md"].map((filename) => ({
+    filename,
+    status: "modified",
+    additions: 1,
+    deletions: 0,
+    patch: "@@ -1 +1 @@\n-x\n+y",
+  }))
+
+  it("keeps, in diff order, the files no path filter leaves out, a generated file the filters spare included", () => {
+    expect(reviewableFiles(files, ["!**/*.snap", "!docs/**"]).map((file) => file.filename)).toEqual([
+      "src/index.ts",
+      "pnpm-lock.yaml",
+    ])
+  })
+
+  it("keeps every file when there is no filter", () => {
+    expect(reviewableFiles(files, [])).toEqual(files)
   })
 })
