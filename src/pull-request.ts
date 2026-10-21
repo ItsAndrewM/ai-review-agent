@@ -142,6 +142,7 @@ export type Incoming =
       deliveryId: string
       author: string
       body: string
+      thread?: ThreadContext
     }
   | {
       kind: "approval"
@@ -149,6 +150,14 @@ export type Incoming =
       deliveryId: string
       trigger: WebhookTrigger
     }
+
+export interface ThreadContext {
+  commentId: number
+  rootId: number
+  path: string
+  line: number | null
+  diffHunk: string
+}
 
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>

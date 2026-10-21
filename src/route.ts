@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox"
-import type { Incoming } from "./pull-request.ts"
+import type { Incoming, ThreadContext } from "./pull-request.ts"
 import type { PullRequestKey } from "./records.ts"
 import type { WebhookTrigger } from "./review/approval.ts"
 
@@ -24,7 +24,17 @@ export const WebhookPayload = Type.Object({
     }),
   ),
   issue: Type.Optional(Type.Object({ number: Type.Integer(), pull_request: Type.Optional(Type.Object({})) })),
-  comment: Type.Optional(Type.Object({ body: Type.String(), user: Type.Union([Account, Type.Null()]) })),
+  comment: Type.Optional(
+    Type.Object({
+      id: Type.Optional(Type.Integer()),
+      in_reply_to_id: Type.Optional(Type.Integer()),
+      body: Type.String(),
+      user: Type.Union([Account, Type.Null()]),
+      path: Type.Optional(Type.String()),
+      line: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+      diff_hunk: Type.Optional(Type.String()),
+    }),
+  ),
   check_run: Type.Optional(CheckTarget),
   check_suite: Type.Optional(CheckTarget),
 })
@@ -67,6 +77,7 @@ function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delive
   if (eventName === "issue_comment" && payload.comment && payload.issue) {
     return routeComment(payload.issue, payload.comment, delivery, botLogin)
   }
+  if (eventName === "pull_request_review_comment") return routeReviewComment(payload, delivery, botLogin)
   const target = checkTarget(eventName, payload)
   if (target) return routeCheck(eventName, target, delivery, payload.sender?.login)
   return ignore(`event ${eventName}`)
@@ -110,7 +121,7 @@ function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery): Ro
 function routeComment(issue: IssueEvent, comment: CommentEvent, delivery: Delivery, botLogin: string): Routed {
   if (delivery.action !== "created") return ignore(`issue_comment ${delivery.action ?? ""}`)
   if (!issue.pull_request) return ignore("comment on an issue, not a pull request")
-  if (!new RegExp(`(?:^|\\s)@${botLogin}(?![\\w-])`, "i").test(comment.body)) return ignore("no mention")
+  if (!mentions(comment.body, botLogin)) return ignore("no mention")
   if (!comment.user) return ignore("comment without an author")
   return {
     kind: "handle",
@@ -124,6 +135,39 @@ function routeComment(issue: IssueEvent, comment: CommentEvent, delivery: Delive
       },
     ],
   }
+}
+
+function routeReviewComment(payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
+  const { pull_request: pullRequest, comment } = payload
+  if (delivery.action !== "created") return ignore(`pull_request_review_comment ${delivery.action ?? ""}`)
+  if (!pullRequest || !comment) return ignore("review comment without its pull request")
+  if (!comment.user) return ignore("comment without an author")
+  const thread = threadContextOf(comment)
+  if (!thread) return ignore("review comment without its thread")
+  if (!mentions(comment.body, botLogin) && comment.in_reply_to_id === undefined) return ignore("no mention")
+  return {
+    kind: "handle",
+    incoming: [
+      {
+        kind: "comment",
+        key: { ...delivery.repo, number: pullRequest.number },
+        deliveryId: delivery.deliveryId,
+        author: comment.user.login,
+        body: comment.body,
+        thread,
+      },
+    ],
+  }
+}
+
+function threadContextOf(comment: CommentEvent): ThreadContext | undefined {
+  const { id, path, diff_hunk: diffHunk } = comment
+  if (id === undefined || path === undefined || diffHunk === undefined) return undefined
+  return { commentId: id, rootId: comment.in_reply_to_id ?? id, path, line: comment.line ?? null, diffHunk }
+}
+
+function mentions(body: string, botLogin: string): boolean {
+  return new RegExp(`(?:^|\\s)@${botLogin}(?![\\w-])`, "i").test(body)
 }
 
 function routeCheck(
