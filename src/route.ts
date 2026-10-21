@@ -42,7 +42,6 @@ export const WebhookPayload = Type.Object({
 export type WebhookPayload = Static<typeof WebhookPayload>
 
 type PullRequestEvent = NonNullable<WebhookPayload["pull_request"]>
-type IssueEvent = NonNullable<WebhookPayload["issue"]>
 type CommentEvent = NonNullable<WebhookPayload["comment"]>
 type CheckTarget = Static<typeof CheckTarget>
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
@@ -74,9 +73,7 @@ function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delive
   if (eventName === "pull_request_review_thread" && payload.pull_request) {
     return routeThread(payload.pull_request, delivery)
   }
-  if (eventName === "issue_comment" && payload.comment && payload.issue) {
-    return routeComment(payload.issue, payload.comment, delivery, botLogin)
-  }
+  if (eventName === "issue_comment") return routeComment(payload, delivery, botLogin)
   if (eventName === "pull_request_review_comment") return routeReviewComment(payload, delivery, botLogin)
   const target = checkTarget(eventName, payload)
   if (target) return routeCheck(eventName, target, delivery, payload.sender?.login)
@@ -118,8 +115,10 @@ function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery): Ro
   }
 }
 
-function routeComment(issue: IssueEvent, comment: CommentEvent, delivery: Delivery, botLogin: string): Routed {
+function routeComment(payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
+  const { issue, comment } = payload
   if (delivery.action !== "created") return ignore(`issue_comment ${delivery.action ?? ""}`)
+  if (!issue || !comment) return ignore("comment without its issue")
   if (!issue.pull_request) return ignore("comment on an issue, not a pull request")
   if (!mentions(comment.body, botLogin)) return ignore("no mention")
   if (!comment.user) return ignore("comment without an author")
