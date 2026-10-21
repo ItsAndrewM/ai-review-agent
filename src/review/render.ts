@@ -134,8 +134,9 @@ function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
 
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
+  const name = model as string
   // the first eight characters of the skills fingerprint identify the skill build
-  return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+  return [`<sub>Reviewed by \`${name}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
 }
 
 function linkedIssuesLine(numbers: readonly number[]): string {
