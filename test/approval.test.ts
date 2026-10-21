@@ -1,15 +1,17 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { CheckRunSummary } from "../src/github/client.ts"
 import {
+  approvalRecord,
   awaitsApproval,
   checksState,
   decideApproval,
   evaluatesAfterReview,
+  LastReview,
   lastReviewOf,
   openBlockingIn,
   verdictAfterChecks,
   type ApprovalState,
-  type LastReview,
 } from "../src/review/approval.ts"
 import type { FindingInput } from "../src/review/findings.ts"
 import type { OpenThread } from "../src/review/incremental.ts"
@@ -191,6 +193,11 @@ describe("openBlockingIn", () => {
     expect(openBlockingIn(undefined)).toBe("unknown")
     expect(openBlockingIn({ open: [thread("T1", true), thread("T2", false)], recheck: [] })).toBe(1)
   })
+
+  it("leaves out the threads a resolve just resolved, whatever the list says", () => {
+    const plan = { open: [thread("T1", true), thread("T2", true), thread("T3", false)], recheck: [] }
+    expect(openBlockingIn(plan, new Set(["id-T1"]))).toBe(1)
+  })
 })
 
 function finding(severity: FindingInput["severity"]): FindingInput {
@@ -210,10 +217,90 @@ describe("lastReviewOf", () => {
         event: "REQUEST_CHANGES",
         headSha: "bbb",
         verdict: "request_changes",
+        shown: "REQUEST_CHANGES",
+        accepted: [finding("blocking"), finding("nitpick")],
         rejected,
         at: 5,
       }),
-    ).toEqual({ reviewId: 9, event: "REQUEST_CHANGES", headSha: "bbb", verdict: "request_changes", heldBack: 1, at: 5 })
+    ).toEqual({
+      reviewId: 9,
+      event: "REQUEST_CHANGES",
+      headSha: "bbb",
+      verdict: "request_changes",
+      shown: "REQUEST_CHANGES",
+      counts: { blocking: 1, suggestion: 0, nitpick: 1 },
+      heldBack: 1,
+      at: 5,
+    })
+  })
+
+  it("records a wait for the checks as what the summary showed", () => {
+    expect(
+      lastReviewOf({
+        reviewId: 9,
+        event: "COMMENT",
+        headSha: "bbb",
+        verdict: "approve",
+        shown: "AWAITING_CHECKS",
+        accepted: [],
+        rejected: [],
+        at: 5,
+      }),
+    ).toEqual({
+      reviewId: 9,
+      event: "COMMENT",
+      headSha: "bbb",
+      verdict: "approve",
+      shown: "AWAITING_CHECKS",
+      counts: { blocking: 0, suggestion: 0, nitpick: 0 },
+      heldBack: 0,
+      at: 5,
+    })
+  })
+})
+
+describe("approvalRecord", () => {
+  const previous: LastReview = {
+    reviewId: 9,
+    event: "REQUEST_CHANGES",
+    headSha: "aaa",
+    verdict: "request_changes",
+    shown: "REQUEST_CHANGES",
+    counts: { blocking: 1, suggestion: 2, nitpick: 0 },
+    heldBack: 0,
+    at: 5,
+  }
+
+  it("records the evaluation's approval with no model verdict, keeping the last review's counts", () => {
+    expect(approvalRecord(previous, 10, "bbb", 6)).toStrictEqual({
+      reviewId: 10,
+      event: "APPROVE",
+      headSha: "bbb",
+      heldBack: 0,
+      at: 6,
+      counts: { blocking: 1, suggestion: 2, nitpick: 0 },
+    })
+  })
+
+  it("has no counts to keep when there is no last review, or it kept none", () => {
+    const approved = { reviewId: 10, event: "APPROVE", headSha: "bbb", heldBack: 0, at: 6 }
+    expect(approvalRecord(undefined, 10, "bbb", 6)).toStrictEqual(approved)
+    expect(approvalRecord(requested, 10, "bbb", 6)).toStrictEqual(approved)
+  })
+})
+
+describe("LastReview", () => {
+  const stored = { reviewId: 1, event: "COMMENT", headSha: "a", verdict: "approve", heldBack: 0, at: 1 }
+
+  it("still reads a last review stored before it kept what the summary showed", () => {
+    expect(Value.Check(LastReview, stored)).toBe(true)
+  })
+
+  it("reads what the summary showed and its counts, and rejects a verdict a summary can't show", () => {
+    const counts = { blocking: 0, suggestion: 1, nitpick: 2 }
+    expect(Value.Check(LastReview, { ...stored, shown: "AWAITING_CHECKS", counts })).toBe(true)
+    expect(Value.Check(LastReview, { ...stored, shown: "approve" })).toBe(false)
+    expect(Value.Check(LastReview, { ...stored, counts: { ...counts, blocking: "0" } })).toBe(false)
   })
 })
 

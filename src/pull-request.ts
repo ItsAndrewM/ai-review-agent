@@ -37,6 +37,7 @@ import {
   type ReviewStandards,
 } from "./repository/context.ts"
 import {
+  approvalRecord,
   checksState,
   decideApproval,
   evaluatesAfterReview,
@@ -427,6 +428,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         event,
         headSha: pr.head.sha,
         verdict: submission.verdict,
+        shown: verdict,
+        accepted: scoped.accepted,
         rejected: scoped.rejected,
         at: Date.now(),
       }),
@@ -1148,13 +1151,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       body: approvalBody(head),
       comments: [],
     })
-    await this.ctx.storage.put<LastReview>("lastReview", {
-      reviewId: review.id,
-      event: "APPROVE",
-      headSha: head,
-      heldBack: 0,
-      at: Date.now(),
-    })
+    await this.ctx.storage.put<LastReview>(
+      "lastReview",
+      approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
+    )
     await this.rewriteSummaryVerdict(head)
     log("approval.posted", { ...context, review: review.id })
   }

@@ -1,8 +1,16 @@
 import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
+import { SeverityCounts } from "../records.ts"
 import { countBySeverity, type FindingInput, type Rejected, type ReviewSubmissionInput } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
 import { holdsApprovalBack, type Verdict } from "./render.ts"
+
+export const ShownVerdict = Type.Union([
+  Type.Literal("APPROVE"),
+  Type.Literal("REQUEST_CHANGES"),
+  Type.Literal("COMMENT"),
+  Type.Literal("AWAITING_CHECKS"),
+])
 
 export const LastReview = Type.Object({
   reviewId: Type.Integer(),
@@ -11,6 +19,8 @@ export const LastReview = Type.Object({
   verdict: Type.Optional(
     Type.Union([Type.Literal("approve"), Type.Literal("request_changes"), Type.Literal("comment")]),
   ),
+  shown: Type.Optional(ShownVerdict),
+  counts: Type.Optional(SeverityCounts),
   heldBack: Type.Integer(),
   at: Type.Integer(),
 })
@@ -21,7 +31,7 @@ export type ChecksState = "passing" | "pending" | "failing" | "unknown"
 
 export type WebhookTrigger = "thread_resolved" | "thread_unresolved" | "checks_completed"
 
-export type ApprovalTrigger = WebhookTrigger | "review"
+export type ApprovalTrigger = WebhookTrigger | "review" | "resolve" | "resume"
 
 export type DecidedWait =
   | "workflow_off"
@@ -42,6 +52,11 @@ export type WaitReason = DecidedWait | "head_moved" | "approving"
 
 export type ApprovalDecision = { kind: "approve" } | { kind: "wait"; reason: DecidedWait }
 
+export type ApprovalOutcome =
+  | { kind: "approved"; head: string }
+  | { kind: "wait"; reason: WaitReason }
+  | { kind: "failed" }
+
 export interface ApprovalState {
   workflow: boolean
   paused: boolean
@@ -59,6 +74,8 @@ export interface ReviewFacts {
   event: ReviewEvent
   headSha: string
   verdict: ReviewSubmissionInput["verdict"]
+  shown: Verdict
+  accepted: readonly FindingInput[]
   rejected: readonly Rejected[]
   at: number
 }
@@ -121,9 +138,12 @@ function completedWithoutPassing(run: CheckRunSummary): boolean {
   return run.status === "completed" && !PASSING_CONCLUSIONS.has(run.conclusion ?? "")
 }
 
-export function openBlockingIn(plan: ThreadPlan | undefined): number | "unknown" {
+export function openBlockingIn(
+  plan: ThreadPlan | undefined,
+  resolved: ReadonlySet<string> = new Set(),
+): number | "unknown" {
   if (plan === undefined) return "unknown"
-  return plan.open.filter((thread) => thread.blocking).length
+  return plan.open.filter((thread) => thread.blocking && !resolved.has(thread.threadId)).length
 }
 
 export function lastReviewOf(facts: ReviewFacts): LastReview {
@@ -132,9 +152,21 @@ export function lastReviewOf(facts: ReviewFacts): LastReview {
     event: facts.event,
     headSha: facts.headSha,
     verdict: facts.verdict,
+    shown: facts.shown,
+    counts: countBySeverity(facts.accepted),
     heldBack: facts.rejected.filter(holdsApprovalBack).length,
     at: facts.at,
   }
+}
+
+export function approvalRecord(
+  previous: LastReview | undefined,
+  reviewId: number,
+  headSha: string,
+  at: number,
+): LastReview {
+  const approved = { reviewId, event: "APPROVE", headSha, heldBack: 0, at } satisfies LastReview
+  return previous?.counts === undefined ? approved : { ...approved, counts: previous.counts }
 }
 
 export function verdictAfterChecks(event: ReviewEvent, checks: ChecksState | undefined): Verdict {
