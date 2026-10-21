@@ -48,6 +48,14 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
+import {
+  callsByModel,
+  spendFields,
+  spendSince,
+  usageTotals,
+  type ReviewSpend,
+  type UsageTotals,
+} from "./review/cost.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -342,7 +350,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pending: PendingReview,
     missing: readonly string[],
   ): Promise<SubmitOutcome> {
-    log("review.incomplete", { number: pr.number, head: shortSha(pr.head.sha), missing: missing.length })
+    log("review.incomplete", {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      missing: missing.length,
+      ...spendFields(await this.spendOf(pending)),
+    })
     const note = incompleteNote(missing)
     await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
     this.#incompleteDelivery = pending.deliveryId
@@ -365,6 +378,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     const github = await this.github()
     const attribution = attributionOf(pending)
+    const spend = await this.spendOf(pending)
     const reviewed = nextReviewed({
       previous: await this.readReviewed(),
       scope,
@@ -383,6 +397,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       droppedCount: scoped.rejected.length,
       model: attribution?.model,
       skillsFingerprint: attribution?.fingerprint,
+      spend,
       linkedIssues: pending.linkedIssues ?? [],
       since: reviewed.since,
     })
@@ -417,6 +432,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       event,
       at: Date.now(),
       counts: countBySeverity(scoped.accepted),
+      spend,
       ...attribution,
     })
     await this.endOwnRun(
@@ -550,6 +566,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       started: run.started,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
+      ...(await this.usageBaseline()),
     })
     await this.runReview(pr, incoming, run)
   }
@@ -665,6 +682,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
+          ...spendFields(await this.postedSpend(pr)),
         })
       }
       await this.releasePending(run.deliveryId)
@@ -881,6 +899,40 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return (await this.ctx.storage.get(`posted:${pr.head.sha}`)) !== undefined
   }
 
+  private async usageNow(): Promise<UsageTotals> {
+    return usageTotals(await (await this.harness.pi()).usage(BACKGROUND_CONTEXT))
+  }
+
+  private async usageBaseline(): Promise<Pick<StoredPending, "usageBefore">> {
+    try {
+      return { usageBefore: await this.usageNow() }
+    } catch (error) {
+      logError("review.usage_unreadable", { when: "start", error: errorText(error) })
+      return {}
+    }
+  }
+
+  private async spendOf(pending: PendingReview): Promise<ReviewSpend> {
+    if (pending.usageBefore === undefined) return []
+    try {
+      const calls = callsByModel(await this.harness.session().messages())
+      return spendSince(pending.usageBefore, await this.usageNow(), calls)
+    } catch (error) {
+      logError("review.usage_unreadable", { when: "spend", error: errorText(error) })
+      return []
+    }
+  }
+
+  private async runSpend(deliveryId: string): Promise<ReviewSpend> {
+    const pending = await this.pendingFor(deliveryId)
+    return pending === undefined ? [] : this.spendOf(pending)
+  }
+
+  private async postedSpend(pr: PullRequestInfo): Promise<ReviewSpend | undefined> {
+    const posted = await this.ctx.storage.get(`posted:${pr.head.sha}`)
+    return Value.Check(PostedReview, posted) ? posted.spend : undefined
+  }
+
   private async reportFailedReview(pr: PullRequestInfo, result: PiPromptResponse, run: ReviewRun): Promise<void> {
     const failure = describeFailure(result, await this.storedFailureDetail(run.operationId))
     logError("review.failed", {
@@ -889,6 +941,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reason: failure,
       ms: Date.now() - run.started,
       staleBuild: run.staleBuild,
+      ...spendFields(await this.runSpend(run.deliveryId)),
     })
     if (await this.headMoved(pr, run)) return
     const note = `_The review did not complete: ${failure}._`
@@ -905,7 +958,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<void> {
     const failure =
       retry.status === "done" ? undefined : describeFailure(retry, await this.storedFailureDetail(retry.operationId))
-    const fields = { number: pr.number, head: shortSha(pr.head.sha), wrote: written.kind, ms: Date.now() - run.started }
+    const fields = {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      wrote: written.kind,
+      ms: Date.now() - run.started,
+      ...spendFields(await this.runSpend(run.deliveryId)),
+    }
     if (failure === undefined) {
       log("review.no_submission", {
         ...fields,

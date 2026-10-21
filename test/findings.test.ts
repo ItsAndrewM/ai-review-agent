@@ -1,6 +1,7 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { commentableLines } from "../src/github/diff.ts"
+import type { ReviewSpend } from "../src/review/cost.ts"
 import {
   MAX_FINDINGS,
   missingWalkthrough,
@@ -875,7 +876,12 @@ describe("renderSummaryComment", () => {
     expect(text.indexOf("### Since `abc1234`")).toBeLessThan(text.indexOf("<sub>Linked issues: #24</sub>"))
   })
 
-  const summaryWith = (attribution: { model?: string; skillsFingerprint?: string; linkedIssues?: number[] }) =>
+  const summaryWith = (attribution: {
+    model?: string
+    skillsFingerprint?: string
+    linkedIssues?: number[]
+    spend?: ReviewSpend
+  }) =>
     renderSummaryComment({
       botLogin: "andabot",
       headSha: "0123456789abcdef",
@@ -937,6 +943,31 @@ describe("renderSummaryComment", () => {
       linkedIssues: [12, 14],
     })
     expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: #12, #14</sub>\n<sub>Commands:")
+  })
+
+  it("says what the review cost on the line after the skills claim", () => {
+    const text = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      spend: [
+        {
+          model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+          calls: 3,
+          inputTokens: 61_204,
+          cachedTokens: 40_000,
+          outputTokens: 4_811,
+          usd: 0.006692,
+        },
+      ],
+    })
+    expect(text).toContain(
+      "`review@89abcdef`.</sub>\n<sub>3 model calls · 61k in / 4.8k out tokens · ≈ 608 neurons ($0.007)</sub>\n<sub>Linked issues: none</sub>",
+    )
+  })
+
+  it("leaves the cost line out when the review recorded no spend", () => {
+    const text = summaryWith({ model: "@cf/zai-org/glm-5.3-flash", skillsFingerprint: "89abcdef01234567", spend: [] })
+    expect(text).toContain("`review@89abcdef`.</sub>\n<sub>Linked issues: none</sub>")
   })
 
   it("shows the wait as the verdict", () => {

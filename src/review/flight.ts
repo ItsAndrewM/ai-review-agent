@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox"
+import { UsageTotals } from "./cost.ts"
 
 export const GRACE_MS = 120_000
 
@@ -14,6 +15,7 @@ export const StoredPending = Type.Object({
   fingerprint: Type.Optional(Type.String()),
   rejectionsReturned: Type.Optional(Type.Boolean()),
   linkedIssues: Type.Optional(Type.Array(Type.Integer())),
+  usageBefore: Type.Optional(UsageTotals),
 })
 
 export type StoredPending = Static<typeof StoredPending>
