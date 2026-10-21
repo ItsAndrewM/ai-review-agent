@@ -40,6 +40,7 @@ function spend(overrides: Partial<ModelSpend>): ModelSpend {
     cachedTokens: 40_000,
     outputTokens: 4_811,
     usd: 0.006692,
+    priced: true,
     ...overrides,
   }
 }
@@ -79,7 +80,7 @@ describe("spendSince", () => {
   it("leaves out a model the review didn't use, and keeps one whose calls reported no usage", () => {
     const after = { ...before, [KIMI]: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0 } }
     expect(spendSince(before, after, new Map([[KIMI, 2]]))).toEqual([
-      { model: KIMI, calls: 2, inputTokens: 0, cachedTokens: 0, outputTokens: 0, usd: 0 },
+      { model: KIMI, calls: 2, inputTokens: 0, cachedTokens: 0, outputTokens: 0, usd: 0, priced: false },
     ])
   })
 
@@ -87,6 +88,19 @@ describe("spendSince", () => {
     const summed = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.1 + 0.2 } }
     const after = { [GLM]: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0, usd: 0.3 } }
     expect(spendSince(summed, after, new Map([[GLM, 1]]))[0]?.usd).toBe(0)
+  })
+
+  it("keeps a model priced when its ledger has dollars, even if the review's share rounds to nothing", () => {
+    const summed = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.1 + 0.2 } }
+    const after = { [GLM]: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0, usd: 0.3 } }
+    const spend = spendSince(summed, after, new Map([[GLM, 1]]))
+    expect(spend[0]?.priced).toBe(true)
+    expect(spendLine(spend)).toBe("1 model call · 0 in / 10 out tokens · < 1 neuron (<$0.001)")
+  })
+
+  it("marks a model unpriced when its ledger has never recorded a dollar", () => {
+    const after = { [KIMI]: { input: 900, output: 120, cacheRead: 0, cacheWrite: 0, usd: 0 } }
+    expect(spendSince({}, after, new Map([[KIMI, 1]]))[0]?.priced).toBe(false)
   })
 
   it("is a list the posted record can store", () => {
@@ -126,11 +140,13 @@ describe("spendLine", () => {
   })
 
   it("calls the cost unknown when the model has no price, rather than calling the review free", () => {
-    expect(spendLine([spend({ usd: 0 })])).toBe("3 model calls · 61k in / 4.8k out tokens · cost unknown")
+    expect(spendLine([spend({ usd: 0, priced: false })])).toBe(
+      "3 model calls · 61k in / 4.8k out tokens · cost unknown",
+    )
   })
 
   it("prices what it can and names each model it couldn't", () => {
-    expect(spendLine([spend({}), spend({ model: KIMI, calls: 1, usd: 0 })])).toBe(
+    expect(spendLine([spend({}), spend({ model: KIMI, calls: 1, usd: 0, priced: false })])).toBe(
       "4 model calls · 122k in / 9.6k out tokens · ≈ 608 neurons ($0.007) + unpriced @cf/moonshotai/kimi-k2.7-code",
     )
   })
@@ -160,7 +176,7 @@ describe("spendFields", () => {
   })
 
   it("leaves the cost out when any model is unpriced, so a query never averages in a false zero", () => {
-    const fields = spendFields([spend({}), spend({ model: KIMI, calls: 1, usd: 0 })])
+    const fields = spendFields([spend({}), spend({ model: KIMI, calls: 1, usd: 0, priced: false })])
     expect(fields).toMatchObject({ calls: 4, inputTokens: 122_408 })
     expect(fields).not.toHaveProperty("neurons")
     expect(fields).not.toHaveProperty("usd")

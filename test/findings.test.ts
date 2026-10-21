@@ -957,6 +957,7 @@ describe("renderSummaryComment", () => {
           cachedTokens: 40_000,
           outputTokens: 4_811,
           usd: 0.006692,
+          priced: true,
         },
       ],
     })

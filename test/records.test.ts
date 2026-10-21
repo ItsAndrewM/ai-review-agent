@@ -44,6 +44,7 @@ describe("PostedReview", () => {
         cachedTokens: 40_000,
         outputTokens: 4_811,
         usd: 0.0067,
+        priced: true,
       },
     ]
     expect(Value.Check(PostedReview, { ...posted, spend })).toBe(true)

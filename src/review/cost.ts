@@ -26,6 +26,7 @@ const ModelSpend = Type.Object({
   cachedTokens: Type.Integer(),
   outputTokens: Type.Integer(),
   usd: Type.Number(),
+  priced: Type.Boolean(),
 })
 
 export type ModelSpend = Static<typeof ModelSpend>
@@ -76,6 +77,7 @@ function modelSpend(model: string, before: UsageTally, after: UsageTally, calls:
     cachedTokens: grown("cacheRead"),
     outputTokens: grown("output"),
     usd: grown("usd"),
+    priced: after.usd > 0,
   }
 }
 
@@ -130,7 +132,7 @@ export function spendFields(spend: ReviewSpend | undefined): LogFields {
 }
 
 function isUnpriced(spend: ModelSpend): boolean {
-  return tokensOf(spend) > 0 && spend.usd === 0
+  return tokensOf(spend) > 0 && !spend.priced
 }
 
 function tokensOf(spend: Pick<ModelSpend, "inputTokens" | "outputTokens">): number {
