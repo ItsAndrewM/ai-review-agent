@@ -1,5 +1,5 @@
 import { Minimatch } from "minimatch"
-import { Type, type Static } from "typebox"
+import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { parse } from "yaml"
 import type { TreeEntry } from "../github/client.ts"
@@ -35,6 +35,9 @@ const ROOT_FILES = [
   "CONTRIBUTING.md",
 ]
 const FRONTMATTER_BLOCK = /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)??---[ \t]*(?:\r?\n([\s\S]*))?$/
+const APPLY_TO_LINE = /^applyTo:[ \t]*(.*)$/gm
+const SURROUNDING_QUOTES = /^(["'])(.*)\1$/
+const TRAILING_HIGH_SURROGATE = /[\uD800-\uDBFF]$/
 
 const Frontmatter = Type.Object({
   applyTo: Type.Optional(Type.Union([Type.String(), Type.Array(Type.String())])),
@@ -73,18 +76,22 @@ export function instructionCandidates(entries: readonly TreeEntry[], changed: re
   return [...instructionPaths(blobs), ...nestedPaths(blobs, changed), ...rootPaths(blobs)]
 }
 
-const parsedFrontmatter = (source: string): Static<typeof Frontmatter> | undefined => {
-  try {
-    const data = parse(source)
-    return Value.Check(Frontmatter, data) ? data : undefined
-  } catch {
-    return undefined
-  }
+const isFlowList = (value: string): boolean => value.startsWith("[")
+
+const textualApplyTo = (frontmatter: string): string | undefined => {
+  const lines = [...frontmatter.matchAll(APPLY_TO_LINE)]
+  const value = lines.length === 1 ? lines[0]?.[1]?.trim() : undefined
+  if (value === undefined || isFlowList(value)) return undefined
+  return value.replace(SURROUNDING_QUOTES, "$2")
 }
 
-const frontmatterOf = (text: string): Static<typeof Frontmatter> | undefined => {
-  const block = FRONTMATTER_BLOCK.exec(text)
-  return block === null ? undefined : parsedFrontmatter(block[1] ?? "")
+const applyToOf = (frontmatter: string): string | string[] | undefined => {
+  try {
+    const data = parse(frontmatter)
+    return Value.Check(Frontmatter, data) ? data.applyTo : undefined
+  } catch {
+    return textualApplyTo(frontmatter)
+  }
 }
 
 const splitGlobs = (list: string): string[] => {
@@ -105,7 +112,8 @@ const splitGlobs = (list: string): string[] => {
 }
 
 const applyToGlobs = (text: string): string[] => {
-  const applyTo = frontmatterOf(text)?.applyTo
+  const block = FRONTMATTER_BLOCK.exec(text)
+  const applyTo = block === null ? undefined : applyToOf(block[1] ?? "")
   if (applyTo === undefined) return []
   return (Array.isArray(applyTo) ? applyTo : [applyTo]).flatMap(splitGlobs)
 }
@@ -136,6 +144,16 @@ const fileStandards = (path: string, text: string, changed: readonly string[]): 
   return applyToKeeps(text, changed) ? [{ path, text: frontmatterStripped(text), source }] : []
 }
 
+const withTextOnce = (standards: readonly Standard[]): Standard[] => {
+  const seen = new Set<string>()
+  return standards.filter(({ text }) => {
+    const trimmed = text.trim()
+    if (trimmed === "" || seen.has(trimmed)) return false
+    seen.add(trimmed)
+    return true
+  })
+}
+
 export function orderedStandards(
   loaded: readonly { path: string; text: string }[],
   changed: readonly string[],
@@ -149,7 +167,7 @@ export function orderedStandards(
       source: "path_instructions",
     }))
   const files = loaded.flatMap(({ path, text }) => fileStandards(path, text, changed))
-  return [...configured, ...files].filter(({ text }) => text.trim() !== "")
+  return withTextOnce([...configured, ...files])
 }
 
 const entryOf = (path: string, body: string): string => `### ${path}\n\n${body}`
@@ -173,7 +191,7 @@ const wholeEntries = (standards: readonly Standard[]): RenderedStandards | undef
 const truncatedFirst = (first: Standard, later: readonly Standard[]): RenderedStandards => {
   const cut = [`${first.path} (truncated)`, ...later.map(({ path }) => path)]
   const room = Math.max(0, MAX_STANDARDS_CHARS - sectionOf([entryOf(first.path, "")], cut).length)
-  const entry = entryOf(first.path, first.text.trim().slice(0, room))
+  const entry = entryOf(first.path, first.text.trim().slice(0, room).replace(TRAILING_HIGH_SURROGATE, ""))
   return { text: sectionOf([entry], cut), used: [first.path], cut }
 }
 

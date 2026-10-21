@@ -20,6 +20,10 @@ const standard = (path: string, text: string): Standard => ({ path, text, source
 
 const withApplyTo = (applyTo: string): string => `---\napplyTo: ${applyTo}\n---\nBody.\n`
 
+const amid = (path: string): string[] => ["README.md", path, "LICENSE"]
+
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/
+
 describe("instructionCandidates", () => {
   it("lists the nested CLAUDE.md of each ancestor directory of a changed file ahead of the root one, and none from beside or below it", () => {
     const entries = [
@@ -43,6 +47,29 @@ describe("instructionCandidates", () => {
       "apps/web/CLAUDE.md",
       "apps/CLAUDE.md",
       "CLAUDE.md",
+    ])
+  })
+
+  it("lists CLAUDE.md then AGENTS.md of the deepest directory first, then the same two of each directory above it", () => {
+    const entries = [
+      blob("apps/AGENTS.md"),
+      blob("apps/web/AGENTS.md"),
+      blob("apps/CLAUDE.md"),
+      blob("apps/web/CLAUDE.md"),
+    ]
+    expect(instructionCandidates(entries, ["apps/web/src/a.ts"])).toEqual([
+      "apps/web/CLAUDE.md",
+      "apps/web/AGENTS.md",
+      "apps/CLAUDE.md",
+      "apps/AGENTS.md",
+    ])
+  })
+
+  it("counts depth in directories, not characters, so a/b/CLAUDE.md precedes documentation/CLAUDE.md", () => {
+    const entries = [blob("documentation/CLAUDE.md"), blob("a/b/CLAUDE.md")]
+    expect(instructionCandidates(entries, ["documentation/guide.md", "a/b/c.ts"])).toEqual([
+      "a/b/CLAUDE.md",
+      "documentation/CLAUDE.md",
     ])
   })
 
@@ -131,55 +158,101 @@ describe("applyToKeeps", () => {
     expect(applyToKeeps("---\n---\nBody.\n", ["src/a.ts"])).toBe(true)
   })
 
-  it("keeps a file when its glob matches a changed path and drops it when none does, so src/** leaves test/a.ts alone", () => {
-    expect(applyToKeeps(withApplyTo('"src/**"'), ["src/a.ts"])).toBe(true)
-    expect(applyToKeeps(withApplyTo('"src/**"'), ["test/a.ts"])).toBe(false)
-    expect(applyToKeeps(withApplyTo('"src/**"'), ["test/a.ts", "README.md", "src/deep/b.ts"])).toBe(true)
-    expect(applyToKeeps(withApplyTo('"src/**"'), [])).toBe(false)
+  it("keeps a file when its glob matches any changed path, wherever in the list, and drops it when none does, so src/** leaves test/a.ts alone", () => {
+    const text = withApplyTo('"src/**"')
+    expect(applyToKeeps(text, ["src/a.ts"])).toBe(true)
+    expect(applyToKeeps(text, ["test/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, ["README.md", "src/a.ts", "docs/x.md"])).toBe(true)
+    expect(applyToKeeps(text, ["README.md", "test/a.ts", "docs/x.md"])).toBe(false)
+    expect(applyToKeeps(text, [])).toBe(false)
   })
 
-  it("reads a list of globs, keeping the file when any one matches", () => {
+  it("reads a list of globs, keeping the file when any one matches any changed path", () => {
     const block = '---\napplyTo:\n  - "src/**"\n  - "docs/**"\n---\nBody.\n'
     const flow = withApplyTo('["src/**", "docs/**"]')
     for (const text of [block, flow]) {
-      expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
-      expect(applyToKeeps(text, ["src/a.ts"])).toBe(true)
-      expect(applyToKeeps(text, ["test/a.ts"])).toBe(false)
+      expect(applyToKeeps(text, amid("docs/guide.md"))).toBe(true)
+      expect(applyToKeeps(text, amid("src/a.ts"))).toBe(true)
+      expect(applyToKeeps(text, amid("test/a.ts"))).toBe(false)
     }
   })
 
   it("splits a comma-separated string into globs and trims each", () => {
     const text = withApplyTo('"src/**,  docs/** ,"')
-    expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
-    expect(applyToKeeps(text, ["src/a.ts"])).toBe(true)
-    expect(applyToKeeps(text, ["test/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, amid("docs/guide.md"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/a.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("test/a.ts"))).toBe(false)
   })
 
   it("splits the strings inside a list as well", () => {
     const text = withApplyTo('["src/**, docs/**", "lib/**"]')
-    expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
-    expect(applyToKeeps(text, ["lib/a.ts"])).toBe(true)
-    expect(applyToKeeps(text, ["test/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, amid("docs/guide.md"))).toBe(true)
+    expect(applyToKeeps(text, amid("lib/a.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("test/a.ts"))).toBe(false)
   })
 
   it("leaves a comma inside braces alone, so one glob can name several extensions", () => {
     const text = withApplyTo('"**/*.{ts,tsx}, docs/**"')
-    expect(applyToKeeps(text, ["apps/web/button.tsx"])).toBe(true)
-    expect(applyToKeeps(text, ["src/a.ts"])).toBe(true)
-    expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
-    expect(applyToKeeps(text, ["src/a.js"])).toBe(false)
-    expect(applyToKeeps(withApplyTo('"src/{a,{b,c}}.ts"'), ["src/c.ts"])).toBe(true)
+    expect(applyToKeeps(text, amid("apps/web/button.tsx"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/a.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("docs/guide.md"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/a.js"))).toBe(false)
   })
 
-  it("matches a changed path under a dot directory, so a glob for everything covers .github", () => {
+  it("keeps counting brace depth after a nested pair closes, so src/{a,{b,c},d}.ts is one glob", () => {
+    const text = withApplyTo('"src/{a,{b,c},d}.ts"')
+    expect(applyToKeeps(text, amid("src/a.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/c.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/d.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/e.ts"))).toBe(false)
+  })
+
+  it("matches a changed path under a dot directory, so a glob that spans directories covers .github", () => {
     expect(applyToKeeps(withApplyTo('"**"'), [".github/workflows/ci.yml"])).toBe(true)
-    expect(applyToKeeps(withApplyTo('".github/**"'), [".github/workflows/ci.yml"])).toBe(true)
+    expect(applyToKeeps(withApplyTo('"**/*.yml"'), amid(".github/workflows/ci.yml"))).toBe(true)
+    expect(applyToKeeps(withApplyTo('".github/**"'), amid(".github/workflows/ci.yml"))).toBe(true)
   })
 
-  it("keeps a file whose frontmatter is not valid YAML, since a rule is worth more kept than dropped by a typo", () => {
-    expect(applyToKeeps(withApplyTo("**/*.ts"), ["docs/guide.md"])).toBe(true)
-    expect(applyToKeeps(withApplyTo('["src/**"'), ["docs/guide.md"])).toBe(true)
+  it("reads an unquoted glob from the applyTo line, since **/*.py is not valid YAML but is what people write", () => {
+    const text = withApplyTo("**/*.py")
+    expect(applyToKeeps(text, ["src/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, ["lib/x.py"])).toBe(true)
+    expect(applyToKeeps(text, amid("lib/x.py"))).toBe(true)
+    expect(applyToKeeps(text, amid("lib/x.ts"))).toBe(false)
+  })
+
+  it("reads an unquoted comma-separated list the same way", () => {
+    const text = withApplyTo("**/*.ts, **/*.tsx")
+    expect(applyToKeeps(text, amid("apps/web/button.tsx"))).toBe(true)
+    expect(applyToKeeps(text, amid("src/a.ts"))).toBe(true)
+    expect(applyToKeeps(text, amid("lib/x.py"))).toBe(false)
+  })
+
+  it("reads the applyTo line of a block that is invalid for another reason, stripping one pair of quotes", () => {
+    const double = '---\ndescription: Rules: for TypeScript\napplyTo: "src/**"\n---\nBody.\n'
+    expect(applyToKeeps(double, amid("src/a.ts"))).toBe(true)
+    expect(applyToKeeps(double, amid("test/a.ts"))).toBe(false)
+    const single = "---\ndescription: Rules: for TypeScript\napplyTo: 'src/**, docs/**'\n---\nBody.\n"
+    expect(applyToKeeps(single, amid("docs/guide.md"))).toBe(true)
+    expect(applyToKeeps(single, amid("test/a.ts"))).toBe(false)
+  })
+
+  it("reads an unquoted applyTo line with Windows line endings", () => {
+    const text = "---\r\ndescription: Rules: for Python\r\napplyTo: **/*.py\r\n---\r\nBody.\r\n"
+    expect(applyToKeeps(text, ["src/a.ts"])).toBe(false)
+    expect(applyToKeeps(text, ["lib/x.py"])).toBe(true)
+  })
+
+  it("keeps a file whose invalid frontmatter gives no single applyTo line to read, since a rule is worth more kept than dropped by a typo", () => {
+    expect(applyToKeeps("---\ndescription: a: b\n---\nBody.\n", ["docs/guide.md"])).toBe(true)
+    expect(applyToKeeps("---\ndescription: a: b\napplyTo:\n---\nBody.\n", ["docs/guide.md"])).toBe(true)
     expect(applyToKeeps("---\napplyTo: a\napplyTo: b\n---\nBody.\n", ["docs/guide.md"])).toBe(true)
+  })
+
+  it("keeps a file whose applyTo is a flow list in invalid frontmatter, rather than misreading the list as one glob", () => {
+    expect(applyToKeeps(withApplyTo('["src/**"'), ["docs/guide.md"])).toBe(true)
+    const text = '---\napplyTo: ["src/**", "lib/**"]\ndescription: a: b\n---\nBody.\n'
+    expect(applyToKeeps(text, ["docs/guide.md"])).toBe(true)
   })
 
   it("keeps a file whose applyTo is not a string or a list of strings", () => {
@@ -233,6 +306,10 @@ describe("frontmatterStripped", () => {
     expect(frontmatterStripped("---\napplyTo: **/*.ts\n---\nBody.\n")).toBe("Body.\n")
   })
 
+  it("closes an empty block at its own closing line, not at a later --- line in the body", () => {
+    expect(frontmatterStripped("---\n---\nBody\n---\nMore\n")).toBe("Body\n---\nMore\n")
+  })
+
   it("removes a block with Windows line endings and a block with nothing after it", () => {
     expect(frontmatterStripped('---\r\napplyTo: "src/**"\r\n---\r\nBody.\r\n')).toBe("Body.\r\n")
     expect(frontmatterStripped('---\napplyTo: "src/**"\n---')).toBe("")
@@ -264,7 +341,7 @@ describe("orderedStandards", () => {
       { path: "apps/web/**", instructions: "Web path rule." },
       { path: "**/*.ts", instructions: "Any TypeScript rule." },
     ]
-    expect(orderedStandards(loaded, ["apps/web/src/a.ts"], pathInstructions)).toEqual([
+    expect(orderedStandards(loaded, amid("apps/web/src/a.ts"), pathInstructions)).toEqual([
       { path: ".andabot.yaml: apps/web/**", text: "Web path rule.", source: "path_instructions" },
       { path: ".andabot.yaml: **/*.ts", text: "Any TypeScript rule.", source: "path_instructions" },
       { path: ".github/instructions/ts.instructions.md", text: "Use strict mode.\n", source: "instructions" },
@@ -275,7 +352,7 @@ describe("orderedStandards", () => {
   })
 
   it("drops an instructions file whose applyTo matches no changed path and strips the frontmatter of the ones it keeps", () => {
-    const standards = orderedStandards(loaded, ["lib/tool.py"], [])
+    const standards = orderedStandards(loaded, amid("lib/tool.py"), [])
     expect(standards.map(({ path }) => path)).toEqual([
       ".github/instructions/py.instructions.md",
       "apps/web/CLAUDE.md",
@@ -286,14 +363,60 @@ describe("orderedStandards", () => {
   })
 
   it("matches a path_instructions glob against changed paths under a dot directory", () => {
-    const standards = orderedStandards([], [".github/workflows/ci.yml"], [{ path: "**", instructions: "CI rule." }])
-    expect(standards).toEqual([{ path: ".andabot.yaml: **", text: "CI rule.", source: "path_instructions" }])
+    const pathInstructions = [{ path: "**/*.yml", instructions: "CI rule." }]
+    const standards = orderedStandards([], amid(".github/workflows/ci.yml"), pathInstructions)
+    expect(standards).toEqual([{ path: ".andabot.yaml: **/*.yml", text: "CI rule.", source: "path_instructions" }])
   })
 
-  it("leaves the text of a root or nested file as loaded, even when it opens with a --- line", () => {
-    const text = "---\nnot: frontmatter here\n---\nRules.\n"
-    expect(orderedStandards([{ path: "CLAUDE.md", text }], ["a.ts"], [])).toEqual([
-      { path: "CLAUDE.md", text, source: "root" },
+  it("leaves the text of a nested or root file as loaded, even when it opens with a --- line, .github/copilot-instructions.md included", () => {
+    const nested = "---\nname: nested\n---\nNested rules.\n"
+    const root = "---\nname: root\n---\nRoot rules.\n"
+    const copilot = "---\nname: copilot\n---\nCopilot rules.\n"
+    const files = [
+      { path: "apps/web/AGENTS.md", text: nested },
+      { path: "CLAUDE.md", text: root },
+      { path: ".github/copilot-instructions.md", text: copilot },
+    ]
+    expect(orderedStandards(files, ["a.ts"], [])).toEqual([
+      { path: "apps/web/AGENTS.md", text: nested, source: "nested" },
+      { path: "CLAUDE.md", text: root, source: "root" },
+      { path: ".github/copilot-instructions.md", text: copilot, source: "root" },
+    ])
+  })
+
+  it("renders identical standards once, so a CLAUDE.md symlinked to AGENTS.md does not repeat", () => {
+    const files = [
+      { path: "apps/web/CLAUDE.md", text: "Web rules.\n" },
+      { path: "apps/web/AGENTS.md", text: "Web rules." },
+      { path: "CLAUDE.md", text: "Root rules." },
+      { path: "AGENTS.md", text: "\nRoot rules.\n\n" },
+      { path: "REVIEW.md", text: "Review rules." },
+    ]
+    const standards = orderedStandards(files, amid("apps/web/a.ts"), [])
+    expect(standards.map(({ path }) => path)).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md", "REVIEW.md"])
+    expect(standards.map(({ text }) => text)).toEqual(["Web rules.\n", "Root rules.", "Review rules."])
+  })
+
+  it("keeps a standard that differs from an earlier one by more than surrounding whitespace", () => {
+    const files = [
+      { path: "CLAUDE.md", text: "Use tabs." },
+      { path: "AGENTS.md", text: "Use tabs. Use spaces." },
+    ]
+    expect(orderedStandards(files, ["a.ts"], []).map(({ path }) => path)).toEqual(["CLAUDE.md", "AGENTS.md"])
+  })
+
+  it("drops a repeat of an earlier standard whatever its source, comparing instructions files without their frontmatter", () => {
+    const files = [
+      { path: ".github/instructions/tabs.instructions.md", text: '---\napplyTo: "**"\n---\nUse tabs.\n' },
+      { path: "apps/web/CLAUDE.md", text: "Web rules." },
+      { path: "CLAUDE.md", text: "Use tabs." },
+      { path: "CONTRIBUTING.md", text: "Web rules.\n" },
+    ]
+    const pathInstructions = [{ path: "apps/**", instructions: "Web rules." }]
+    const standards = orderedStandards(files, amid("apps/web/a.ts"), pathInstructions)
+    expect(standards.map(({ path }) => path)).toEqual([
+      ".andabot.yaml: apps/**",
+      ".github/instructions/tabs.instructions.md",
     ])
   })
 
@@ -373,6 +496,20 @@ describe("renderStandards", () => {
     expect(text.endsWith("x\n\n_Cut for length: CLAUDE.md (truncated)._")).toBe(true)
     expect(text).toHaveLength(12_000)
   })
+
+  it.each([
+    [11_801, 11_999],
+    [11_802, 12_000],
+  ])(
+    "ends a truncated entry on a whole character, dropping half a surrogate pair but not a whole one (%i letters, then emoji)",
+    (letters, length) => {
+      const { text, cut } = renderStandards([standard("CLAUDE.md", "a".repeat(letters) + "🚀".repeat(1_000))])
+      expect(cut).toEqual(["CLAUDE.md (truncated)"])
+      expect(text).toContain("🚀\n\n_Cut for length: CLAUDE.md (truncated)._")
+      expect(text).not.toMatch(LONE_SURROGATE)
+      expect(text).toHaveLength(length)
+    },
+  )
 
   it("names the entries dropped after a truncated first entry, the truncated one first", () => {
     const { text, used, cut } = renderStandards([
