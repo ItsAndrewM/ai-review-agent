@@ -25,10 +25,10 @@ const files: SkillFile[] = walk(ROOT).map((full) => ({
 }))
 
 describe("buildSkillManifest", () => {
-  it("lists review and answer with their frontmatter and the review references", () => {
+  it("lists the three skills with their frontmatter and the review references", () => {
     const manifest = buildSkillManifest(files, "abc")
     expect(manifest.id).toBe("builtin")
-    expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review"])
+    expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
     const review = manifest.skills.find((s) => s.name === "review")
     expect(review?.version).toBe("6")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
@@ -168,9 +168,9 @@ describe("renderSkillWithResources", () => {
 describe("manifestSource", () => {
   const source = manifestSource(buildSkillManifest(files, "fingerprint"))
 
-  it("carries the manifest's id and fingerprint and lists both skills", async () => {
+  it("carries the manifest's id and fingerprint and lists the three skills", async () => {
     expect([source.id, source.fingerprint]).toEqual(["builtin", "fingerprint"])
-    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review"])
+    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
   })
 
   it("loads a skill with its resources as descriptors, without their content", async () => {
@@ -183,6 +183,12 @@ describe("manifestSource", () => {
       "references/tests.md",
     ])
     for (const resource of review?.resources ?? []) expect(resource).not.toHaveProperty("content")
+  })
+
+  it("loads the summary skill with no resources of its own", async () => {
+    const summary = await source.load("summary")
+    expect(summary?.name).toBe("summary")
+    expect(summary?.resources ?? []).toEqual([])
   })
 
   it("reads a resource with its content", async () => {
@@ -202,10 +208,10 @@ describe("bundledSkills", () => {
     expect(BUNDLED_SKILL_FILES.map((f) => f.path).sort()).toEqual(files.map((f) => f.path).sort())
   })
 
-  it("lists both skills and serves a reference through the source", async () => {
+  it("lists the three skills and serves a reference through the source", async () => {
     const { source, fingerprint } = await bundledSkills()
     expect(fingerprint).toBe(await fingerprintOf(files))
-    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review"])
+    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
     const resource = await source.readResource?.("review", "references/severity.md")
     expect(resource?.content).toContain("blocking")
   })

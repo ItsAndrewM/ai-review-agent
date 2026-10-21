@@ -21,7 +21,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
+import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
   CONTEXT_PREFIX,
@@ -220,7 +220,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     harness: ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
       const models = createModels()
-      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider, this.outputLimit())))
+      models.setProvider(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit())))
       return Harness.open(
         storage,
         {
