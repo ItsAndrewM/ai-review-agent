@@ -122,6 +122,15 @@ describe("migratePending", () => {
     expect(migratePending(flagged)).toEqual(flagged)
   })
 
+  it("keeps the usage ledger as it stood when the review started, which its spend is measured from", () => {
+    const usageBefore = {
+      "cloudflare/@cf/zai-org/glm-5.3-flash": { input: 20, output: 5, cacheRead: 40, cacheWrite: 0, usd: 0.25 },
+    }
+    expect(Value.Check(StoredPending, { ...pending, usageBefore })).toBe(true)
+    expect(migratePending({ ...pending, usageBefore })).toEqual({ ...pending, usageBefore })
+    expect(Value.Check(StoredPending, { ...pending, usageBefore: { glm: { input: 20 } } })).toBe(false)
+  })
+
   it("keeps the linked issues the prompt was built with, which the summary footer reads back", () => {
     const linked: PendingReview = { ...pending, linkedIssues: [12, 14] }
     expect(Value.Check(StoredPending, linked)).toBe(true)

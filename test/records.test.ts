@@ -35,6 +35,22 @@ describe("PostedReview", () => {
     expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, suggestion: 2, nitpick: 0 } })).toBe(true)
   })
 
+  it("accepts the spend the summary's cost line was rendered from", () => {
+    const spend = [
+      {
+        model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+        calls: 3,
+        inputTokens: 61_204,
+        cachedTokens: 40_000,
+        outputTokens: 4_811,
+        usd: 0.0067,
+        priced: true,
+      },
+    ]
+    expect(Value.Check(PostedReview, { ...posted, spend })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, spend: [{ ...spend[0], usd: "0.0067" }] })).toBe(false)
+  })
+
   it("rejects a record whose event isn't one GitHub posts", () => {
     expect(Value.Check(PostedReview, { ...posted, event: "approve" })).toBe(false)
     expect(Value.Check(PostedReview, { event: "APPROVE", at: 1 })).toBe(false)

@@ -1,4 +1,5 @@
 import type { ReviewEvent } from "../github/client.ts"
+import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
   countBySeverity,
   type FindingInput,
@@ -59,6 +60,7 @@ export function renderSummaryComment(input: {
   droppedCount: number
   model?: string | undefined
   skillsFingerprint?: string | undefined
+  spend?: ReviewSpend | undefined
   linkedIssues: readonly number[]
   instructionFiles: readonly string[]
   since?: SinceSection | undefined
@@ -96,6 +98,7 @@ export function renderSummaryComment(input: {
     ...sinceLines(input.since),
     "",
     ...reviewedBy(input.model, input.skillsFingerprint),
+    ...spendLines(input.spend),
     linkedIssuesLine(input.linkedIssues),
     standardsLine(input.instructionFiles),
     `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
@@ -137,6 +140,11 @@ function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+}
+
+function spendLines(spend: ReviewSpend | undefined): string[] {
+  const line = spend === undefined ? undefined : spendLine(spend)
+  return line === undefined ? [] : [`<sub>${line}</sub>`]
 }
 
 function linkedIssuesLine(numbers: readonly number[]): string {
