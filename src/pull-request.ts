@@ -1340,11 +1340,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if ((await this.readSummarizing())?.deliveryId === deliveryId) await this.ctx.storage.delete("summarizing")
   }
 
+  private async restartSummaryGrace(deliveryId: string): Promise<void> {
+    const record = await this.readSummarizing()
+    if (record?.deliveryId === deliveryId) {
+      await this.ctx.storage.put<Summarizing>("summarizing", { ...record, started: Date.now() })
+    }
+  }
+
   private async runSummary(pr: PullRequestInfo, run: Summarizing): Promise<SummaryOutcome> {
     const key = await this.key()
     const files = await (await this.github()).listPullRequestFiles(key, key.number)
     const issues = await this.linkedIssues(pr)
     const written = await this.askForSummary(pr, files, issues, run.operationId)
+    await this.restartSummaryGrace(run.deliveryId)
     if (written.kind === "unusable") {
       logError("summary.failed", { number: pr.number, head: shortSha(pr.head.sha), reason: written.reason })
       return unusableSummary(written.reason)
