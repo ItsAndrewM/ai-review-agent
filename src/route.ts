@@ -115,7 +115,6 @@ function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, bot
   const action = delivery.action ?? ""
   if (!REVIEW_ACTIONS.has(action)) return ignore(`pull_request ${action}`)
   const reaction = action === "opened" ? descriptionReaction(pullRequest, delivery, botLogin) : undefined
-  if (pullRequest.draft) return reaction ? { kind: "handle", incoming: [reaction] } : ignore("draft pull request")
   const review = reviewOf(pullRequest, delivery)
   return { kind: "handle", incoming: reaction ? [reaction, review] : [review] }
 }
@@ -232,7 +231,6 @@ function routeCheck(
 function routeThread(pullRequest: PullRequestEvent, delivery: Delivery): Routed {
   const trigger = threadTrigger(delivery.action)
   if (trigger === undefined) return ignore(`pull_request_review_thread ${delivery.action ?? ""}`)
-  if (pullRequest.draft) return ignore("draft pull request")
   return { kind: "handle", incoming: [approval(delivery, pullRequest.number, trigger)] }
 }
 

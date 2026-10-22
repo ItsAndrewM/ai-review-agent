@@ -92,6 +92,10 @@ describe("approvalNote", () => {
     )
   })
 
+  it("says approval waits when it couldn't read the repository's .andabot.yaml to know the workflow", () => {
+    expect(waiting("workflow_unknown")).toBe("Approval waits: I couldn't read `.andabot.yaml`.")
+  })
+
   it("words every other wait plainly", () => {
     expect(waiting("not_open")).toBe("Approval waits: the pull request is closed or a draft.")
     expect(waiting("review_in_flight")).toBe("Approval waits for the review that's running.")

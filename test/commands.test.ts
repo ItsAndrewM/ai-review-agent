@@ -17,6 +17,18 @@ describe("skippedReviewText", () => {
     expect(skippedReviewText("superseded", "abc1234def5678", "andabot")).toBeUndefined()
     expect(skippedReviewText("paused", "abc1234def5678", "andabot")).toBeUndefined()
   })
+
+  it("says the path filters leave out every changed file, the one setting that can skip a command", () => {
+    expect(skippedReviewText("path_filters", "abc1234def5678", "andabot")).toBe(
+      "Nothing to review: `.andabot.yaml`'s `path_filters` leave out every file this pull request changes.",
+    )
+  })
+
+  it("has nothing to say for the settings a command bypasses, which skip only a push", () => {
+    for (const reason of ["auto", "draft", "base_branch", "title_keyword"] as const) {
+      expect(skippedReviewText(reason, "abc1234def5678", "andabot")).toBeUndefined()
+    }
+  })
 })
 
 describe("helpText", () => {

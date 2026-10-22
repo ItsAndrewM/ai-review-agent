@@ -884,6 +884,7 @@ describe("renderSummaryComment", () => {
     linkedIssues?: number[]
     spend?: ReviewSpend
     instructionFiles?: string[]
+    configError?: string
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -976,6 +977,47 @@ describe("renderSummaryComment", () => {
     expect(summaryWith({ instructionFiles: ["docs/a`b.md", "CLAUDE.md"] })).toContain(
       "<sub>Standards: `` docs/a`b.md ``, `CLAUDE.md`</sub>",
     )
+  })
+
+  it("ends with a note naming the error as code under the footer lines when .andabot.yaml was ignored", () => {
+    expect(summaryWith({ configError: "/reviews/auto must be boolean" })).toMatch(
+      /<sub>Commands: [^\n]*<\/sub>\n\n_\.andabot\.yaml was ignored: `\/reviews\/auto must be boolean`; the defaults applied\._$/,
+    )
+  })
+
+  it("keeps the stars of an unquoted glob's YAML error literal, since the note's error is code", () => {
+    const error = "invalid YAML: Unresolved alias (the anchor must be set before the alias): */*.snap"
+    expect(summaryWith({ configError: error })).toContain(
+      "\n\n_.andabot.yaml was ignored: `invalid YAML: Unresolved alias (the anchor must be set before the alias): */*.snap`; the defaults applied._",
+    )
+  })
+
+  it("wraps an error that holds a backtick in a double-backtick span, as the Standards line does", () => {
+    expect(summaryWith({ configError: "/reviews/a`b schema is false" })).toContain(
+      "_.andabot.yaml was ignored: `` /reviews/a`b schema is false ``; the defaults applied._",
+    )
+  })
+
+  it("flattens the error's whitespace onto the note's one line, leaving its pipes and markup as written", () => {
+    const error = "Error: GitHub 502 : <html>\n  <body>bad\tgateway | retry</body>\r\n</html>\n"
+    expect(summaryWith({ configError: error })).toContain(
+      "\n\n_.andabot.yaml was ignored: `Error: GitHub 502 : <html> <body>bad gateway | retry</body> </html>`; the defaults applied._",
+    )
+  })
+
+  it("cuts an error longer than 300 characters to 300 and an ellipsis", () => {
+    expect(summaryWith({ configError: "x".repeat(301) })).toContain(
+      `_.andabot.yaml was ignored: \`${"x".repeat(300)}…\`; the defaults applied._`,
+    )
+    expect(summaryWith({ configError: "y".repeat(300) })).toContain(
+      `_.andabot.yaml was ignored: \`${"y".repeat(300)}\`; the defaults applied._`,
+    )
+  })
+
+  it("adds no note when the file was missing or valid", () => {
+    const text = summaryWith({})
+    expect(text).not.toContain(".andabot.yaml was ignored")
+    expect(text).toMatch(/<sub>Commands: [^\n]*<\/sub>$/)
   })
 
   it("says what the review cost on the line after the skills claim", () => {

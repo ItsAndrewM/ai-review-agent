@@ -136,26 +136,57 @@ describe("headReviewed", () => {
 })
 
 describe("resumeStep", () => {
-  const open = { open: true, draft: false, reviewRunning: false, reviewed: false }
+  const open = { open: true, reviewRunning: false, reviewed: false, settingsSkip: undefined }
 
   it("chooses what resume does next", () => {
-    expect(resumeStep({ open: false, draft: true, reviewRunning: true, reviewed: true })).toBe("closed")
-    expect(resumeStep({ ...open, draft: true, reviewRunning: true, reviewed: true })).toBe("draft")
-    expect(resumeStep({ ...open, reviewRunning: true, reviewed: true })).toBe("running")
-    expect(resumeStep({ ...open, reviewed: true })).toBe("evaluate")
+    expect(resumeStep({ open: false, reviewRunning: true, reviewed: true, settingsSkip: "draft" })).toBe("closed")
+    expect(resumeStep({ ...open, reviewRunning: true, reviewed: true, settingsSkip: "draft" })).toBe("running")
+    expect(resumeStep({ ...open, reviewed: true, settingsSkip: "auto" })).toBe("evaluate")
+    expect(resumeStep({ ...open, settingsSkip: "draft" })).toBe("draft")
     expect(resumeStep(open)).toBe("review")
+  })
+
+  it("skips the catch-up review as a push would, by each of the push settings", () => {
+    for (const settingsSkip of ["auto", "draft", "base_branch", "title_keyword"] as const) {
+      expect(resumeStep({ ...open, settingsSkip })).toBe(settingsSkip)
+    }
+  })
+
+  it("evaluates a reviewed head whatever the push settings, since approval doesn't depend on them", () => {
+    expect(resumeStep({ ...open, reviewed: true, settingsSkip: "title_keyword" })).toBe("evaluate")
   })
 })
 
 describe("resumeReply", () => {
+  const head = "def5678901"
+
   it("words each resume step", () => {
-    const head = "def5678901"
     expect(NOT_PAUSED_REPLY).toBe("Not paused.")
-    expect(resumeReply("review", head)).toBe("Resumed: reviewing `def5678`.")
-    expect(resumeReply("evaluate", head)).toBe("Resumed: `def5678` is reviewed already.")
-    expect(resumeReply("running", head)).toBe("Resumed: a review of `def5678` is already running.")
-    expect(resumeReply("closed", head)).toBe("Resumed. The pull request is closed, so there's nothing to review.")
-    expect(resumeReply("draft", head)).toBe("Resumed. It's a draft, so I'll review it once it's ready for review.")
+    expect(resumeReply("review", head, "andabot")).toBe("Resumed: reviewing `def5678`.")
+    expect(resumeReply("evaluate", head, "andabot")).toBe("Resumed: `def5678` is reviewed already.")
+    expect(resumeReply("running", head, "andabot")).toBe("Resumed: a review of `def5678` is already running.")
+    expect(resumeReply("closed", head, "andabot")).toBe(
+      "Resumed. The pull request is closed, so there's nothing to review.",
+    )
+    expect(resumeReply("draft", head, "andabot")).toBe(
+      "Resumed. It's a draft, so I'll review it once it's ready for review.",
+    )
+  })
+
+  it("says which .andabot.yaml setting keeps pushes unreviewed, and how to ask for a review", () => {
+    expect(resumeReply("auto", head, "andabot")).toBe(
+      "Resumed. `.andabot.yaml` turns automatic reviews off, so pushes aren't reviewed; `@andabot review` reviews on request.",
+    )
+    expect(resumeReply("base_branch", head, "andabot")).toBe(
+      "Resumed. `.andabot.yaml`'s `base_branches` leave out this pull request's base, so pushes aren't reviewed; `@andabot review` reviews on request.",
+    )
+    expect(resumeReply("title_keyword", head, "andabot")).toBe(
+      "Resumed. This pull request's title holds one of `.andabot.yaml`'s `ignore_title_keywords`, so pushes aren't reviewed; `@andabot review` reviews on request.",
+    )
+  })
+
+  it("names the bot to ask for a review", () => {
+    expect(resumeReply("auto", head, "reviewer-bot")).toContain("`@reviewer-bot review` reviews on request.")
   })
 })
 

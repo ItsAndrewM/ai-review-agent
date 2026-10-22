@@ -3,7 +3,11 @@ import type { CompareStatus, PostedComment, ReviewThread } from "../github/clien
 import {
   comparableText,
   deltaLines,
+  everyFileFiltered,
+  filterGlobs,
+  isFiltered,
   markedLines,
+  reviewableFiles,
   type ChangedFile,
   type DeltaLines,
   type MarkedLines,
@@ -87,6 +91,7 @@ export const ReviewScope = Type.Object({
   open: Type.Array(OpenThread),
   threadsKnown: Type.Boolean(),
   changed: Type.Optional(Type.Array(Type.String())),
+  pathFilters: Type.Optional(Type.Array(Type.String())),
 })
 
 export type ReviewScope = Static<typeof ReviewScope>
@@ -130,6 +135,7 @@ export interface ScopeInput {
   covered: ReadonlyMap<string, MarkedLines>
   threads: ThreadPlan | undefined
   changed?: readonly string[]
+  pathFilters?: readonly string[]
 }
 
 export interface NextReviewedInput {
@@ -363,6 +369,7 @@ export function buildScope(input: ScopeInput): ReviewScope {
     covered: [...input.covered].map(([path, marked]) => ({ path, right: [...marked.right], left: [...marked.left] })),
     ...threadFields(input.threads),
     changed: [...(input.changed ?? [])],
+    pathFilters: [...(input.pathFilters ?? [])],
   }
   return input.mode === "incremental" && input.from !== undefined ? { ...scope, from: input.from } : scope
 }
@@ -380,10 +387,42 @@ export function nothingToReview(scope: ReviewScope): boolean {
   return scope.mode === "incremental" && scope.covered.length === 0 && scope.recheck.length === 0
 }
 
+export const scopedFiles = (scope: ReviewScope, files: readonly ChangedFile[]): ChangedFile[] =>
+  reviewableFiles(files, scope.pathFilters ?? [])
+
+export function withFilteredUnfounded(validated: ValidatedReview, scope: ReviewScope): ValidatedReview {
+  const globs = filterGlobs(scope.pathFilters ?? [])
+  const leftOut = (rejection: Rejected): Rejected =>
+    isFiltered(rejection.finding.path, globs)
+      ? {
+          finding: rejection.finding,
+          reason: `path "${rejection.finding.path}" is left out of the review by path_filters; drop the finding`,
+          unfounded: true,
+        }
+      : rejection
+  return { ...validated, rejected: validated.rejected.map(leftOut) }
+}
+
+export async function pathFiltersSkip(
+  patterns: readonly string[],
+  changedFiles: () => Promise<readonly ChangedFile[]>,
+): Promise<"path_filters" | undefined> {
+  if (patterns.length === 0) return undefined
+  return everyFileFiltered(await changedFiles(), patterns) ? "path_filters" : undefined
+}
+
+export async function filtersInForce(
+  scope: ReviewScope | undefined,
+  configured: () => Promise<readonly string[]>,
+): Promise<readonly string[]> {
+  return scope?.pathFilters ?? (await configured())
+}
+
 export function pathsNeedingRows(scope: ReviewScope, files: readonly ChangedFile[]): string[] {
-  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(files)
+  const reviewed = scopedFiles(scope, files)
+  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(reviewed)
   const covered = new Set(scope.covered.map((file) => file.path))
-  return walkthroughPaths(files.filter((file) => covered.has(file.filename)))
+  return walkthroughPaths(reviewed.filter((file) => covered.has(file.filename)))
 }
 
 export function promptFiles(

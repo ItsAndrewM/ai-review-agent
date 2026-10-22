@@ -1,4 +1,5 @@
 import type { ReviewThread } from "../github/client.ts"
+import { CONFIG_FILE } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
 import type { ApprovalOutcome, WaitReason } from "./approval.ts"
 import { openBotThreads, type OpenThread } from "./incremental.ts"
@@ -26,6 +27,7 @@ const REFUSALS = {
 } satisfies Record<ResolveRefusal, string>
 
 const PLAIN_WAITS = {
+  workflow_unknown: `Approval waits: I couldn't read \`${CONFIG_FILE}\`.`,
   not_open: "Approval waits: the pull request is closed or a draft.",
   review_in_flight: "Approval waits for the review that's running.",
   not_reviewed: "Approval waits for my review of the current head.",

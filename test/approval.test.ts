@@ -1,14 +1,18 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { CheckRunSummary } from "../src/github/client.ts"
+import { DEFAULT_CONFIG, parseConfig, type ConfigRead } from "../src/repository/config.ts"
 import {
   approvalRecord,
   awaitsApproval,
   checksState,
   decideApproval,
+  evaluatedApprovalOf,
   evaluatesAfterReview,
-  LastReview,
+  evaluatesReviewedHead,
+  evaluationWorkflow,
   lastReviewOf,
+  LastReview,
   openBlockingIn,
   verdictAfterChecks,
   type ApprovalState,
@@ -49,6 +53,11 @@ describe("decideApproval", () => {
 
   it("never approves when the request-changes workflow is off", () => {
     expect(outcome({ ...ready, workflow: false })).toBe("workflow_off")
+  })
+
+  it("waits when the workflow can't be known, ahead of every other reason", () => {
+    expect(outcome({ ...ready, workflow: "unknown" })).toBe("workflow_unknown")
+    expect(outcome({ ...ready, workflow: "unknown", paused: true, open: false })).toBe("workflow_unknown")
   })
 
   it("does nothing while paused", () => {
@@ -221,6 +230,7 @@ describe("lastReviewOf", () => {
         accepted: [finding("blocking"), finding("nitpick")],
         rejected,
         at: 5,
+        requestChangesWorkflow: true,
       }),
     ).toEqual({
       reviewId: 9,
@@ -231,6 +241,7 @@ describe("lastReviewOf", () => {
       counts: { blocking: 1, suggestion: 0, nitpick: 1 },
       heldBack: 1,
       at: 5,
+      requestChangesWorkflow: true,
     })
   })
 
@@ -245,6 +256,7 @@ describe("lastReviewOf", () => {
         accepted: [],
         rejected: [],
         at: 5,
+        requestChangesWorkflow: true,
       }),
     ).toEqual({
       reviewId: 9,
@@ -255,7 +267,23 @@ describe("lastReviewOf", () => {
       counts: { blocking: 0, suggestion: 0, nitpick: 0 },
       heldBack: 0,
       at: 5,
+      requestChangesWorkflow: true,
     })
+  })
+
+  it("keeps the request-changes workflow the review ran under, for the evaluation that follows it", () => {
+    const facts = {
+      reviewId: 9,
+      event: "COMMENT",
+      headSha: "bbb",
+      verdict: "approve",
+      shown: "COMMENT",
+      accepted: [],
+      rejected: [],
+      at: 5,
+    } as const
+    expect(lastReviewOf({ ...facts, requestChangesWorkflow: false }).requestChangesWorkflow).toBe(false)
+    expect(lastReviewOf({ ...facts, requestChangesWorkflow: true }).requestChangesWorkflow).toBe(true)
   })
 })
 
@@ -278,14 +306,28 @@ describe("approvalRecord", () => {
       headSha: "bbb",
       heldBack: 0,
       at: 6,
+      requestChangesWorkflow: true,
       counts: { blocking: 1, suggestion: 2, nitpick: 0 },
     })
   })
 
   it("has no counts to keep when there is no last review, or it kept none", () => {
-    const approved = { reviewId: 10, event: "APPROVE", headSha: "bbb", heldBack: 0, at: 6 }
+    const approved = {
+      reviewId: 10,
+      event: "APPROVE",
+      headSha: "bbb",
+      heldBack: 0,
+      at: 6,
+      requestChangesWorkflow: true,
+    }
     expect(approvalRecord(undefined, 10, "bbb", 6)).toStrictEqual(approved)
     expect(approvalRecord(requested, 10, "bbb", 6)).toStrictEqual(approved)
+  })
+
+  it("is the evaluation's own approval record, with the last review's counts added", () => {
+    const record = evaluatedApprovalOf({ reviewId: 10, headSha: "bbb", at: 6 })
+    expect(approvalRecord(undefined, 10, "bbb", 6)).toStrictEqual(record)
+    expect(approvalRecord(previous, 10, "bbb", 6)).toStrictEqual({ ...record, counts: previous.counts })
   })
 })
 
@@ -301,6 +343,78 @@ describe("LastReview", () => {
     expect(Value.Check(LastReview, { ...stored, shown: "AWAITING_CHECKS", counts })).toBe(true)
     expect(Value.Check(LastReview, { ...stored, shown: "approve" })).toBe(false)
     expect(Value.Check(LastReview, { ...stored, counts: { ...counts, blocking: "0" } })).toBe(false)
+  })
+
+  it("reads a record written before the workflow was kept, and refuses a workflow that isn't a boolean", () => {
+    expect(Value.Check(LastReview, requested)).toBe(true)
+    expect(Value.Check(LastReview, { ...requested, requestChangesWorkflow: false })).toBe(true)
+    expect(Value.Check(LastReview, { ...requested, requestChangesWorkflow: "true" })).toBe(false)
+  })
+})
+
+describe("evaluatedApprovalOf", () => {
+  it("records the evaluation's own approval as made under the workflow, which it only approves under", () => {
+    expect(evaluatedApprovalOf({ reviewId: 4, headSha: "bbb", at: 7 })).toEqual({
+      reviewId: 4,
+      event: "APPROVE",
+      headSha: "bbb",
+      heldBack: 0,
+      at: 7,
+      requestChangesWorkflow: true,
+    })
+  })
+})
+
+describe("evaluationWorkflow", () => {
+  const read = (config: ConfigRead) => {
+    const reads: string[] = []
+    const reader = async (): Promise<ConfigRead> => {
+      reads.push("read")
+      return config
+    }
+    return { reader, reads }
+  }
+  const missing: ConfigRead = { config: structuredClone(DEFAULT_CONFIG), error: undefined, present: false }
+  const workflowOff: ConfigRead = { ...parseConfig("reviews:\n  request_changes_workflow: false\n"), present: true }
+  const unreadable: ConfigRead = { ...missing, error: "Error: GitHub 502 : boom" }
+  const invalid: ConfigRead = { ...missing, error: "/reviews/auto must be boolean", present: true }
+
+  it("takes the workflow the last review ran under, without reading the config", async () => {
+    const { reader, reads } = read(unreadable)
+    expect(await evaluationWorkflow({ ...requested, requestChangesWorkflow: false }, reader, "true")).toBe(false)
+    expect(await evaluationWorkflow({ ...requested, requestChangesWorkflow: true }, reader, "false")).toBe(true)
+    expect(reads).toEqual([])
+  })
+
+  it("reads the config for a record that predates the field, or no record: the file's setting, else the var", async () => {
+    expect(await evaluationWorkflow(requested, read(workflowOff).reader, "true")).toBe(false)
+    expect(await evaluationWorkflow(undefined, read(workflowOff).reader, "true")).toBe(false)
+    expect(await evaluationWorkflow(requested, read(missing).reader, "true")).toBe(true)
+    expect(await evaluationWorkflow(requested, read(missing).reader, "false")).toBe(false)
+  })
+
+  it("takes the var for an invalid file, whose defaults applied, and reads the config once", async () => {
+    const { reader, reads } = read(invalid)
+    expect(await evaluationWorkflow(requested, reader, "true")).toBe(true)
+    expect(reads).toEqual(["read"])
+  })
+
+  it("waits on a config it couldn't read, never falling back to the var", async () => {
+    expect(await evaluationWorkflow(requested, read(unreadable).reader, "true")).toBe("unknown")
+    expect(await evaluationWorkflow(undefined, read(unreadable).reader, "false")).toBe("unknown")
+  })
+})
+
+describe("evaluatesReviewedHead", () => {
+  it("evaluates approval when a push finds its head already reviewed on an open pull request that is ready", () => {
+    expect(evaluatesReviewedHead({ state: "open", draft: false }, "push")).toBe(true)
+    expect(evaluatesReviewedHead({ state: "open" }, "push")).toBe(true)
+  })
+
+  it("leaves a draft, a closed pull request and a command alone", () => {
+    expect(evaluatesReviewedHead({ state: "open", draft: true }, "push")).toBe(false)
+    expect(evaluatesReviewedHead({ state: "closed", draft: false }, "push")).toBe(false)
+    expect(evaluatesReviewedHead({ state: "open", draft: false }, "command")).toBe(false)
   })
 })
 

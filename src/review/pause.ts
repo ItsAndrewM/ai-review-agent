@@ -1,4 +1,5 @@
 import { Type } from "typebox"
+import { CONFIG_FILE, type SkipReason } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
 import { SUMMARY_MARKER } from "./render.ts"
 
@@ -47,24 +48,23 @@ export function headReviewed(headSha: string, reviewedHead: string | undefined, 
   return posted || reviewedHead === headSha
 }
 
-export type ResumeStep = "closed" | "draft" | "running" | "evaluate" | "review"
+export type ResumeStep = "closed" | "running" | "evaluate" | SkipReason | "review"
 
 export function resumeStep(input: {
   open: boolean
-  draft: boolean
   reviewRunning: boolean
   reviewed: boolean
+  settingsSkip: SkipReason | undefined
 }): ResumeStep {
   if (!input.open) return "closed"
-  if (input.draft) return "draft"
   if (input.reviewRunning) return "running"
   if (input.reviewed) return "evaluate"
-  return "review"
+  return input.settingsSkip ?? "review"
 }
 
 export const NOT_PAUSED_REPLY = "Not paused."
 
-export function resumeReply(step: ResumeStep, headSha: string): string {
+export function resumeReply(step: ResumeStep, headSha: string, botLogin: string): string {
   const head = `\`${shortSha(headSha)}\``
   switch (step) {
     case "review":
@@ -75,8 +75,22 @@ export function resumeReply(step: ResumeStep, headSha: string): string {
       return `Resumed: a review of ${head} is already running.`
     case "closed":
       return "Resumed. The pull request is closed, so there's nothing to review."
+    default:
+      return skippedResumeReply(step, botLogin)
+  }
+}
+
+function skippedResumeReply(reason: SkipReason, botLogin: string): string {
+  const onRequest = `so pushes aren't reviewed; \`@${botLogin} review\` reviews on request.`
+  switch (reason) {
     case "draft":
       return "Resumed. It's a draft, so I'll review it once it's ready for review."
+    case "auto":
+      return `Resumed. \`${CONFIG_FILE}\` turns automatic reviews off, ${onRequest}`
+    case "base_branch":
+      return `Resumed. \`${CONFIG_FILE}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
+    case "title_keyword":
+      return `Resumed. This pull request's title holds one of \`${CONFIG_FILE}\`'s \`ignore_title_keywords\`, ${onRequest}`
   }
 }
 
