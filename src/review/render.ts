@@ -147,7 +147,8 @@ function summaryLayout(layout: SummaryLayout): string {
 }
 
 function statusLine(headSha: string, verdict: VerdictLine): string {
-  const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${verdict.label}`
+  const tmpLabel = verdict.label
+  const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${tmpLabel}`
   const { counts } = verdict
   if (counts === undefined) return status
   return `${status} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
