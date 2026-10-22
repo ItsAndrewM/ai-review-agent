@@ -272,18 +272,18 @@ describe("grep", () => {
   })
 
   it("answers a backtracking-prone pattern over one very long line in under a second", () => {
-    const files = snapshotOf({ "min.js": `xx foo ${"x".repeat(199_990)}\n` })
+    const files = snapshotOf({ "min.js": `${"x".repeat(200_000)}\n` })
     const started = performance.now()
-    grep(files, { pattern: String.raw`[\s\S]*foo[\s\S]*bar` })
+    grep(files, { pattern: String.raw`[\s\S]*foo` })
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
   it("answers a pattern that spans lines over 20,000 short lines in under a second with no match", () => {
     const files = snapshotOf({ "big.txt": "foo line\n".repeat(20_000) })
     const started = performance.now()
-    const answer = grep(files, { pattern: String.raw`[\s\S]*foo[\s\S]*bar` })
+    const answer = grep(files, { pattern: String.raw`[\s\S]*bar` })
     expect(performance.now() - started).toBeLessThan(1_000)
-    expect(answer).toBe("No match for /[\\s\\S]*foo[\\s\\S]*bar/ in 1 file.")
+    expect(answer).toBe("No match for /[\\s\\S]*bar/ in 1 file.")
   })
 
   it("refuses a pattern with a nested quantifier without searching", () => {
@@ -325,12 +325,16 @@ describe("patternProblem", () => {
     expect(patternProblem(pattern)).toBeUndefined()
   })
 
-  it.each([".*foo.*bar", "foo.+bar.*baz", '[^"]*x[^"]*', String.raw`\S+\s\S+`, String.raw`\W*a\D+`, "(.*)x(.*)"])(
-    "refuses the two unbounded wildcards in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toContain("more than one unbounded wildcard (such as .* twice)")
-    },
-  )
+  it.each(
+    [".*foo.*bar", "foo.+bar.*baz", '[^"]*x[^"]*', String.raw`\S+\s\S+`, String.raw`\W*a\D+`, "(.*)x(.*)"].concat([
+      String.raw`[\s\S]*foo[\s\S]*bar`,
+      String.raw`[\w\W]+x[\w\W]+`,
+      String.raw`[\S\s]*a[\d\D]*`,
+      String.raw`[a\s\-\S]*x[^]*`,
+    ]),
+  )("refuses the two unbounded wildcards in %s", (pattern) => {
+    expect(patternProblem(pattern)).toContain("more than one unbounded wildcard (such as .* twice)")
+  })
 
   it.each([
     "foo.*bar",
@@ -340,6 +344,9 @@ describe("patternProblem", () => {
     String.raw`\d+\.\d+`,
     String.raw`\.*x\.*`,
     "[a-z]*x[a-z]*",
+    String.raw`[\s\S]*foo`,
+    String.raw`[\s\w]*x[\S\W]*`,
+    String.raw`[\\s\\S]*x[\\s\\S]*`,
   ])("accepts the single wildcard in %s", (pattern) => {
     expect(patternProblem(pattern)).toBeUndefined()
   })

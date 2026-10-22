@@ -79,19 +79,41 @@ function selectorFor(query: GrepQuery): Selector {
   return (path) => isUnder(path, root) && (matcher === undefined || matcher.match(path))
 }
 
+const COMPLEMENTARY_ESCAPES = ["sS", "wW", "dD"]
+
+function classEnd(pattern: string, open: number): number {
+  let index = open + 1
+  while (index < pattern.length && pattern.charAt(index) !== "]") {
+    index += pattern.charAt(index) === "\\" ? 2 : 1
+  }
+  return index
+}
+
+function escapesIn(body: string): Set<string> {
+  const letters = new Set<string>()
+  for (let index = 0; index < body.length; index++) {
+    if (body.charAt(index) === "\\") letters.add(body.charAt(++index))
+  }
+  return letters
+}
+
+function isWildcardClass(body: string): boolean {
+  if (body.startsWith("^")) return true
+  const escapes = escapesIn(body)
+  return COMPLEMENTARY_ESCAPES.some((pair) => escapes.has(pair.charAt(0)) && escapes.has(pair.charAt(1)))
+}
+
 function structuralTokens(pattern: string): string[] {
   const tokens: string[] = []
-  let inClass = false
   for (let index = 0; index < pattern.length; index++) {
     const char = pattern.charAt(index)
-    if (inClass) {
-      inClass = char !== "]"
-    } else if (char === "\\") {
+    if (char === "\\") {
       index++
       tokens.push(WILDCARD_ESCAPES.includes(pattern.charAt(index)) ? WILDCARD : ATOM)
     } else if (char === "[") {
-      inClass = true
-      tokens.push(pattern.charAt(index + 1) === "^" ? WILDCARD : ATOM)
+      const end = classEnd(pattern, index)
+      tokens.push(isWildcardClass(pattern.slice(index + 1, end)) ? WILDCARD : ATOM)
+      index = end
     } else {
       tokens.push(char)
     }
