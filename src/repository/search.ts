@@ -163,8 +163,9 @@ function hasRepeatedAlternation(tokens: readonly string[]): boolean {
       groups.push(false)
     } else if (token === "|") {
       markEnclosingGroup(groups)
-    } else if (token === ")" && (groups.pop() ?? false) && isRepeater(tokens[index + 1])) {
-      return true
+    } else if (token === ")" && (groups.pop() ?? false)) {
+      if (isRepeater(tokens[index + 1])) return true
+      markEnclosingGroup(groups)
     }
   }
   return false

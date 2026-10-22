@@ -431,21 +431,33 @@ describe("patternProblem", () => {
     },
   )
 
-  it.each([String.raw`(.|\s)*`, String.raw`foo(.|\s)*bar`, String.raw`(\w|\d)+`, "(a|b){2,}", "(?:x|y)*", "(a|b)+"])(
-    "refuses the repeated alternation in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toBe(
-        String.raw`it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
-      )
-    },
-  )
+  it.each([
+    String.raw`(.|\s)*`,
+    String.raw`foo(.|\s)*bar`,
+    String.raw`(\w|\d)+`,
+    "(a|b){2,}",
+    "(?:x|y)*",
+    "(a|b)+",
+    String.raw`((.|\s)c)*x`,
+    "(a(b|c))+",
+  ])("refuses the repeated alternation in %s", (pattern) => {
+    expect(patternProblem(pattern)).toBe(
+      String.raw`it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
+    )
+  })
 
-  it.each(["(foo|bar)", "(get|set)Value", "x(a|b)?y", String.raw`[\s\S]*`, "a|b*", String.raw`\(a|b\)*`, "[(|)]*"])(
-    "accepts the unrepeated alternation or class in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toBeUndefined()
-    },
-  )
+  it.each([
+    "(foo|bar)",
+    "(get|set)Value",
+    "x(a|b)?y",
+    String.raw`[\s\S]*`,
+    "a|b*",
+    String.raw`\(a|b\)*`,
+    "[(|)]*",
+    "((a|b)c)?",
+  ])("accepts the unrepeated alternation or class in %s", (pattern) => {
+    expect(patternProblem(pattern)).toBeUndefined()
+  })
 
   it("states every refusal as a bare reason that reads after the words Pattern refused", () => {
     expect(patternProblem(".*a.*b")).toMatch(/^it has more than one unbounded wildcard/)
