@@ -1,0 +1,336 @@
+import { describe, expect, it } from "vitest"
+import type { BlobText, ListedEntry, TreeListing } from "../src/github/client.ts"
+import { loadSnapshot, type SnapshotSource } from "../src/repository/load-snapshot.ts"
+import { MemorySnapshotFiles, SNAPSHOT_LIMITS, type SnapshotLimits } from "../src/repository/snapshot.ts"
+import { streamOf, tarOf, type TarEntry } from "./tar-archive.ts"
+
+const SHA = "abc123"
+
+const encoder = new TextEncoder()
+
+async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
+  const stream = streamOf(bytes, 4_096).pipeThrough(new CompressionStream("gzip"))
+  return new Uint8Array(await new Response(stream).arrayBuffer())
+}
+
+async function gzippedTarball(entries: readonly TarEntry[]): Promise<Uint8Array> {
+  return gzip(tarOf(entries))
+}
+
+function resetAfter(bytes: Uint8Array, count: number): ReadableStream<Uint8Array> {
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes.slice(0, count))
+      controller.error(new Error("connection reset"))
+    },
+  })
+}
+
+const file = (name: string, body: string): TarEntry => ({ name: `owner-repo-${SHA}/${name}`, body })
+
+const blob = (path: string, size = 10): ListedEntry => ({ path, type: "blob", mode: "100644", size })
+
+interface Fake {
+  source: SnapshotSource
+  blobCalls: string[][]
+  tarballCalls: number
+}
+
+interface FakeOptions {
+  tarballs: (() => Promise<ReadableStream<Uint8Array>>)[]
+  listing?: () => Promise<TreeListing>
+  blobs?: (paths: readonly string[]) => BlobText[]
+}
+
+function fakeSource(options: FakeOptions): Fake {
+  const fake: Fake = {
+    blobCalls: [],
+    tarballCalls: 0,
+    source: {
+      async tarball() {
+        const open = options.tarballs[Math.min(fake.tarballCalls, options.tarballs.length - 1)]
+        fake.tarballCalls += 1
+        if (open === undefined) {
+          throw new Error("no tarball")
+        }
+        return open()
+      },
+      listing: options.listing ?? (async () => ({ entries: [], truncated: false })),
+      async blobs(_sha, paths) {
+        fake.blobCalls.push([...paths])
+        return options.blobs?.(paths) ?? paths.map((path) => ({ path, text: `text of ${path}\n` }))
+      },
+    },
+  }
+  return fake
+}
+
+async function tarballOf(entries: readonly TarEntry[]): Promise<() => Promise<ReadableStream<Uint8Array>>> {
+  const bytes = await gzippedTarball(entries)
+  return async () => streamOf(bytes, 700)
+}
+
+const lowered = (limits: Partial<SnapshotLimits>): SnapshotLimits => ({ ...SNAPSHOT_LIMITS, ...limits })
+
+describe("loadSnapshot", () => {
+  it("keeps text files and records binary, LFS and large ones", async () => {
+    const lfs = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 9\n"
+    const fake = fakeSource({
+      tarballs: [
+        await tarballOf([
+          file("src/a.ts", "export const a = 1\n"),
+          file("src/b.ts", "export const b = 2\n"),
+          file("logo.png", "PNG\0data"),
+          file("model.bin", "bytes\0"),
+          file("asset.dat", lfs),
+          file("big.js", "x".repeat(200)),
+        ]),
+      ],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxFileBytes: 100 }))
+
+    expect(record).toEqual({
+      sha: SHA,
+      files: 2,
+      bytes: 38,
+      gapFilled: 0,
+      leftOut: { binary: 2, lfs: 1, too_large: 1 },
+      capped: false,
+      treeTruncated: false,
+    })
+    expect(files.read("src/a.ts")).toBe("export const a = 1\n")
+    expect(files.reasonFor("logo.png")).toBe("binary")
+    expect(files.reasonFor("asset.dat")).toBe("lfs")
+    expect(files.reasonFor("big.js")).toBe("too_large")
+    expect(files.record()).toEqual(record)
+  })
+
+  it("fills the gap from the tree", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("src/a.ts", "export const a = 1\n")])],
+      listing: async () => ({ entries: [blob("src/a.ts"), blob("tests/a.test.ts")], truncated: false }),
+      blobs: (paths) => paths.map((path) => ({ path, text: "it('works')\n" })),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(fake.blobCalls).toEqual([["tests/a.test.ts"]])
+    expect(files.read("tests/a.test.ts")).toBe("it('works')\n")
+    expect(record.gapFilled).toBe(1)
+    expect(record.files).toBe(2)
+    expect(record.bytes).toBe(19 + 12)
+  })
+
+  it("records a gap file that GitHub reports as binary or as an LFS pointer", async () => {
+    const lfs = "version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 9\n"
+    const fake = fakeSource({
+      tarballs: [await tarballOf([])],
+      listing: async () => ({ entries: [blob("a.bin"), blob("b.dat"), blob("c.ts")], truncated: false }),
+      blobs: () => [
+        { path: "a.bin", text: undefined },
+        { path: "b.dat", text: lfs },
+        { path: "c.ts", text: "ok\n" },
+      ],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(files.reasonFor("a.bin")).toBe("binary")
+    expect(files.reasonFor("b.dat")).toBe("lfs")
+    expect(record).toMatchObject({ files: 1, gapFilled: 1, leftOut: { binary: 1, lfs: 1 } })
+  })
+
+  it("marks symlinks, submodules and large blobs from the tree and ignores directories", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([])],
+      listing: async () => ({
+        entries: [
+          { path: "link", type: "blob", mode: "120000", size: 5 },
+          { path: "vendor/lib", type: "commit", mode: "160000", size: undefined },
+          { path: "src", type: "tree", mode: "040000", size: undefined },
+          blob("huge.sql", 5_000_000),
+        ],
+        truncated: false,
+      }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(files.reasonFor("link")).toBe("symlink")
+    expect(files.reasonFor("vendor/lib")).toBe("submodule")
+    expect(files.reasonFor("huge.sql")).toBe("too_large")
+    expect(files.reasonFor("src")).toBeUndefined()
+    expect(record.leftOut).toEqual({ symlink: 1, submodule: 1, too_large: 1 })
+    expect(fake.blobCalls).toEqual([])
+  })
+
+  it("caps the gap fill at 500", async () => {
+    const paths = Array.from({ length: 600 }, (_, index) => `gen/f${String(index).padStart(3, "0")}.ts`)
+    const fake = fakeSource({
+      tarballs: [await tarballOf([])],
+      listing: async () => ({ entries: paths.map((path) => blob(path)), truncated: false }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(fake.blobCalls).toHaveLength(1)
+    expect(fake.blobCalls[0]).toEqual(paths.slice(0, 500))
+    expect(record.gapFilled).toBe(500)
+    expect(record.leftOut).toEqual({ gap_cap: 100 })
+    expect(files.reasonFor("gen/f599.ts")).toBe("gap_cap")
+    expect(files.has("gen/f499.ts")).toBe(true)
+  })
+
+  it("stops at the snapshot cap and leaves later files out", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "a\n"), file("b.ts", "b\n"), file("c.ts", "c\n"), file("d.ts", "d\n")])],
+      listing: async () => ({
+        entries: [blob("a.ts"), blob("b.ts"), blob("c.ts"), blob("d.ts"), blob("e.ts")],
+        truncated: false,
+      }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxFiles: 2 }))
+
+    expect(record).toMatchObject({ files: 2, capped: true, gapFilled: 0, leftOut: { snapshot_cap: 3 } })
+    expect(files.reasonFor("c.ts")).toBe("snapshot_cap")
+    expect(files.reasonFor("e.ts")).toBe("snapshot_cap")
+    expect(fake.blobCalls).toEqual([])
+  })
+
+  it("stops at the byte cap", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "12345"), file("b.ts", "12345"), file("c.ts", "1")])],
+      listing: async () => ({ entries: [blob("a.ts"), blob("b.ts"), blob("c.ts")], truncated: false }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxBytes: 8 }))
+
+    expect(record).toMatchObject({ files: 1, bytes: 5, capped: true, leftOut: { snapshot_cap: 2 } })
+  })
+
+  it("counts the gap fill against the snapshot cap", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "a\n")])],
+      listing: async () => ({ entries: [blob("a.ts"), blob("x.ts"), blob("y.ts")], truncated: false }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxFiles: 2 }))
+
+    expect(record).toMatchObject({ files: 2, gapFilled: 1, capped: true, leftOut: { snapshot_cap: 1 } })
+    expect(files.has("x.ts")).toBe(true)
+    expect(files.reasonFor("y.ts")).toBe("snapshot_cap")
+  })
+
+  it("retries a failed tarball once and keeps no duplicates", async () => {
+    const complete = await gzippedTarball([file("a.ts", "a\n"), file("b.ts", "b\n")])
+    const fake = fakeSource({
+      tarballs: [async () => resetAfter(complete, 40), async () => streamOf(complete, 700)],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(fake.tarballCalls).toBe(2)
+    expect(record).toMatchObject({ files: 2, bytes: 4 })
+    expect([...files.paths()]).toEqual(["a.ts", "b.ts"])
+  })
+
+  it("retries when the archive is truncated and drops the files of the first try", async () => {
+    const complete = await gzippedTarball([file("a.ts", "a\n"), file("b.ts", "b\n")])
+    const truncated = await gzip(tarOf([file("only-first.ts", "x\n")]).slice(0, 700))
+    const fake = fakeSource({
+      tarballs: [async () => streamOf(truncated, 700), async () => streamOf(complete, 700)],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(fake.tarballCalls).toBe(2)
+    expect(record.files).toBe(2)
+    expect(files.has("only-first.ts")).toBe(false)
+  })
+
+  it("throws SnapshotUnavailable for the tarball after two failures", async () => {
+    const fake = fakeSource({
+      tarballs: [
+        async () => {
+          throw new Error("GitHub returned 502")
+        },
+      ],
+    })
+
+    await expect(loadSnapshot(fake.source, new MemorySnapshotFiles(), SHA)).rejects.toMatchObject({
+      name: "SnapshotUnavailable",
+      step: "tarball",
+      message: expect.stringContaining("GitHub returned 502"),
+    })
+    expect(fake.tarballCalls).toBe(2)
+  })
+
+  it("throws SnapshotUnavailable for the tree when the listing fails", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "a\n")])],
+      listing: async () => {
+        throw new Error("GitHub returned 500")
+      },
+    })
+    const files = new MemorySnapshotFiles()
+
+    await expect(loadSnapshot(fake.source, files, SHA)).rejects.toMatchObject({
+      name: "SnapshotUnavailable",
+      step: "tree",
+      message: expect.stringContaining("GitHub returned 500"),
+    })
+    expect(files.record()).toBeUndefined()
+  })
+
+  it("notes a truncated tree and fills only the listed entries", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "a\n"), file("deep/unlisted.ts", "u\n")])],
+      listing: async () => ({ entries: [blob("a.ts"), blob("b.ts")], truncated: true }),
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(record).toMatchObject({ treeTruncated: true, files: 3, gapFilled: 1 })
+    expect(fake.blobCalls).toEqual([["b.ts"]])
+    expect(files.has("deep/unlisted.ts")).toBe(true)
+  })
+
+  it("adds files to the store in batches of 200", async () => {
+    const entries = Array.from({ length: 450 }, (_, index) => file(`f${index}.ts`, "x\n"))
+    const fake = fakeSource({ tarballs: [await tarballOf(entries)] })
+    const batches: number[] = []
+    const files = new MemorySnapshotFiles()
+    const add = files.add.bind(files)
+    files.add = (batch) => {
+      batches.push(batch.length)
+      add(batch)
+    }
+
+    await loadSnapshot(fake.source, files, SHA)
+
+    expect(batches).toEqual([200, 200, 50])
+  })
+
+  it("decodes what the tarball holds as UTF-8", async () => {
+    const fake = fakeSource({ tarballs: [await tarballOf([file("note.md", "café ✓\n")])] })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(files.read("note.md")).toBe("café ✓\n")
+    expect(record.bytes).toBe(encoder.encode("café ✓\n").length)
+  })
+})
