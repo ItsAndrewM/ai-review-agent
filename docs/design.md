@@ -27,9 +27,9 @@ GitHub ──webhook──▶ Worker (router)
             PullRequest Durable Object  (one per installation/repo#number)
             ├─ SQLite: reviewed head, summary comment id, bot threads, config
             ├─ PiHarness ─ Pi Durable session (transcript, tasks, inbox)
-            │     tools: pr, diff, read_file, tree, search, workspace grep
+            │     tools: pr, diff, read_file, tree, grep
             │     hooks: validate findings against diff hunks before posting
-            ├─ Workspace (@cloudflare/computer): shallow clone in SQLite, grep/find
+            ├─ Snapshot: the head's text files in SQLite, searched by grep and tree
             └─ Sandbox (Containers, later): lint, typecheck, tests on the head
                       │
                       ▼
@@ -107,10 +107,10 @@ Tools offered to the model, all read only and `replay: "safe"`:
 | `get_pr` | PR metadata, title, body, labels, base and head |
 | `list_changed_files` | `GET /pulls/{n}/files`, with per-file patch |
 | `get_diff` | compare API for incremental ranges, `.diff` media type |
-| `read_file(path, ref)` | `GET /contents?ref=` or the workspace clone |
+| `read_file(path, ref)` | `GET /contents?ref=`, or the head's snapshot when loaded |
 | `get_issue(number)` | `GET /issues/{n}`: title, state and full body |
-| `tree(path)` | git trees API or the workspace |
-| `grep(pattern, glob)` | `@cloudflare/computer` workspace over a shallow clone in SQLite |
+| `tree(path, depth)` | the head's snapshot |
+| `grep(pattern, glob, path)` | the head's snapshot |
 | `run_check(name)` | phase 3: Sandbox runs lint, typecheck or tests, returns the tail |
 
 Posting is not a model tool. The model fills a structured findings document, defined with Pi Durable's `defineDoc`, and host code validates each finding against the diff hunks before anything reaches GitHub: the path must be in the PR, the line must be in a hunk on the right side and hold the text the finding quotes, severity must be one of the known values, and a suggestion must be a replacement for the lines it names. A finding that fails validation goes back to the model once, then is dropped and logged. This is the same shape the Agents docs recommend: the model proposes, your code decides.
@@ -119,7 +119,7 @@ A `beforeTool` hook enforces budgets: a cap on files read per review, on bytes p
 
 ### Skills
 
-The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. Before each review, after `reset()`, the host renders the review skill and its four references into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. The Agents SDK's skills catalog, with `activate_skill` and `read_skill_resource`, waits for repo-provided skills in slice 3: offered those two tools, gpt-oss-120b printed its calls as raw text and never posted (#19), so the model gets neither, and its tools are `read_file`, `list_changed_files`, `get_issue` and `submit_review`. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
+The review procedure, with its severity rubric and references, and the rules for answering a question are Agent Skills under `skills/`, bundled into the Worker as text and fingerprinted together with SHA-256; the logs and each posted review's record carry that fingerprint beside the model id, and the summary footer shows its first eight characters as `review@…`. Before each review, after `reset()`, the host renders the review skill and its four references into the root conversation's `instructions`, and a question carries the answer skill in its own message instead, since `configure()` takes effect at once and would swap the instructions of a review still running. The Agents SDK's skills catalog, with `activate_skill` and `read_skill_resource`, waits for repo-provided skills in slice 3: offered those two tools, gpt-oss-120b printed its calls as raw text and never posted (#19), so the model gets neither, and its tools are `read_file`, `list_changed_files`, `get_issue`, `grep`, `tree` and `submit_review`. `docs/superpowers/specs/2026-10-17-skills-design.md` holds the design, the reasons behind it and the order of work.
 
 The spec is the issues a pull request links, up to three: the closing keywords in its body (`Closes #n`, `Fixes #n`, `Resolves #n`), then its branch's `GH-n` keys, then a trailing `.n` on the branch name whose dot follows a non-digit, so a version such as `v1.2` is no key. A bare `#n` in the body counts only when none of those exists, since a pull request that mentions `#2` in passing hasn't made it the spec. With no linked issue the prompt says so and a `spec` finding is rejected, because requirements are never inferred from the code.
 
@@ -128,6 +128,14 @@ A repository's own rules join the review as standards (#29). After the skill and
 One recursive trees call at the base commit lists the instruction files, and the contents API loads their bodies. The object caches both under `context:<baseSha>`, keeping from the listing only the blobs that may be instruction files and those under the three skills roots, since a whole tree can pass the 2 MB a stored value may hold. A file missing at that commit is kept as an empty body, so a later review of the same base loads only the bodies it lacks, and a new base replaces the record. A review loads at most 24 bodies, since each one is a subrequest and the section rarely has room for more: the root files first, then nested files, which always apply, then `.github/instructions` files, which their `applyTo` may filter out; a later review of the same base loads the rest. The section still renders in the order above, and the cap still cuts from its end, whatever loaded first. A body GitHub fails to serve for any reason but a missing file is skipped, logged as `context.unreadable` with its path, and left uncached, so a later review tries it again; the other files still render. When the tree itself can't be read, the review goes ahead without standards, its footer says `none`, and `context.unreadable` is logged without a path. Storing the record is best effort and logs `context.uncached` when it fails. A tree GitHub truncated at 100,000 entries is used as listed. `review.start` logs the `base` and `instructionFiles`, `standardsCut`, `instructionLoadsSkipped` and `treeTruncated`.
 
 `renderActivatedSkill` mirrors the private `renderSkillContent` in the Agents SDK's `agents/harness/pi`, and `renderSkillWithResources` wraps each reference as its `read_skill_resource` does, so re-check both against the SDK on every `agents` bump.
+
+### Repository search
+
+The model searches the pull request's head with `grep(pattern, glob, path)` and `tree(path, depth)` (#30). Both read a snapshot of the head commit's text files, kept in the object's SQLite in `snapshot_files`, `snapshot_left_out` and `snapshot_meta`. The first `grep` or `tree` call of a review or of a question loads it, so a review that never searches costs nothing. `GET /repos/{owner}/{repo}/tarball/{headSha}` on the base repository, with the installation token, serves private repositories and fork pull requests. The body streams through gzip decompression into a tar reader that keeps a regular file of 1,048,576 bytes or less with no NUL byte in its first 8,192 bytes and skips the rest without buffering it; a failed or cut-off download is retried once. A path marked `export-ignore` in `.gitattributes` is missing from GitHub's archives, so the loader compares the head's recursive tree with what it kept and fetches up to 500 missing blobs of that size through GraphQL, in batches of 50. When that fetch fails, the snapshot is kept and those paths are left out as `unreadable`, logged as `snapshot.gap_fill_failed`. A snapshot holds at most 50,000 files or 400 MB (419,430,400 bytes) of text, and rows are written in batches of 200 files or 8 MB, whichever fills first. Every path the snapshot doesn't hold is recorded with its reason: `too_large`, `binary`, `lfs` (a Git LFS pointer), `submodule`, `symlink`, `gap_cap`, `snapshot_cap`, `unreadable` or `unlisted` (not in a truncated tree's listing). `tree` marks those paths and `grep` names them in its answer, so a file the snapshot lacks is never reported as a missing match.
+
+`grep` takes a JavaScript regular expression, matched line by line over the files under `path` that match the `minimatch` glob. It answers `path:line: text` lines cut at 300 characters, at most 100 matches and 12,000 characters, with a closing note for what was left out. Each line is tested on its first 500 characters only, and the answer counts the long lines it cut, because a model-written pattern's backtracking cost grows with the line: `.*foo.*bar` took 6.3 s on one 8.8 KB minified line. A search stops after testing 500 lines longer than 300 characters and says it stopped early. `patternProblem` refuses a pattern over 500 characters, one with a nested quantifier such as `(a+)+`, and one with two unbounded wildcards (`*` or `+` after `.`, `\S`, `\W`, `\D`, a negated class or a class like `[\s\S]`); braced wildcards such as `.{1,}` aren't counted, and the line cap bounds their cost. A pattern that doesn't compile is searched as literal text, and the answer says so. `tree` lists the snapshot's paths without reading contents, at most 500 entries, two levels deep by default. A review or answer gets 40 `grep` and `tree` calls together, and a refused pattern doesn't count. `read_file` at the head reads from the snapshot when one is loaded, and takes a path the snapshot left out from the contents API.
+
+The snapshot lives only while it is used. The object counts the reviews and answers running, and drops the snapshot when the last one ends, so a question answered during a review doesn't drop the review's snapshot. A snapshot left behind, such as that of a review Pi resumed after an eviction, is dropped when the next review or comment starts with nothing running, and a load for another head replaces the old rows first. `grep` and `tree` check that the snapshot is still there just before scanning. When the tarball or the tree can't be read, the failure is kept for the rest of the run and the tools answer `Repository search is unavailable for this review: <reason>. Use read_file.`; the review goes on. `limits.cpu_ms` in `wrangler.jsonc` is 120,000, so loading a repository the size of vscode (8.2 s of CPU measured) can't reset the object. The logs are `snapshot.loaded` (files, bytes, what was left out by reason, gap-filled files and milliseconds), `snapshot.failed`, `snapshot.dropped` (reason `review_end`, `answer_end`, `stale` or `new_head`), `snapshot.drop_failed` and `snapshot.gap_fill_failed`; `review.done` carries `greps` and `trees`. `docs/superpowers/specs/2026-10-22-repository-search-design.md` holds the measurements, the choice of a tarball over a clone and the reasons behind the rest.
 
 ### Review pipeline
 
@@ -239,7 +247,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 ## Execution tiers for repo access
 
 1. **API only.** PR files and patches, file contents at a ref, trees, code search. Enough for diff review. Phase 1.
-2. **Workspace clone, no container.** `@cloudflare/computer` keeps a filesystem in the object's SQLite and clones with isomorphic-git in the host, so `grep` and `find` across a shallow clone work without a container. Phase 2.
+2. **Tarball snapshot, no container.** The head commit's text files, streamed from GitHub's tarball into the object's SQLite, so `grep` and `tree` work without a container (#30). Phase 2.
 3. **Sandbox.** A Container per review run, started from the PR object with the Durable Object scheduling policy, outbound HTTP intercepted so it reaches only `github.com` and the model gateway, a one-minute alarm that keeps it alive while a check runs, and a 30-minute inactivity timeout. Runs lint, typecheck and the test suite on the head and feeds the tail to the verify pass. Phase 3.
 
 ## Package pins (as of 17 Oct 2026)
@@ -250,7 +258,6 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 | `@earendil-works/pi-durable` | 1.3.0 | the harness |
 | `@earendil-works/pi-ai` | 1.3.0 | model provider interface |
 | `@earendil-works/chord` | 1.3.0 | contexts and documents, peer of pi-durable |
-| `@cloudflare/computer` | ^0.5.1 | SQLite workspace with git |
 | `@cloudflare/sandbox` | 1.0.1 | Containers tier |
 | `wrangler` | 4.151.1 | |
 | `@octokit/webhooks-methods` | 6.0.0 | HMAC verification (WebCrypto) |
@@ -263,7 +270,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 ## Phases
 
 1. **Walking skeleton.** GitHub App, router Worker, PR object with `PiHarness`, API-only tools, full review on open, summary comment and one review with inline comments, `review` and `help` commands. Deployed and reviewing this repo's own PRs.
-2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, workspace clone with grep, verify pass, cost in the summary. It opens with the skills work, each step measured on #2's planted-bug pull request with gpt-oss-120b and Kimi K2.7 Code:
+2. **CodeRabbit parity.** Approval state machine, config file, path instructions, incremental review, remaining commands, chat turns, repository search, verify pass, cost in the summary. It opens with the skills work, each step measured on #2's planted-bug pull request with gpt-oss-120b and Kimi K2.7 Code:
    - **Baseline.** The planted-bug pull request reviewed on the phase 1 build, with the results recorded in #2.
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
@@ -283,7 +290,6 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 - Pi Durable README: https://github.com/earendil-works/pi/tree/main/packages/durable
 - Pi AI provider for Workers AI and AI Gateway: https://developers.cloudflare.com/agents/models/pi-ai/
 - Agents SDK Lifecycle: https://github.com/cloudflare/agents/blob/main/docs/agents/lifecycle.md
-- `@cloudflare/computer`: https://github.com/cloudflare/computer
 - Sandbox SDK coding agent runner: https://developers.cloudflare.com/sandbox/get-started/build-a-coding-agent-runner/
 - Workers AI pricing: https://developers.cloudflare.com/workers-ai/platform/pricing/
 - CodeRabbit request-changes workflow: https://docs.coderabbit.ai/pr-reviews/request-changes-workflow
