@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import {
   evaluatesAfterCatchUp,
   headReviewed,
+  NOT_PAUSED_REPLY,
   pauseReply,
   pausedLine,
   pausesReview,
@@ -149,7 +150,7 @@ describe("resumeStep", () => {
 describe("resumeReply", () => {
   it("words each resume step", () => {
     const head = "def5678901"
-    expect(resumeReply("not_paused", head)).toBe("Not paused.")
+    expect(NOT_PAUSED_REPLY).toBe("Not paused.")
     expect(resumeReply("review", head)).toBe("Resumed: reviewing `def5678`.")
     expect(resumeReply("evaluate", head)).toBe("Resumed: `def5678` is reviewed already.")
     expect(resumeReply("running", head)).toBe("Resumed: a review of `def5678` is already running.")

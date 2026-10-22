@@ -62,11 +62,11 @@ export function resumeStep(input: {
   return "review"
 }
 
-export function resumeReply(step: ResumeStep | "not_paused", headSha: string): string {
+export const NOT_PAUSED_REPLY = "Not paused."
+
+export function resumeReply(step: ResumeStep, headSha: string): string {
   const head = `\`${shortSha(headSha)}\``
   switch (step) {
-    case "not_paused":
-      return "Not paused."
     case "review":
       return `Resumed: reviewing ${head}.`
     case "evaluate":

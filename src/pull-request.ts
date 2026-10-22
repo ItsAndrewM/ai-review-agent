@@ -120,6 +120,7 @@ import { linkedIssueNumbers, linkedIssuesFrom, readLinkedIssues, type LinkedIssu
 import {
   evaluatesAfterCatchUp,
   headReviewed,
+  NOT_PAUSED_REPLY,
   pausedLine,
   PausedBy,
   pauseReply,
@@ -1186,15 +1187,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async resume(call: CommandCall, callerVersion?: Version): Promise<void> {
     if (await this.isPaused()) return this.resumePaused(call, callerVersion)
-    const pr = await this.currentPullRequest()
-    await this.respond(call.github, call.key, call.incoming, resumeReply("not_paused", pr.head.sha))
+    await this.respond(call.github, call.key, call.incoming, NOT_PAUSED_REPLY)
   }
 
   private async resumePaused(call: CommandCall, callerVersion?: Version): Promise<void> {
     const { github, key, incoming } = call
+    const pr = await this.freshPullRequest()
     await this.ctx.storage.delete(["paused", "pausedBy"])
     await this.refreshPausedLine(key.number)
-    const pr = await this.freshPullRequest()
     const step = await this.resumeStepFor(pr)
     log("command.resumed", { number: key.number, author: incoming.author, head: shortSha(pr.head.sha), step })
     await this.respond(github, key, incoming, resumeReply(step, pr.head.sha))
