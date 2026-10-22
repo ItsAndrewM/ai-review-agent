@@ -2,6 +2,7 @@ import type { BlobText, ListedEntry, TreeListing } from "../github/client.ts"
 import { errorText, logError } from "../log.ts"
 import {
   classify,
+  MAX_FILE_BYTES,
   SNAPSHOT_LIMITS,
   type LeftOut,
   type LeftOutReason,
@@ -31,6 +32,10 @@ export class SnapshotUnavailable extends Error {
 export const ADD_BATCH_FILES = 200
 
 export const ADD_BATCH_BYTES = 8_388_608
+
+export const GAP_BATCH_FILES = 50
+
+export const GAP_BATCH_BYTES = 4_194_304
 
 const LEFT_OUT_BATCH = 200
 
@@ -121,7 +126,7 @@ class Collector {
   }
 }
 
-function collect(file: TarFile, collector: Collector): boolean {
+function collect(file: TarFile, collector: Collector, limits: SnapshotLimits): boolean {
   if (file.body === undefined) {
     collector.leaveOut(file.path, "too_large")
     return true
@@ -131,7 +136,13 @@ function collect(file: TarFile, collector: Collector): boolean {
     collector.leaveOut(file.path, kind)
     return true
   }
-  return collector.tryAdd(file.path, decoder.decode(file.body), file.body.length)
+  const text = decoder.decode(file.body)
+  const size = encoder.encode(text).length
+  if (size > limits.maxFileBytes) {
+    collector.leaveOut(file.path, "too_large")
+    return true
+  }
+  return collector.tryAdd(file.path, text, size)
 }
 
 async function readTarball(
@@ -145,7 +156,7 @@ async function readTarball(
   const gzipped = await source.tarball(sha)
   const archive = gzipped.pipeThrough(new DecompressionStream("gzip"))
   for await (const file of readTar(archive, limits.maxFileBytes)) {
-    if (!collect(file, collector)) {
+    if (!collect(file, collector, limits)) {
       break
     }
   }
@@ -189,6 +200,11 @@ async function readListing(source: SnapshotSource, sha: string): Promise<TreeLis
 
 type Verdict = LeftOutReason | "gap" | "skip"
 
+interface GapEntry {
+  path: string
+  size: number
+}
+
 function verdictFor(entry: ListedEntry, collector: Collector, limits: SnapshotLimits): Verdict {
   if (entry.type === "tree" || collector.has(entry.path)) {
     return "skip"
@@ -205,17 +221,36 @@ function verdictFor(entry: ListedEntry, collector: Collector, limits: SnapshotLi
   return collector.capped ? "snapshot_cap" : "gap"
 }
 
-function classifyListing(entries: readonly ListedEntry[], collector: Collector, limits: SnapshotLimits): string[] {
-  const candidates: string[] = []
+function classifyListing(entries: readonly ListedEntry[], collector: Collector, limits: SnapshotLimits): GapEntry[] {
+  const candidates: GapEntry[] = []
   for (const entry of entries) {
     const verdict = verdictFor(entry, collector, limits)
     if (verdict === "gap") {
-      candidates.push(entry.path)
+      candidates.push({ path: entry.path, size: entry.size ?? MAX_FILE_BYTES })
     } else if (verdict !== "skip") {
       collector.leaveOut(entry.path, verdict)
     }
   }
-  return candidates.sort(byPath)
+  return candidates.sort((a, b) => byPath(a.path, b.path))
+}
+
+const batchIsFull = (paths: readonly string[], bytes: number, size: number): boolean =>
+  paths.length === GAP_BATCH_FILES || (paths.length > 0 && bytes + size > GAP_BATCH_BYTES)
+
+function gapBatches(wanted: readonly GapEntry[]): string[][] {
+  const batches: string[][] = []
+  let paths: string[] = []
+  let bytes = 0
+  for (const { path, size } of wanted) {
+    if (batchIsFull(paths, bytes, size)) {
+      batches.push(paths)
+      paths = []
+      bytes = 0
+    }
+    paths.push(path)
+    bytes += size
+  }
+  return paths.length > 0 ? [...batches, paths] : batches
 }
 
 function keepGapText(blob: BlobText, limits: SnapshotLimits, collector: Collector): void {
@@ -236,7 +271,7 @@ function keepGapText(blob: BlobText, limits: SnapshotLimits, collector: Collecto
   }
 }
 
-async function fetchGap(
+async function fetchBatch(
   source: SnapshotSource,
   sha: string,
   wanted: readonly string[],
@@ -248,7 +283,7 @@ async function fetchGap(
       keepGapText(blob, limits, collector)
     }
   } catch (cause) {
-    logError("snapshot.gap_fill_failed", { sha, files: wanted.length, cause: errorText(cause) })
+    logError("snapshot.gap_fill_failed", { sha, files: wanted.length, error: errorText(cause) })
     for (const path of wanted) {
       if (!collector.has(path)) {
         collector.leaveOut(path, "unreadable")
@@ -260,16 +295,15 @@ async function fetchGap(
 async function fillGap(
   source: SnapshotSource,
   sha: string,
-  candidates: readonly string[],
+  candidates: readonly GapEntry[],
   limits: SnapshotLimits,
   collector: Collector,
 ): Promise<void> {
-  const wanted = candidates.slice(0, limits.maxGapFill)
-  for (const path of candidates.slice(limits.maxGapFill)) {
+  for (const { path } of candidates.slice(limits.maxGapFill)) {
     collector.leaveOut(path, "gap_cap")
   }
-  if (wanted.length > 0) {
-    await fetchGap(source, sha, wanted, limits, collector)
+  for (const batch of gapBatches(candidates.slice(0, limits.maxGapFill))) {
+    await fetchBatch(source, sha, batch, limits, collector)
   }
 }
 

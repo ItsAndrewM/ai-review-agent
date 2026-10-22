@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from "vitest"
 import type { BlobText, ListedEntry, TreeListing } from "../src/github/client.ts"
-import { ADD_BATCH_BYTES, ADD_BATCH_FILES, loadSnapshot, type SnapshotSource } from "../src/repository/load-snapshot.ts"
-import { MemorySnapshotFiles, SNAPSHOT_LIMITS, type SnapshotLimits } from "../src/repository/snapshot.ts"
+import {
+  ADD_BATCH_BYTES,
+  ADD_BATCH_FILES,
+  GAP_BATCH_BYTES,
+  GAP_BATCH_FILES,
+  loadSnapshot,
+  type SnapshotSource,
+} from "../src/repository/load-snapshot.ts"
+import {
+  MAX_FILE_BYTES,
+  MemorySnapshotFiles,
+  SNAPSHOT_LIMITS,
+  type SnapshotLimits,
+} from "../src/repository/snapshot.ts"
 import { streamOf, tarOf, type TarEntry } from "./tar-archive.ts"
 
 const SHA = "abc123"
@@ -179,8 +191,8 @@ describe("loadSnapshot", () => {
 
     const record = await loadSnapshot(fake.source, files, SHA)
 
-    expect(fake.blobCalls).toHaveLength(1)
-    expect(fake.blobCalls[0]).toEqual(paths.slice(0, 500))
+    expect(fake.blobCalls.map((call) => call.length)).toEqual(Array.from({ length: 10 }, () => 50))
+    expect(fake.blobCalls.flat()).toEqual(paths.slice(0, 500))
     expect(record.gapFilled).toBe(500)
     expect(record.leftOut).toEqual({ gap_cap: 100 })
     expect(files.reasonFor("gen/f599.ts")).toBe("gap_cap")
@@ -362,6 +374,55 @@ describe("loadSnapshot", () => {
     expect(files.read("a.ts")).toBe("a\n")
   })
 
+  it("fetches the gap in batches of at most 50 files and 4 MB of listed size", async () => {
+    const sized = (prefix: string, count: number, size: number | undefined): ListedEntry[] =>
+      Array.from({ length: count }, (_, index) => ({ ...blob(`${prefix}${String(index).padStart(2, "0")}`), size }))
+    const entries = [...sized("a/", 5, undefined), ...sized("b/", 9, 1_000_000), ...sized("c/", 60, 10)]
+    const fake = fakeSource({ tarballs: [await tarballOf([])], listing: async () => ({ entries, truncated: false }) })
+
+    const record = await loadSnapshot(fake.source, new MemorySnapshotFiles(), SHA)
+
+    expect(GAP_BATCH_FILES).toBe(50)
+    expect(GAP_BATCH_BYTES).toBe(4_194_304)
+    expect(fake.blobCalls.map((call) => call.length)).toEqual([4, 4, 4, 50, 12])
+    expect(fake.blobCalls.flat()).toEqual(entries.map((entry) => entry.path))
+    expect(4 * MAX_FILE_BYTES).toBe(GAP_BATCH_BYTES)
+    expect(record.gapFilled).toBe(74)
+  })
+
+  it("leaves only a failed batch's paths out as unreadable and still fetches the later batches", async () => {
+    const paths = Array.from({ length: 150 }, (_, index) => `gen/f${String(index).padStart(3, "0")}.ts`)
+    let calls = 0
+    const fake = fakeSource({
+      tarballs: [await tarballOf([])],
+      listing: async () => ({ entries: paths.map((path) => blob(path)), truncated: false }),
+    })
+    const flaky = {
+      ...fake.source,
+      async blobs(sha: string, wanted: readonly string[]) {
+        calls += 1
+        if (calls === 2) throw new Error("GraphQL returned 502")
+        return fake.source.blobs(sha, wanted)
+      },
+    }
+    const files = new MemorySnapshotFiles()
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    const record = await loadSnapshot(flaky, files, SHA)
+
+    const lines = logged.mock.calls.map(([line]) => String(line))
+    logged.mockRestore()
+    expect(calls).toBe(3)
+    expect(record).toMatchObject({ files: 100, gapFilled: 100, leftOut: { unreadable: 50 } })
+    expect(files.has("gen/f049.ts")).toBe(true)
+    expect(files.reasonFor("gen/f050.ts")).toBe("unreadable")
+    expect(files.reasonFor("gen/f099.ts")).toBe("unreadable")
+    expect(files.has("gen/f100.ts")).toBe(true)
+    expect(lines).toEqual([
+      JSON.stringify({ event: "snapshot.gap_fill_failed", sha: SHA, files: 50, error: "Error: GraphQL returned 502" }),
+    ])
+  })
+
   it("leaves a gap-filled text longer than the file limit out as too_large", async () => {
     const fake = fakeSource({
       tarballs: [await tarballOf([])],
@@ -403,6 +464,29 @@ describe("loadSnapshot", () => {
 
     expect(record.capped).toBe(true)
     await vi.waitFor(() => expect(cancelled).toBe(true))
+  })
+
+  it("leaves out as too_large a file whose decoded text outgrows the file limit", async () => {
+    const latin1 = new Uint8Array(60).fill(0xe9)
+    const fake = fakeSource({
+      tarballs: [await tarballOf([{ name: `owner-repo-${SHA}/latin1.txt`, bytes: latin1 }, file("ok.txt", "ok\n")])],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxFileBytes: 100 }))
+
+    expect(files.reasonFor("latin1.txt")).toBe("too_large")
+    expect(record).toMatchObject({ files: 1, bytes: 3, leftOut: { too_large: 1 } })
+  })
+
+  it("counts a file's decoded size against the byte cap", async () => {
+    const latin1 = new Uint8Array(10).fill(0xe9)
+    const fake = fakeSource({ tarballs: [await tarballOf([{ name: `owner-repo-${SHA}/latin1.txt`, bytes: latin1 }])] })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(record.bytes).toBe(30)
   })
 
   it("decodes what the tarball holds as UTF-8", async () => {

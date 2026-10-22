@@ -409,7 +409,10 @@ export class GitHubClient {
 
   async downloadTarball(ref: RepoRef, sha: string): Promise<ReadableStream<Uint8Array>> {
     const response = await this.request(`/repos/${ref.owner}/${ref.repo}/tarball/${sha}`)
-    if (!response.ok || !response.body) throw new Error(`GitHub tarball ${response.status}`)
+    if (!response.ok || !response.body) {
+      await response.body?.cancel()
+      throw new Error(`GitHub tarball ${response.status}`)
+    }
     return response.body
   }
 

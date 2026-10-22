@@ -78,6 +78,18 @@ describe("downloadTarball", () => {
     await expect(client.downloadTarball(ref, "abc")).rejects.toThrow("GitHub tarball 404")
   })
 
+  it("cancels the body of a failed tarball response so the connection is released", async () => {
+    let cancelled = false
+    const body = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true
+      },
+    })
+    const { client } = recordingClient(() => new Response(body, { status: 502 }))
+    await expect(client.downloadTarball(ref, "abc")).rejects.toThrow("GitHub tarball 502")
+    expect(cancelled).toBe(true)
+  })
+
   it("throws when the response has no body", async () => {
     const { client } = recordingClient(() => new Response(null, { status: 200 }))
     await expect(client.downloadTarball(ref, "abc")).rejects.toThrow("GitHub tarball 200")

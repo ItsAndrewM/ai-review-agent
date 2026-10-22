@@ -5,6 +5,7 @@ const encoder = new TextEncoder()
 export interface TarFileEntry {
   name: string
   body?: string
+  bytes?: Uint8Array
   typeflag?: string
   prefix?: string
   longName?: "pax" | "gnu"
@@ -62,7 +63,7 @@ function paxRecords(fields: Record<string, string>): Uint8Array {
 }
 
 function fileParts(entry: TarFileEntry): Uint8Array[] {
-  const body = encoder.encode(entry.body ?? "")
+  const body = entry.bytes ?? encoder.encode(entry.body ?? "")
   const header = headerBlock(entry.name, body.length, entry.typeflag ?? "0", entry.prefix ?? "")
   const content = body.length === 0 ? [] : [padded(body)]
   if (entry.longName === "pax") {
