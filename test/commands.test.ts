@@ -1,5 +1,34 @@
 import { describe, expect, it } from "vitest"
-import { helpText, parseCommand } from "../src/commands.ts"
+import { helpText, parseCommand, skippedReviewText } from "../src/commands.ts"
+
+describe("skippedReviewText", () => {
+  it("names the head already reviewed and how to review it again", () => {
+    const text = skippedReviewText("already_reviewed", "abc1234def5678", "andabot")
+    expect(text).toContain("`abc1234`")
+    expect(text).toContain("`@andabot full review`")
+  })
+
+  it("says a closed pull request has nothing to review", () => {
+    expect(skippedReviewText("not_open", "abc1234def5678", "andabot")).toMatch(/closed/)
+  })
+
+  it("says nothing when a review is already running or the head moved, since that review posts", () => {
+    expect(skippedReviewText("in_progress", "abc1234def5678", "andabot")).toBeUndefined()
+    expect(skippedReviewText("superseded", "abc1234def5678", "andabot")).toBeUndefined()
+  })
+
+  it("says the path filters leave out every changed file, the one setting that can skip a command", () => {
+    expect(skippedReviewText("path_filters", "abc1234def5678", "andabot")).toBe(
+      "Nothing to review: `.andabot.yaml`'s `path_filters` leave out every file this pull request changes.",
+    )
+  })
+
+  it("has nothing to say for the settings a command bypasses, which skip only a push", () => {
+    for (const reason of ["auto", "draft", "base_branch", "title_keyword"] as const) {
+      expect(skippedReviewText(reason, "abc1234def5678", "andabot")).toBeUndefined()
+    }
+  })
+})
 
 describe("helpText", () => {
   it("says a full review starts over", () => {
