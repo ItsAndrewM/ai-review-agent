@@ -30,7 +30,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("6")
+    expect(review?.version).toBe("7")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -226,12 +226,21 @@ describe("bundledSkills", () => {
     expect(review?.body).toContain("You can't build, run or test the code")
   })
 
-  it("points the standards check at the heading the host renders the repository's rules under, and has a standard finding's basis name the file and the rule", async () => {
+  it("points the standards check at the heading the host renders the repository's rules under, and has a standard finding's basis name the standards file and the rule", async () => {
     const review = await (await bundledSkills()).source.load("review")
     const heading = renderStandards([{ path: "CLAUDE.md", text: "Rules.", source: "root" }]).text.split("\n")[0]
     expect(heading).toBe("## Repository standards")
     expect(review?.body).toContain(`the repository's own rules under \`${heading}\` in your instructions, when present`)
-    expect(review?.body).toContain("A `standard` finding's basis names the file and the rule.")
+    expect(review?.body).toContain(
+      "A `standard` finding's basis names the standards file and the rule, such as `CLAUDE.md: no comments of any kind`.",
+    )
+  })
+
+  it("tells the review to activate a repository's skill only when its instructions list repository skills, since a repository without skills gets no catalog, and to grade the finding the skill asks for as a standard finding", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain(
+      "When your instructions list repository skills, one of them can supplement this skill: activate it with `activate_skill` when its description fits the pull request. This procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.",
+    )
   })
 
   it("skips only the smells tooling enforces, so a repository rule a linter enforces is still reported", async () => {
