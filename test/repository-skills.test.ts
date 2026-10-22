@@ -1,5 +1,5 @@
 import { createRegistry, defineExtension, type Extension, type Registry } from "@earendil-works/pi-durable"
-import type { SkillSource } from "agents/skills"
+import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type TreeEntry } from "../src/github/client.ts"
 import {
@@ -12,34 +12,44 @@ import {
 import {
   catalogFor,
   installCatalog,
+  MAX_CATALOG_CHARS,
+  MAX_DESCRIPTION_CHARS,
+  MAX_SKILL_BYTES,
+  MAX_SKILL_FILE_BYTES,
   repositorySkillFiles,
   repositorySkillFingerprint,
   repositorySkills,
+  restoredCatalog,
   shadowedSkillFiles,
   skillLogs,
   skillSourceFor,
   skillsStartFields,
   unlisted,
   unloadedSkillPaths,
-  type Catalog,
+  type SkillState,
 } from "../src/repository/skills.ts"
 import { BUNDLED_SKILL_NAMES, bundledSkills } from "../src/review/bundled-skills.ts"
 import { sha256Hex } from "../src/review/skills.ts"
 
 const ref = { owner: "o", repo: "r" }
 const BASE = "ba5e5".repeat(8)
+const TREE_SHA = "f00d".repeat(10)
 const CONTENTS = "/repos/o/r/contents/"
 
-const blob = (path: string, sha = "1"): TreeEntry => ({ path, type: "blob", sha })
+const blob = (path: string, sha = "1", size = 100): TreeEntry => ({ path, type: "blob", sha, size })
+
+const unsized = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
 
 const directory = (path: string): TreeEntry => ({ path, type: "tree", sha: "2" })
+
+const file = (path: string, text: string): [string, string] => [path, text]
 
 const skillMd = (description: string, body = "Check the thing."): string =>
   `---\ndescription: ${description}\n---\n${body}\n`
 
 const contextOf = (entries: readonly TreeEntry[], files: Readonly<Record<string, string>>): RepositoryContext => ({
   baseSha: BASE,
-  tree: { sha: "f00d".repeat(10), truncated: false, entries },
+  tree: { sha: TREE_SHA, truncated: false, entries },
   files,
 })
 
@@ -47,19 +57,36 @@ const failOnUnreadable = (path: string, error: string): void => {
   throw new Error(`${path} was reported unreadable: ${error}`)
 }
 
-function fakeGitHub(entries: readonly TreeEntry[], bodies: ReadonlyMap<string, string>) {
+function recorder() {
+  const reported: string[] = []
+  const report = (path: string): void => {
+    reported.push(path)
+  }
+  return { report, reported }
+}
+
+function fakeGitHub(
+  entries: readonly TreeEntry[],
+  bodies: ReadonlyMap<string, string>,
+  unserved: readonly string[] = [],
+) {
   const calls: string[] = []
   const fetchImpl: typeof fetch = async (input) => {
     const { pathname, search } = new URL(String(input))
     calls.push(`${pathname}${search}`)
     if (pathname.startsWith("/repos/o/r/git/trees/")) {
-      return new Response(JSON.stringify({ sha: "f00d".repeat(10), truncated: false, tree: entries }), { status: 200 })
+      return new Response(JSON.stringify({ sha: TREE_SHA, truncated: false, tree: entries }), { status: 200 })
     }
-    const body = bodies.get(decodeURIComponent(pathname.slice(CONTENTS.length)))
+    const path = decodeURIComponent(pathname.slice(CONTENTS.length))
+    if (unserved.includes(path)) return new Response("boom", { status: 502 })
+    const body = bodies.get(path)
     return body === undefined ? new Response("{}", { status: 404 }) : new Response(body, { status: 200 })
   }
   return { github: new GitHubClient("t", "https://api.example", fetchImpl), calls }
 }
+
+const fetchesOf = (calls: readonly string[], path: string): number =>
+  calls.filter((call) => call.startsWith(`${CONTENTS}${path}?`)).length
 
 const nestedRules = (count: number): string[] =>
   Array.from({ length: count }, (_, index) => `pkg-${String(index).padStart(2, "0")}/CLAUDE.md`)
@@ -70,13 +97,20 @@ const ALPHA = [".github/skills/alpha/SKILL.md", ".github/skills/alpha/references
 const BETA = [".claude/skills/beta/SKILL.md", ".claude/skills/beta/notes.md"]
 
 const SKILL_BODIES: [string, string][] = [
-  [".github/skills/alpha/SKILL.md", skillMd("Alpha checks.")],
-  [".github/skills/alpha/references/a.md", "Alpha reference."],
-  [".claude/skills/beta/SKILL.md", skillMd("Beta checks.")],
-  [".claude/skills/beta/notes.md", "Beta notes."],
+  file(".github/skills/alpha/SKILL.md", skillMd("Alpha checks.")),
+  file(".github/skills/alpha/references/a.md", "Alpha reference."),
+  file(".claude/skills/beta/SKILL.md", skillMd("Beta checks.")),
+  file(".claude/skills/beta/notes.md", "Beta notes."),
 ]
 
-const rulesFor = (paths: readonly string[]): [string, string][] => paths.map((path) => [path, `Rules from ${path}.`])
+const FOO_SKILL = ".claude/skills/foo/SKILL.md"
+const FOO_RULES = ".claude/skills/foo/CLAUDE.md"
+const FOO_CHANGED = [".claude/skills/foo/scripts/x.sh"]
+
+const rulesFor = (paths: readonly string[]): [string, string][] =>
+  paths.map((path) => file(path, `Rules from ${path}.`))
+
+const indexed = (index: number): string => String(index).padStart(2, "0")
 
 describe("repositorySkillFiles", () => {
   it("finds each SKILL.md one directory below a skills root, with every blob under that directory as the skill's files", () => {
@@ -123,7 +157,7 @@ describe("repositorySkillFiles", () => {
     ])
   })
 
-  it("leaves out a skill named review or answer, which the built-in skills shadow, and one whose name an earlier root took", () => {
+  it("leaves out a skill named review or answer, which the built-in skills shadow, and one whose name an earlier root holds", () => {
     const entries = [
       blob(".github/skills/review/SKILL.md"),
       blob(".github/skills/review/references/extra.md"),
@@ -167,6 +201,23 @@ describe("repositorySkillFiles", () => {
   it("finds no skill in a SKILL.md that is a directory", () => {
     expect(repositorySkillFiles([directory(".github/skills/odd/SKILL.md")])).toEqual([])
   })
+
+  it("leaves out a resource over 50 KiB by the listing's size, or one the listing gives no size, and keeps the skill's SKILL.md whatever its size", () => {
+    expect(MAX_SKILL_FILE_BYTES).toBe(51_200)
+    const entries = [
+      blob(".github/skills/lint/SKILL.md", "1", 60_000),
+      blob(".github/skills/lint/big.md", "1", MAX_SKILL_FILE_BYTES + 1),
+      blob(".github/skills/lint/edge.md", "1", MAX_SKILL_FILE_BYTES),
+      unsized(".github/skills/lint/unsized.md"),
+    ]
+    expect(repositorySkillFiles(entries)).toEqual([
+      {
+        name: "lint",
+        dir: ".github/skills/lint",
+        files: [".github/skills/lint/SKILL.md", ".github/skills/lint/edge.md"],
+      },
+    ])
+  })
 })
 
 describe("repositorySkillFingerprint", () => {
@@ -198,9 +249,14 @@ describe("repositorySkillFingerprint", () => {
     expect(await repositorySkillFingerprint(grown)).not.toBe(fingerprint)
   })
 
-  it("ignores what lies outside the skills and the skills the built-in ones shadow", async () => {
+  it("ignores what lies outside the skills, the skills the built-in ones shadow, and a resource over the size cap", async () => {
     const fingerprint = await repositorySkillFingerprint(entries)
-    const around = [...entries, blob("CLAUDE.md", "e5"), blob(".github/skills/review/SKILL.md", "f6")]
+    const around = [
+      ...entries,
+      blob("CLAUDE.md", "e5"),
+      blob(".github/skills/review/SKILL.md", "f6"),
+      blob(".github/skills/lint/huge.bin", "g7", MAX_SKILL_FILE_BYTES + 1),
+    ]
     expect(await repositorySkillFingerprint(around)).toBe(fingerprint)
   })
 })
@@ -223,9 +279,8 @@ describe("loading a repository's skills at the base commit", () => {
     expect(skills.loadsSkipped).toBe(2)
     const second = await loadRepositoryContext(github, ref, BASE, changed, failOnUnreadable, first)
     expect(unloadedSkillPaths(second)).toEqual([])
-    expect(
-      (await (await repositorySkills(second)).offered?.source.load("alpha"))?.resources?.map(({ path }) => path),
-    ).toEqual(["references/a.md"])
+    const later = await repositorySkills(second)
+    expect((await later.offered?.source.load("alpha"))?.resources?.map(({ path }) => path)).toEqual(["references/a.md"])
     expect(calls).toHaveLength(1 + MAX_INSTRUCTION_LOADS + 2)
   })
 
@@ -249,11 +304,8 @@ describe("loading a repository's skills at the base commit", () => {
 
   it("loads every instruction file of a repository with thirty skills before any skill body, so skills cannot starve the standards", async () => {
     const rules = ["CLAUDE.md", "AGENTS.md", "REVIEW.md"]
-    const skillPaths = Array.from(
-      { length: 30 },
-      (_, index) => `.agents/skills/s-${String(index).padStart(2, "0")}/SKILL.md`,
-    )
-    const bodies = new Map([...rulesFor(rules), ...skillPaths.map((path): [string, string] => [path, skillMd(path)])])
+    const skillPaths = Array.from({ length: 30 }, (_, index) => `.agents/skills/s-${indexed(index)}/SKILL.md`)
+    const bodies = new Map([...rulesFor(rules), ...skillPaths.map((path) => file(path, skillMd(path)))])
     const { github } = fakeGitHub(
       [...rules, ...skillPaths].map((path) => blob(path)),
       bodies,
@@ -268,7 +320,7 @@ describe("loading a repository's skills at the base commit", () => {
 
   it("loads no file of a skill the built-in ones shadow", async () => {
     const shadowed = [".github/skills/review/SKILL.md", ".github/skills/review/references/extra.md"]
-    const bodies = new Map([...SKILL_BODIES, ...shadowed.map((path): [string, string] => [path, skillMd("Ours.")])])
+    const bodies = new Map([...SKILL_BODIES, ...shadowed.map((path) => file(path, skillMd("Ours.")))])
     const { github, calls } = fakeGitHub(
       [...shadowed, ...ALPHA].map((path) => blob(path)),
       bodies,
@@ -277,9 +329,93 @@ describe("loading a repository's skills at the base commit", () => {
     expect(Object.keys(context.files)).toEqual(ALPHA)
     expect(calls.some((call) => call.includes("skills/review"))).toBe(false)
   })
+
+  it("loads a skill's resources in the same review once its body parses, and never the resources of a skill whose body does not", async () => {
+    const broken = [
+      file(".agents/skills/broken/SKILL.md", "No frontmatter."),
+      file(".agents/skills/broken/notes.md", "Notes."),
+    ]
+    const bodies = new Map([...SKILL_BODIES, ...broken])
+    const entries = [...ALPHA, ...broken.map(([path]) => path)].map((path) => blob(path))
+    const { github, calls } = fakeGitHub(entries, bodies)
+    const context = await loadRepositoryContext(github, ref, BASE, ["src/a.ts"], failOnUnreadable)
+    expect(Object.keys(context.files)).toEqual([ALPHA[0], ".agents/skills/broken/SKILL.md", ALPHA[1]])
+    expect(fetchesOf(calls, ".agents/skills/broken/notes.md")).toBe(0)
+    expect(calls).toHaveLength(1 + 3)
+    expect(unloadedSkillPaths(context)).toEqual([])
+  })
+
+  it("fetches a skill's own CLAUDE.md once when it is also a nested instruction file of a changed path, and both the standards and the skill read it", async () => {
+    const bodies = new Map([file(FOO_SKILL, skillMd("Foo.")), file(FOO_RULES, "Foo rules.")])
+    const { github, calls } = fakeGitHub([blob(FOO_SKILL), blob(FOO_RULES)], bodies)
+    const context = await loadRepositoryContext(github, ref, BASE, FOO_CHANGED, failOnUnreadable)
+    expect(fetchesOf(calls, FOO_RULES)).toBe(1)
+    expect(reviewStandards(context, FOO_CHANGED, []).used).toEqual([FOO_RULES])
+    const skill = await (await repositorySkills(context)).offered?.source.load("foo")
+    expect(skill?.resources?.map(({ path }) => path)).toEqual(["CLAUDE.md"])
+  })
+
+  it("does not fetch that CLAUDE.md a second time in the same review when the first fetch fails, and reports it once", async () => {
+    const { report, reported } = recorder()
+    const bodies = new Map([file(FOO_SKILL, skillMd("Foo."))])
+    const { github, calls } = fakeGitHub([blob(FOO_SKILL), blob(FOO_RULES)], bodies, [FOO_RULES])
+    await loadRepositoryContext(github, ref, BASE, FOO_CHANGED, report)
+    expect(fetchesOf(calls, FOO_RULES)).toBe(1)
+    expect(reported).toEqual([FOO_RULES])
+  })
+
+  it("never fetches a SKILL.md the listing sizes over 50 KiB, and reports its skill invalid", async () => {
+    const huge = blob(".github/skills/huge/SKILL.md", "1", MAX_SKILL_FILE_BYTES + 1)
+    const bodies = new Map([...SKILL_BODIES, file(huge.path, skillMd("Huge."))])
+    const { github, calls } = fakeGitHub([huge, ...ALPHA.map((path) => blob(path))], bodies)
+    const context = await loadRepositoryContext(github, ref, BASE, ["src/a.ts"], failOnUnreadable)
+    expect(fetchesOf(calls, huge.path)).toBe(0)
+    const skills = await repositorySkills(context)
+    expect(skills.invalid).toEqual([{ name: "huge", path: huge.path }])
+    expect(skills.offered?.names).toEqual(["alpha"])
+  })
+
+  it("loads no SKILL.md past 512 KiB of the listing's sizes, summed bodies first, and reports those skills capped", async () => {
+    expect(MAX_SKILL_BYTES).toBe(524_288)
+    const paths = Array.from({ length: 12 }, (_, index) => `.agents/skills/s-${indexed(index)}/SKILL.md`)
+    const entries = [...paths.map((path) => blob(path, "1", 50_000)), blob(".agents/skills/s-00/notes.md", "1", 10)]
+    expect(unloadedSkillPaths(contextOf(entries, {}))).toEqual(paths.slice(0, 10))
+    const loaded = contextOf(entries, Object.fromEntries(paths.slice(0, 10).map((path) => file(path, skillMd(path)))))
+    const skills = await repositorySkills(loaded)
+    expect(skills.offered?.names).toHaveLength(10)
+    expect(skills.capped.map(({ path }) => path)).toEqual(paths.slice(10))
+    expect(unloadedSkillPaths(loaded)).toEqual([])
+    expect(skillLogs(3, skills).filter(({ event }) => event === "skills.capped")).toHaveLength(2)
+  })
+
+  it("never loads or serves a resource past 512 KiB of the listing's sizes, even one already cached", async () => {
+    const body = ".github/skills/big/SKILL.md"
+    const resources = Array.from({ length: 10 }, (_, index) => `.github/skills/big/r-${index}.md`)
+    const entries = [blob(body, "1", 50_000), ...resources.map((path) => blob(path, "1", 50_000))]
+    const bodyOnly = contextOf(entries, Object.fromEntries([file(body, skillMd("Big."))]))
+    expect(unloadedSkillPaths(bodyOnly)).toEqual(resources.slice(0, 9))
+    const cached = Object.fromEntries([file(body, skillMd("Big.")), ...resources.map((path) => file(path, "Text."))])
+    const skill = await (await repositorySkills(contextOf(entries, cached))).offered?.source.load("big")
+    expect(skill?.resources?.map(({ path }) => path)).toEqual(
+      resources.slice(0, 9).map((path) => path.slice(".github/skills/big/".length)),
+    )
+  })
+
+  it("counts no file of a skill whose SKILL.md is over 50 KiB toward the 512 KiB, since that skill is never served", async () => {
+    const huge = ".github/skills/huge/SKILL.md"
+    const heavy = Array.from({ length: 11 }, (_, index) => `.github/skills/huge/r-${indexed(index)}.md`)
+    const small = [".claude/skills/small/SKILL.md", ".claude/skills/small/notes.md"]
+    const entries = [
+      blob(huge, "1", MAX_SKILL_FILE_BYTES + 1),
+      ...heavy.map((path) => blob(path, "1", 50_000)),
+      ...small.map((path) => blob(path)),
+    ]
+    const smallBody = contextOf(entries, Object.fromEntries([file(".claude/skills/small/SKILL.md", skillMd("Small."))]))
+    expect(unloadedSkillPaths(smallBody)).toEqual([".claude/skills/small/notes.md"])
+  })
 })
 
-describe("skillSourceFor", () => {
+describe("the repository source", () => {
   const entries = [
     blob(".github/skills/code-review/SKILL.md", "a1"),
     blob(".github/skills/code-review/references/checks.md", "b2"),
@@ -292,8 +428,10 @@ describe("skillSourceFor", () => {
     ".github/skills/code-review/scripts/run.sh": "echo hi",
   }
 
+  const offeredBy = async (context: RepositoryContext) => (await repositorySkills(context)).offered
+
   it("offers each loaded skill under its directory's name, with its description, its version and the resources that loaded, through a source named repo", async () => {
-    const offered = await skillSourceFor(contextOf(entries, files))
+    const offered = await offeredBy(contextOf(entries, files))
     expect(offered?.source.id).toBe("repo")
     expect(offered?.names).toEqual(["code-review"])
     expect(await offered?.source.list()).toEqual([
@@ -310,19 +448,19 @@ describe("skillSourceFor", () => {
 
   it("names a skill by its directory, so a frontmatter name cannot take a built-in skill's place", async () => {
     const posing = { ".github/skills/my-review/SKILL.md": "---\nname: review\ndescription: Ours.\n---\nBody.\n" }
-    const offered = await skillSourceFor(contextOf([blob(".github/skills/my-review/SKILL.md")], posing))
+    const offered = await offeredBy(contextOf([blob(".github/skills/my-review/SKILL.md")], posing))
     expect(offered?.names).toEqual(["my-review"])
     expect(await offered?.source.load("review")).toBeNull()
   })
 
-  it("fingerprints the files it serves, so a resource that loads later changes the fingerprint", async () => {
+  it("fingerprints its skills' files in the base's listing, whatever has loaded, so repo@ is the same for every review of a base", async () => {
     const partial = { ".github/skills/code-review/SKILL.md": files[".github/skills/code-review/SKILL.md"] }
-    const before = await skillSourceFor(contextOf(entries, partial))
-    const after = await skillSourceFor(contextOf(entries, files))
-    expect(before?.fingerprint).toBe(await repositorySkillFingerprint(entries.slice(0, 1)))
-    expect(after?.fingerprint).toBe(await repositorySkillFingerprint(entries))
-    expect(after?.source.fingerprint).toBe(after?.fingerprint)
-    expect(after?.fingerprint).not.toBe(before?.fingerprint)
+    const listed = await repositorySkillFingerprint(entries)
+    const before = await offeredBy(contextOf(entries, partial))
+    const after = await offeredBy(contextOf(entries, files))
+    expect(before?.fingerprint).toBe(listed)
+    expect(after?.fingerprint).toBe(listed)
+    expect(after?.source.fingerprint).toBe(listed)
   })
 
   it("treats an empty SKILL.md as no skill and keeps an empty resource as empty text", async () => {
@@ -338,7 +476,7 @@ describe("skillSourceFor", () => {
         ".github/skills/lint/blank.md": "",
       },
     )
-    const offered = await skillSourceFor(context)
+    const offered = await offeredBy(context)
     expect(offered?.names).toEqual(["lint"])
     expect((await offered?.source.load("lint"))?.resources).toEqual([
       { path: "blank.md", kind: "file", encoding: "text", size: 0 },
@@ -351,13 +489,78 @@ describe("skillSourceFor", () => {
     { label: "no description", text: "---\nname: lint\n---\nBody." },
     { label: "a blank description", text: '---\ndescription: "  "\n---\nBody.' },
     { label: "frontmatter that does not parse", text: "---\ndescription: Lint: the code\n---\nBody." },
-  ])("offers no skill whose SKILL.md has $label", async ({ text }) => {
+  ])("offers no skill whose SKILL.md has $label, and reports it invalid", async ({ text }) => {
     const context = contextOf([blob(".github/skills/lint/SKILL.md")], { ".github/skills/lint/SKILL.md": text })
-    expect(await skillSourceFor(context)).toBeUndefined()
+    const skills = await repositorySkills(context)
+    expect(skills.offered).toBeUndefined()
+    expect(skills.invalid).toEqual([{ name: "lint", path: ".github/skills/lint/SKILL.md" }])
+  })
+
+  it("reports a skill whose description passes 1,024 characters invalid, and offers one at the limit", async () => {
+    expect(MAX_DESCRIPTION_CHARS).toBe(1_024)
+    const context = contextOf([blob(".github/skills/at/SKILL.md"), blob(".github/skills/over/SKILL.md")], {
+      ".github/skills/at/SKILL.md": skillMd("d".repeat(MAX_DESCRIPTION_CHARS)),
+      ".github/skills/over/SKILL.md": skillMd("d".repeat(MAX_DESCRIPTION_CHARS + 1)),
+    })
+    const skills = await repositorySkills(context)
+    expect(skills.offered?.names).toEqual(["at"])
+    expect(skills.invalid).toEqual([{ name: "over", path: ".github/skills/over/SKILL.md" }])
+  })
+
+  it("offers skills in discovery order while their catalog lines fit in 12,000 characters, and reports capped every skill from the first that does not fit", async () => {
+    expect(MAX_CATALOG_CHARS).toBe(12_000)
+    const catalogOf = (descriptions: readonly string[]): RepositoryContext => {
+      const skills = descriptions.map((description, index) =>
+        file(`.agents/skills/s-${indexed(index)}/SKILL.md`, skillMd(description)),
+      )
+      return contextOf(
+        skills.map(([path]) => blob(path)),
+        Object.fromEntries(skills),
+      )
+    }
+    const long = Array.from({ length: 11 }, () => "d".repeat(1_000))
+    const exact = await repositorySkills(catalogOf([...long, "d".repeat(893), "short"]))
+    expect(exact.offered?.names).toHaveLength(12)
+    expect(exact.capped.map(({ name }) => name)).toEqual(["s-12"])
+    const over = await repositorySkills(catalogOf([...long, "d".repeat(894), "short"]))
+    expect(over.offered?.names).toHaveLength(11)
+    expect(over.capped.map(({ name }) => name)).toEqual(["s-11", "s-12"])
+    expect((await over.offered?.source.list())?.map(({ name }) => name)).toEqual(over.offered?.names)
   })
 
   it("is nothing for a base without skills", async () => {
-    expect(await skillSourceFor(contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." }))).toBeUndefined()
+    expect(await offeredBy(contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." }))).toBeUndefined()
+  })
+})
+
+describe("skillSourceFor", () => {
+  const entry = (name: string): SkillManifestEntry => ({
+    name,
+    description: `${name} checks.`,
+    body: "Body.",
+    resources: [],
+  })
+  const at = (name: string) => ({ name, path: `.github/skills/${name}/SKILL.md` })
+  const FINGERPRINT = "f".repeat(64)
+
+  it("builds the repo source from the offered states alone, under the fingerprint it is given", async () => {
+    const states: SkillState[] = [
+      { kind: "offered", at: at("lint"), entry: entry("lint") },
+      { kind: "invalid", at: at("broken") },
+      { kind: "capped", at: at("later") },
+    ]
+    const offered = skillSourceFor(states, FINGERPRINT)
+    expect(offered?.names).toEqual(["lint"])
+    expect([offered?.source.id, offered?.source.fingerprint, offered?.fingerprint]).toEqual([
+      "repo",
+      FINGERPRINT,
+      FINGERPRINT,
+    ])
+    expect((await offered?.source.list())?.map(({ name }) => name)).toEqual(["lint"])
+  })
+
+  it("is nothing when no state is offered", () => {
+    expect(skillSourceFor([{ kind: "unloaded", at: at("later") }], FINGERPRINT)).toBeUndefined()
   })
 })
 
@@ -378,6 +581,7 @@ describe("repositorySkills", () => {
     expect(skills.shadowed).toEqual([{ name: "review", path: ".github/skills/review/SKILL.md" }])
     expect(skills.unloaded).toEqual([{ name: "later", path: ".claude/skills/later/SKILL.md" }])
     expect(skills.invalid).toEqual([{ name: "broken", path: ".agents/skills/broken/SKILL.md" }])
+    expect(skills.capped).toEqual([])
     expect(skills.loadsSkipped).toBe(2)
   })
 
@@ -387,24 +591,27 @@ describe("repositorySkills", () => {
       shadowed: [],
       unloaded: [],
       invalid: [],
+      capped: [],
       loadsSkipped: 0,
     })
   })
 })
 
 describe("skillLogs", () => {
-  it("logs each shadowed, unloaded and invalid skill with the pull request, its name and its SKILL.md", async () => {
+  it("logs each shadowed, unloaded, invalid and capped skill with the pull request, its name and its SKILL.md", () => {
     const skills = {
       offered: undefined,
       shadowed: [{ name: "review", path: ".github/skills/review/SKILL.md" }],
       unloaded: [{ name: "later", path: ".claude/skills/later/SKILL.md" }],
       invalid: [{ name: "broken", path: ".agents/skills/broken/SKILL.md" }],
+      capped: [{ name: "last", path: ".claude/skills/last/SKILL.md" }],
       loadsSkipped: 1,
     }
     expect(skillLogs(7, skills)).toEqual([
       { event: "skills.shadowed", fields: { number: 7, name: "review", path: ".github/skills/review/SKILL.md" } },
       { event: "skills.unloaded", fields: { number: 7, name: "later", path: ".claude/skills/later/SKILL.md" } },
       { event: "skills.invalid", fields: { number: 7, name: "broken", path: ".agents/skills/broken/SKILL.md" } },
+      { event: "skills.capped", fields: { number: 7, name: "last", path: ".claude/skills/last/SKILL.md" } },
     ])
   })
 })
@@ -452,10 +659,7 @@ describe("reviewRepository", () => {
 })
 
 describe("the catalog", () => {
-  const offeredLint = async () =>
-    skillSourceFor(
-      contextOf([blob(".github/skills/lint/SKILL.md")], { ".github/skills/lint/SKILL.md": skillMd("Lint.") }),
-    )
+  const LINT = contextOf([blob(".github/skills/lint/SKILL.md")], { ".github/skills/lint/SKILL.md": skillMd("Lint.") })
 
   it("hides the built-in skills from the catalog's listing, keeping their names, metadata and bodies, so they shadow without being offered", async () => {
     const { source } = await bundledSkills()
@@ -476,19 +680,32 @@ describe("the catalog", () => {
     )
   })
 
-  it("puts the hidden built-in skills ahead of the repository's, keyed by both sources' fingerprints", async () => {
+  it("puts the hidden built-in skills ahead of the repository's", async () => {
     const { source } = await bundledSkills()
-    const offered = await offeredLint()
-    const catalog = catalogFor(source, offered)
-    expect(catalog?.sources.map(({ id }) => id)).toEqual(["builtin", "repo"])
-    expect(catalog?.key).toBe(`builtin:${source.fingerprint}|repo:${offered?.fingerprint}`)
-    const listed = (await catalog?.sources[0]?.list()) ?? []
+    const { offered } = await repositorySkills(LINT)
+    const sources = catalogFor(source, offered)
+    expect(sources?.map(({ id }) => id)).toEqual(["builtin", "repo"])
+    const listed = (await sources?.[0]?.list()) ?? []
     expect(listed.every(({ metadata }) => metadata?.["disable-model-invocation"] === true)).toBe(true)
-    expect(await catalog?.sources[1]?.list()).toEqual(await offered?.source.list())
+    expect(await sources?.[1]?.list()).toEqual(await offered?.source.list())
   })
 
   it("is no catalog when the repository offers no skill", async () => {
     expect(catalogFor((await bundledSkills()).source, undefined)).toBeUndefined()
+  })
+
+  it("rebuilds the catalog from the one context the object holds, so a review resumed after a restart keeps it", async () => {
+    const { source } = await bundledSkills()
+    const sources = await restoredCatalog(source, [LINT])
+    expect(sources?.map(({ id }) => id)).toEqual(["builtin", "repo"])
+    expect((await sources?.[1]?.list())?.map(({ name }) => name)).toEqual(["lint"])
+  })
+
+  it("restores no catalog without a stored context, from more than one, or from one without skills", async () => {
+    const { source } = await bundledSkills()
+    expect(await restoredCatalog(source, [])).toBeUndefined()
+    expect(await restoredCatalog(source, [LINT, LINT])).toBeUndefined()
+    expect(await restoredCatalog(source, [contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })])).toBeUndefined()
   })
 
   describe("installCatalog", () => {
@@ -503,8 +720,6 @@ describe("the catalog", () => {
       return { build, built }
     }
 
-    const catalog = (key: string): Catalog => ({ key, sources: [] })
-
     const installedNames = (registry: Registry): string[] =>
       registry
         .snapshot()
@@ -515,39 +730,36 @@ describe("the catalog", () => {
       const registry = createRegistry()
       registry.install(review)
       const { build, built } = builder()
-      const installed = await installCatalog(registry, undefined, catalog("k1"), build)
+      const installed = await installCatalog(registry, undefined, [], build)
       expect(installedNames(registry)).toEqual(["andabot", "agents.skills"])
-      expect(installed?.key).toBe("k1")
-      expect(installed?.extension).toBe(registry.snapshot().extension("agents.skills"))
+      expect(installed).toBe(registry.snapshot().extension("agents.skills"))
       expect(built).toHaveLength(1)
     })
 
-    it("keeps the installed catalog, building none, while its key stays the same", async () => {
-      const registry = createRegistry()
-      const first = builder()
-      const installed = await installCatalog(registry, undefined, catalog("k1"), first.build)
-      const second = builder()
-      expect(await installCatalog(registry, installed, catalog("k1"), second.build)).toBe(installed)
-      expect(second.built).toHaveLength(0)
-    })
-
-    it("replaces the catalog in place when the key changes", async () => {
+    it("rebuilds the catalog in place every review, so a resource that loaded since is served", async () => {
       const registry = createRegistry()
       registry.install(review)
-      const { build } = builder()
-      const first = await installCatalog(registry, undefined, catalog("k1"), build)
-      const second = await installCatalog(registry, first, catalog("k2"), build)
+      const { build, built } = builder()
+      const { source } = await bundledSkills()
+      const entries = [blob(".github/skills/lint/SKILL.md"), blob(".github/skills/lint/rules.md")]
+      const body = { ".github/skills/lint/SKILL.md": skillMd("Lint.") }
+      const partial = await repositorySkills(contextOf(entries, body))
+      const full = await repositorySkills(contextOf(entries, { ...body, ".github/skills/lint/rules.md": "Rules." }))
+      expect(full.offered?.fingerprint).toBe(partial.offered?.fingerprint)
+      const first = await installCatalog(registry, undefined, catalogFor(source, partial.offered), build)
+      const second = await installCatalog(registry, first, catalogFor(source, full.offered), build)
       expect(installedNames(registry)).toEqual(["andabot", "agents.skills"])
-      expect(second?.key).toBe("k2")
-      expect(registry.snapshot().extension("agents.skills")).toBe(second?.extension)
-      expect(second?.extension).not.toBe(first?.extension)
+      expect(registry.snapshot().extension("agents.skills")).toBe(second)
+      expect(second).not.toBe(first)
+      expect(await built[0]?.[1]?.readResource?.("lint", "rules.md")).toBeNull()
+      expect((await built[1]?.[1]?.readResource?.("lint", "rules.md"))?.content).toBe("Rules.")
     })
 
     it("uninstalls the catalog when the repository offers none, leaving the review's own extension", async () => {
       const registry = createRegistry()
       registry.install(review)
       const { build } = builder()
-      const installed = await installCatalog(registry, undefined, catalog("k1"), build)
+      const installed = await installCatalog(registry, undefined, [], build)
       expect(await installCatalog(registry, installed, undefined, build)).toBeUndefined()
       expect(installedNames(registry)).toEqual(["andabot"])
     })

@@ -31,7 +31,7 @@ const CONTENTS = "/repos/o/r/contents/"
 const TREE_PATH = `/repos/o/r/git/trees/${BASE}?recursive=1`
 const WEB = ["apps/web/src/a.ts"]
 
-const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
+const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1", size: 10 })
 
 const directory = (path: string): TreeEntry => ({ path, type: "tree", sha: "2" })
 
@@ -502,6 +502,15 @@ describe("the context cache", () => {
       false,
     )
     expect(Value.Check(StoredRepositoryContext, { baseSha: BASE, files: {} })).toBe(false)
+  })
+
+  it("refuses a record whose entries lack the listing's sizes, as records did before the skill caps read them, so such a record is deleted and fetched again", async () => {
+    const context = await loaded(WEB)
+    const unsized = context.tree.entries.map(({ path, type, sha }) => ({ path, type, sha }))
+    expect(Value.Check(StoredRepositoryContext, { ...context, tree: { ...context.tree, entries: unsized } })).toBe(
+      false,
+    )
+    expect(context.tree.entries.every(({ size }) => size === 10)).toBe(true)
   })
 
   it("refuses a record whose tree holds a directory, as the first format's whole trees did, so such a record is deleted and fetched again", async () => {

@@ -13,7 +13,13 @@ import {
   type RenderedStandards,
   type StandardSource,
 } from "./instructions.ts"
-import { isUnderSkillRoot, repositorySkills, unloadedSkillPaths, type RepositorySkills } from "./skills.ts"
+import {
+  isUnderSkillRoot,
+  repositorySkills,
+  unloadedSkillBodies,
+  unloadedSkillResources,
+  type RepositorySkills,
+} from "./skills.ts"
 
 export interface RepositoryContext {
   readonly baseSha: string
@@ -43,12 +49,16 @@ type ReportUnreadable = (error: string) => void
 
 type ReportUnreadableFile = (path: string, error: string) => void
 
+type ReadFile = (path: string) => Promise<string | undefined>
+
 export const StoredRepositoryContext = Type.Object({
   baseSha: Type.String(),
   tree: Type.Object({
     sha: Type.String(),
     truncated: Type.Boolean(),
-    entries: Type.Array(Type.Object({ path: Type.String(), type: Type.Literal("blob"), sha: Type.String() })),
+    entries: Type.Array(
+      Type.Object({ path: Type.String(), type: Type.Literal("blob"), sha: Type.String(), size: Type.Integer() }),
+    ),
   }),
   files: Type.Record(Type.String(), Type.String()),
 })
@@ -104,7 +114,7 @@ const contextAt = async (
 }
 
 const loadedFile = async (
-  read: (path: string) => Promise<string | undefined>,
+  read: ReadFile,
   path: string,
   unreadable: ReportUnreadableFile,
 ): Promise<[string, string][]> => {
@@ -116,6 +126,17 @@ const loadedFile = async (
   }
 }
 
+const withLoaded = async (
+  context: RepositoryContext,
+  paths: readonly string[],
+  read: ReadFile,
+  unreadable: ReportUnreadableFile,
+): Promise<RepositoryContext> => {
+  const loaded = (await Promise.all(paths.map((path) => loadedFile(read, path, unreadable)))).flat()
+  if (loaded.length === 0) return context
+  return { ...context, files: { ...context.files, ...Object.fromEntries(loaded) } }
+}
+
 export async function loadRepositoryContext(
   github: GitHubClient,
   ref: RepoRef,
@@ -125,12 +146,13 @@ export async function loadRepositoryContext(
   cached?: RepositoryContext,
 ): Promise<RepositoryContext> {
   const context = await contextAt(github, ref, baseSha, cached)
-  const read = (path: string): Promise<string | undefined> => github.getFileContent(ref, path, baseSha)
-  const unloaded = [...inLoadOrder(unloadedPaths(context, changed)), ...unloadedSkillPaths(context)]
-  const paths = unloaded.slice(0, MAX_INSTRUCTION_LOADS)
-  const loaded = (await Promise.all(paths.map((path) => loadedFile(read, path, unreadable)))).flat()
-  if (loaded.length === 0) return context
-  return { ...context, files: { ...context.files, ...Object.fromEntries(loaded) } }
+  const read: ReadFile = (path) => github.getFileContent(ref, path, baseSha)
+  const ahead = new Set([...inLoadOrder(unloadedPaths(context, changed)), ...unloadedSkillBodies(context)])
+  const first = [...ahead].slice(0, MAX_INSTRUCTION_LOADS)
+  const withBodies = await withLoaded(context, first, read, unreadable)
+  const attempted = new Set(first)
+  const resources = unloadedSkillResources(withBodies).filter((path) => !attempted.has(path))
+  return withLoaded(withBodies, resources.slice(0, MAX_INSTRUCTION_LOADS - first.length), read, unreadable)
 }
 
 export async function readRepositoryContext(

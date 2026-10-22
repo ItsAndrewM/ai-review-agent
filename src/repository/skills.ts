@@ -27,11 +27,16 @@ export interface RepositorySkills {
   readonly shadowed: SkillAt[]
   readonly unloaded: SkillAt[]
   readonly invalid: SkillAt[]
+  readonly capped: SkillAt[]
   readonly loadsSkipped: number
 }
 
+export type SkillState =
+  | { readonly kind: "offered"; readonly at: SkillAt; readonly entry: SkillManifestEntry }
+  | { readonly kind: "unloaded" | "invalid" | "capped"; readonly at: SkillAt }
+
 export interface SkillLog {
-  readonly event: "skills.shadowed" | "skills.unloaded" | "skills.invalid"
+  readonly event: "skills.shadowed" | "skills.unloaded" | "skills.invalid" | "skills.capped"
   readonly fields: { readonly number: number; readonly name: string; readonly path: string }
 }
 
@@ -41,27 +46,32 @@ export interface SkillStartFields {
   readonly skillLoadsSkipped: number
 }
 
-export interface Catalog {
-  readonly key: string
-  readonly sources: readonly SkillSource[]
-}
-
-export interface InstalledCatalog {
-  readonly key: string
-  readonly extension: Extension
-}
-
 export type BuildCatalog = (sources: readonly SkillSource[]) => Promise<Extension>
 
 type SkillContext = Pick<RepositoryContext, "tree" | "files">
 
 type CachedFiles = Readonly<Record<string, string>>
 
-type SkillState =
-  | { readonly kind: "offered"; readonly entry: SkillManifestEntry; readonly served: string[] }
-  | { readonly kind: "unloaded" | "invalid"; readonly at: SkillAt }
+interface SkillPlan {
+  readonly skills: RepositorySkillFiles[]
+  readonly oversized: ReadonlySet<string>
+  readonly loadable: ReadonlySet<string>
+}
+
+interface SkillSurvey {
+  readonly plan: SkillPlan
+  readonly states: SkillState[]
+}
 
 export const SKILL_ROOTS = [".github/skills/", ".agents/skills/", ".claude/skills/"]
+
+export const MAX_SKILL_FILE_BYTES = 51_200
+
+export const MAX_SKILL_BYTES = 524_288
+
+export const MAX_DESCRIPTION_CHARS = 1_024
+
+export const MAX_CATALOG_CHARS = 12_000
 
 const SKILL_FILE = "SKILL.md"
 const SKILL_FILE_IN_DIRECTORY = /^([^/]+)\/SKILL\.md$/
@@ -74,6 +84,7 @@ const NO_SKILLS = {
   shadowed: [],
   unloaded: [],
   invalid: [],
+  capped: [],
   loadsSkipped: 0,
 } satisfies RepositorySkills
 
@@ -86,21 +97,27 @@ const isSafe = (path: string): boolean => !path.startsWith("/") && !path.split("
 
 export const isUnderSkillRoot = (path: string): boolean => SKILL_ROOTS.some((root) => path.startsWith(root))
 
-const safeBlobs = (entries: readonly TreeEntry[]): string[] =>
-  entries.filter(({ path, type }) => type === "blob" && isSafe(path)).map(({ path }) => path)
+const sizeOf = ({ size }: TreeEntry): number => size ?? Number.POSITIVE_INFINITY
+
+const safeBlobs = (entries: readonly TreeEntry[]): TreeEntry[] =>
+  entries.filter(({ path, type }) => type === "blob" && isSafe(path))
 
 const skillNameAt = (root: string, path: string): string[] => {
   const match = path.startsWith(root) ? SKILL_FILE_IN_DIRECTORY.exec(path.slice(root.length)) : null
   return match?.[1] === undefined ? [] : [match[1]]
 }
 
-const skillsUnder = (root: string, blobs: readonly string[]): RepositorySkillFiles[] =>
+const isFileOf = (dir: string, entry: TreeEntry): boolean =>
+  entry.path.startsWith(`${dir}/`) && (entry.path === `${dir}/${SKILL_FILE}` || sizeOf(entry) <= MAX_SKILL_FILE_BYTES)
+
+const skillsUnder = (root: string, blobs: readonly TreeEntry[]): RepositorySkillFiles[] =>
   blobs
-    .flatMap((path) => skillNameAt(root, path))
+    .flatMap(({ path }) => skillNameAt(root, path))
     .sort(compareText)
     .map((name) => {
       const dir = `${root}${name}`
-      return { name, dir, files: blobs.filter((path) => path.startsWith(`${dir}/`)).sort(compareText) }
+      const files = blobs.filter((entry) => isFileOf(dir, entry)).map(({ path }) => path)
+      return { name, dir, files: files.sort(compareText) }
     })
 
 const discoveredSkills = (entries: readonly TreeEntry[]): RepositorySkillFiles[] => {
@@ -130,56 +147,111 @@ const bodyPathOf = ({ dir }: RepositorySkillFiles): string => `${dir}/${SKILL_FI
 const resourcePathsOf = (skill: RepositorySkillFiles): string[] =>
   skill.files.filter((path) => path !== bodyPathOf(skill))
 
-const skillLoadOrder = (entries: readonly TreeEntry[]): string[] => {
-  const skills = repositorySkillFiles(entries)
-  return [...skills.map(bodyPathOf), ...skills.flatMap(resourcePathsOf)]
+const withinSkillBytes = (order: readonly string[], sizes: ReadonlyMap<string, number>): Set<string> => {
+  const within = new Set<string>()
+  let total = 0
+  for (const path of order) {
+    total += sizes.get(path) ?? Number.POSITIVE_INFINITY
+    if (total > MAX_SKILL_BYTES) break
+    within.add(path)
+  }
+  return within
 }
 
-export function unloadedSkillPaths({ tree, files }: SkillContext): string[] {
-  return skillLoadOrder(tree.entries).filter((path) => !Object.hasOwn(files, path))
+const planOf = (entries: readonly TreeEntry[]): SkillPlan => {
+  const skills = repositorySkillFiles(entries)
+  const sizes = new Map(entries.map((entry): [string, number] => [entry.path, sizeOf(entry)]))
+  const tooLarge = (path: string): boolean => (sizes.get(path) ?? Number.POSITIVE_INFINITY) > MAX_SKILL_FILE_BYTES
+  const oversized = new Set(skills.map(bodyPathOf).filter(tooLarge))
+  const servable = skills.filter((skill) => !oversized.has(bodyPathOf(skill)))
+  const order = [...servable.map(bodyPathOf), ...servable.flatMap(resourcePathsOf)]
+  return { skills, oversized, loadable: withinSkillBytes(order, sizes) }
 }
 
 const cachedText = (files: CachedFiles, path: string): string | undefined =>
   Object.hasOwn(files, path) ? files[path] : undefined
 
-const loadedResources = (skill: RepositorySkillFiles, files: CachedFiles): SkillFile[] =>
+const loadedResources = (skill: RepositorySkillFiles, files: CachedFiles, loadable: ReadonlySet<string>): SkillFile[] =>
   resourcePathsOf(skill).flatMap((path) => {
-    const content = cachedText(files, path)
-    return content === undefined ? [] : [{ path, content }]
+    const content = loadable.has(path) ? cachedText(files, path) : undefined
+    return content === undefined ? [] : [{ path: path.slice(skill.dir.length + 1), content }]
   })
 
-const relativeTo = (dir: string, { path, content }: SkillFile): SkillFile => ({
-  path: path.slice(dir.length + 1),
-  content,
-})
-
-const stateOf = (skill: RepositorySkillFiles, files: CachedFiles): SkillState => {
-  const bodyPath = bodyPathOf(skill)
-  const at = { name: skill.name, path: bodyPath }
-  const body = cachedText(files, bodyPath)
-  if (body === undefined) return { kind: "unloaded", at }
-  const resources = loadedResources(skill, files)
-  const entry = describedSkillEntry(
-    skill.name,
-    body,
-    resources.map((resource) => relativeTo(skill.dir, resource)),
-  )
-  if (entry === undefined) return { kind: "invalid", at }
-  return { kind: "offered", entry, served: [bodyPath, ...resources.map(({ path }) => path)] }
+const parsedEntry = (skill: RepositorySkillFiles, body: string, resources: readonly SkillFile[]) => {
+  const entry = describedSkillEntry(skill.name, body, resources)
+  return entry === undefined || entry.description.length > MAX_DESCRIPTION_CHARS ? undefined : entry
 }
 
-const statesOf = ({ tree, files }: SkillContext): SkillState[] =>
-  repositorySkillFiles(tree.entries).map((skill) => stateOf(skill, files))
+const stateOf = (skill: RepositorySkillFiles, files: CachedFiles, plan: SkillPlan): SkillState => {
+  const bodyPath = bodyPathOf(skill)
+  const at = { name: skill.name, path: bodyPath }
+  if (plan.oversized.has(bodyPath)) return { kind: "invalid", at }
+  if (!plan.loadable.has(bodyPath)) return { kind: "capped", at }
+  const body = cachedText(files, bodyPath)
+  if (body === undefined) return { kind: "unloaded", at }
+  const entry = parsedEntry(skill, body, loadedResources(skill, files, plan.loadable))
+  return entry === undefined ? { kind: "invalid", at } : { kind: "offered", at, entry }
+}
 
-const atsOf = (states: readonly SkillState[], kind: "unloaded" | "invalid"): SkillAt[] =>
-  states.flatMap((state) => (state.kind !== "offered" && state.kind === kind ? [state.at] : []))
+const catalogLine = ({ name, description }: SkillManifestEntry): string => `- ${name}: ${description}`
 
-export async function skillSourceFor(context: SkillContext): Promise<OfferedSkills | undefined> {
-  const offered = statesOf(context).flatMap((state) => (state.kind === "offered" ? [state] : []))
-  if (offered.length === 0) return undefined
-  const served = new Set(offered.flatMap((state) => state.served))
-  const fingerprint = await repositorySkillFingerprint(context.tree.entries.filter(({ path }) => served.has(path)))
-  const skills = offered.map(({ entry }) => entry)
+const fittingCount = (entries: readonly SkillManifestEntry[]): number => {
+  let chars = -1
+  for (const [index, entry] of entries.entries()) {
+    chars += catalogLine(entry).length + 1
+    if (chars > MAX_CATALOG_CHARS) return index
+  }
+  return entries.length
+}
+
+const withCatalogCap = (states: readonly SkillState[]): SkillState[] => {
+  const entries = states.flatMap((state) => (state.kind === "offered" ? [state.entry] : []))
+  const fitting = new Set(entries.slice(0, fittingCount(entries)))
+  return states.map((state): SkillState =>
+    state.kind !== "offered" || fitting.has(state.entry) ? state : { kind: "capped", at: state.at },
+  )
+}
+
+const surveyOf = ({ tree, files }: SkillContext): SkillSurvey => {
+  const plan = planOf(tree.entries)
+  return { plan, states: withCatalogCap(plan.skills.map((skill) => stateOf(skill, files, plan))) }
+}
+
+const isUncachedIn =
+  (files: CachedFiles, loadable: ReadonlySet<string>) =>
+  (path: string): boolean =>
+    loadable.has(path) && !Object.hasOwn(files, path)
+
+const unloadedBodies = (plan: SkillPlan, files: CachedFiles): string[] =>
+  plan.skills.map(bodyPathOf).filter(isUncachedIn(files, plan.loadable))
+
+const unloadedResources = ({ plan, states }: SkillSurvey, files: CachedFiles): string[] => {
+  const offered = new Set(states.flatMap((state) => (state.kind === "offered" ? [state.at.name] : [])))
+  return plan.skills
+    .filter(({ name }) => offered.has(name))
+    .flatMap(resourcePathsOf)
+    .filter(isUncachedIn(files, plan.loadable))
+}
+
+export function unloadedSkillBodies({ tree, files }: SkillContext): string[] {
+  return unloadedBodies(planOf(tree.entries), files)
+}
+
+export function unloadedSkillResources(context: SkillContext): string[] {
+  return unloadedResources(surveyOf(context), context.files)
+}
+
+export function unloadedSkillPaths(context: SkillContext): string[] {
+  const survey = surveyOf(context)
+  return [...unloadedBodies(survey.plan, context.files), ...unloadedResources(survey, context.files)]
+}
+
+const atsOf = (states: readonly SkillState[], kind: SkillState["kind"]): SkillAt[] =>
+  states.flatMap((state) => (state.kind === kind ? [state.at] : []))
+
+export function skillSourceFor(states: readonly SkillState[], fingerprint: string): OfferedSkills | undefined {
+  const skills = states.flatMap((state) => (state.kind === "offered" ? [state.entry] : []))
+  if (skills.length === 0) return undefined
   return {
     source: manifestSource({ id: REPOSITORY_SOURCE, fingerprint, skills }),
     fingerprint,
@@ -189,13 +261,15 @@ export async function skillSourceFor(context: SkillContext): Promise<OfferedSkil
 
 export async function repositorySkills(context: SkillContext | undefined): Promise<RepositorySkills> {
   if (context === undefined) return NO_SKILLS
-  const states = statesOf(context)
+  const survey = surveyOf(context)
+  const { states } = survey
   return {
-    offered: await skillSourceFor(context),
+    offered: skillSourceFor(states, await repositorySkillFingerprint(context.tree.entries)),
     shadowed: shadowedSkillFiles(context.tree.entries).map((skill) => ({ name: skill.name, path: bodyPathOf(skill) })),
     unloaded: atsOf(states, "unloaded"),
     invalid: atsOf(states, "invalid"),
-    loadsSkipped: unloadedSkillPaths(context).length,
+    capped: atsOf(states, "capped"),
+    loadsSkipped: unloadedBodies(survey.plan, context.files).length + unloadedResources(survey, context.files).length,
   }
 }
 
@@ -206,6 +280,7 @@ export function skillLogs(number: number, skills: RepositorySkills): SkillLog[] 
     ...logsOf("skills.shadowed", skills.shadowed),
     ...logsOf("skills.unloaded", skills.unloaded),
     ...logsOf("skills.invalid", skills.invalid),
+    ...logsOf("skills.capped", skills.capped),
   ]
 }
 
@@ -228,27 +303,33 @@ export function unlisted(source: SkillSource): SkillSource {
   }
 }
 
-const keyOf = (sources: readonly SkillSource[]): string =>
-  sources.map(({ id, fingerprint }) => `${id}:${fingerprint}`).join("|")
+export function catalogFor(
+  builtin: SkillSource,
+  offered: OfferedSkills | undefined,
+): readonly SkillSource[] | undefined {
+  return offered === undefined ? undefined : [unlisted(builtin), offered.source]
+}
 
-export function catalogFor(builtin: SkillSource, offered: OfferedSkills | undefined): Catalog | undefined {
-  if (offered === undefined) return undefined
-  const sources = [unlisted(builtin), offered.source]
-  return { key: keyOf(sources), sources }
+export async function restoredCatalog(
+  builtin: SkillSource,
+  contexts: readonly SkillContext[],
+): Promise<readonly SkillSource[] | undefined> {
+  const [context, ...others] = contexts
+  const skills = await repositorySkills(others.length === 0 ? context : undefined)
+  return catalogFor(builtin, skills.offered)
 }
 
 export async function installCatalog(
   registry: Registry,
-  installed: InstalledCatalog | undefined,
-  catalog: Catalog | undefined,
+  installed: Extension | undefined,
+  sources: readonly SkillSource[] | undefined,
   build: BuildCatalog,
-): Promise<InstalledCatalog | undefined> {
-  if (catalog === undefined) {
-    if (installed !== undefined) registry.uninstall(installed.extension)
+): Promise<Extension | undefined> {
+  if (sources === undefined) {
+    if (installed !== undefined) registry.uninstall(installed)
     return undefined
   }
-  if (installed?.key === catalog.key) return installed
-  const extension = await build(catalog.sources)
+  const extension = await build(sources)
   registry.install(extension)
-  return { key: catalog.key, extension }
+  return extension
 }

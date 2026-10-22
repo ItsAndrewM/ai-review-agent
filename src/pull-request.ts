@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
-import { createRegistry, Harness } from "@earendil-works/pi-durable"
+import { createRegistry, Harness, type Extension } from "@earendil-works/pi-durable"
 import { PiHarness, ROOT_SESSION, skills as skillsExtension, type PiPromptResponse } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
@@ -59,7 +59,7 @@ import {
   type ReviewRepository,
 } from "./repository/context.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
-import { catalogFor, installCatalog, skillLogs, skillsStartFields, type InstalledCatalog } from "./repository/skills.ts"
+import { catalogFor, installCatalog, restoredCatalog, skillLogs, skillsStartFields } from "./repository/skills.ts"
 import {
   checksState,
   decideApproval,
@@ -257,9 +257,11 @@ const StoredDetailText = Type.String()
 export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
   readonly registry = createRegistry()
+  #catalog: Extension | undefined
   readonly harness = new PiHarness({
-    harness: ({ storage, context }) => {
+    harness: async ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
+      await this.restoreCatalog()
       const models = createModels()
       models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider, this.outputLimit())))
       return Harness.open(
@@ -281,7 +283,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
-  #catalog: InstalledCatalog | undefined
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -819,6 +820,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
+  private async restoreCatalog(): Promise<void> {
+    try {
+      const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
+      const contexts = [...listed.values()].flatMap((stored) =>
+        Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
+      )
+      const sources = await restoredCatalog((await bundledSkills()).source, contexts)
+      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+    } catch (error) {
+      logError("skills.restore_failed", { error: errorText(error) })
+    }
+  }
+
   private async recordRepository(deliveryId: string, repository: ReviewRepository): Promise<void> {
     const pending = await this.pendingFor(deliveryId)
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, ...repositoryRecord(repository) })
@@ -994,8 +1008,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       },
       BACKGROUND_CONTEXT,
     )
-    const catalog = catalogFor(source, skills.offered)
-    this.#catalog = await installCatalog(this.registry, this.#catalog, catalog, skillsExtension)
+    const sources = catalogFor(source, skills.offered)
+    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
   }
 
   private async finishReview(
