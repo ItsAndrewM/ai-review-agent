@@ -151,6 +151,17 @@ describe("grepText", () => {
     )
   })
 
+  it("says search again when the snapshot was dropped between the access check and the scan", async () => {
+    const unfinished = new MemorySnapshotFiles()
+    unfinished.begin(headSha)
+    unfinished.add([{ path: "src/a.ts", content: "export const total = 1\n" }])
+    const { host: wired } = hostWith({ search: { kind: "ready", files: unfinished } })
+    const replaced =
+      "Repository search is unavailable for this review: the snapshot was replaced while searching; search again. Use read_file."
+    expect(await grepText(wired, { pattern: "total" })).toBe(replaced)
+    expect(await treeText(wired, {})).toBe(replaced)
+  })
+
   it("refuses a bad pattern without asking for search access, so the refusal uses no budget", async () => {
     const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
     expect(await grepText(wired, { pattern: "" })).toBe("Pattern refused: The pattern is empty.")

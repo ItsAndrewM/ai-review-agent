@@ -38,8 +38,7 @@ import {
   type ReviewStandards,
 } from "./repository/context.ts"
 import { loadSnapshot } from "./repository/load-snapshot.ts"
-import { MAX_SEARCH_CALLS } from "./repository/search.ts"
-import { loadedFields, snapshotFailure, snapshotSource } from "./repository/snapshot-host.ts"
+import { SnapshotRuns, snapshotSource } from "./repository/snapshot-host.ts"
 import type { SnapshotFiles } from "./repository/snapshot.ts"
 import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
@@ -253,9 +252,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
   #snapshot: SqlSnapshotFiles | undefined
-  #loading: { sha: string; access: Promise<SearchAccess> } | undefined
-  #searchFailure: string | undefined
-  #searchCalls = { grep: 0, tree: 0 }
+  #runs = new SnapshotRuns(
+    () => this.#snapshotFiles(),
+    async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
+  )
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -310,13 +310,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess> {
-    if (this.#searchCalls.grep + this.#searchCalls.tree >= MAX_SEARCH_CALLS) return { kind: "spent" }
-    this.#searchCalls[tool] += 1
-    if (this.#searchFailure !== undefined) return { kind: "unavailable", reason: this.#searchFailure }
-    const pr = await this.pullRequest()
-    const files = this.#snapshotFiles()
-    if (files.record()?.sha === pr.head.sha) return { kind: "ready", files }
-    return this.#sharedLoad(pr.number, pr.head.sha)
+    return this.#runs.access(tool, async () => {
+      const pr = await this.pullRequest()
+      return { number: pr.number, sha: pr.head.sha }
+    })
   }
 
   loadedSnapshot(): SnapshotFiles | undefined {
@@ -326,43 +323,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #snapshotFiles(): SqlSnapshotFiles {
     this.#snapshot ??= new SqlSnapshotFiles(this.ctx.storage.sql)
     return this.#snapshot
-  }
-
-  async #sharedLoad(number: number, sha: string): Promise<SearchAccess> {
-    const inFlight = this.#loading
-    if (inFlight?.sha === sha) return inFlight.access
-    if (inFlight) {
-      await inFlight.access
-      return this.#sharedLoad(number, sha)
-    }
-    const access = this.#load(number, sha).finally(() => {
-      if (this.#loading?.access === access) this.#loading = undefined
-    })
-    this.#loading = { sha, access }
-    return access
-  }
-
-  async #load(number: number, sha: string): Promise<SearchAccess> {
-    const started = Date.now()
-    const files = this.#snapshotFiles()
-    try {
-      const record = await loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha)
-      log("snapshot.loaded", loadedFields(number, record, Date.now() - started))
-      return { kind: "ready", files }
-    } catch (cause) {
-      const failure = snapshotFailure(cause)
-      this.#searchFailure = failure.reason
-      logError("snapshot.failed", { number, head: shortSha(sha), step: failure.step, error: errorText(cause) })
-      return { kind: "unavailable", reason: failure.reason }
-    }
-  }
-
-  async #dropSnapshot(reason: "review_end" | "answer_end"): Promise<void> {
-    await this.#loading?.access
-    if (this.#snapshotFiles().drop()) log("snapshot.dropped", { number: (await this.key()).number, reason })
-    this.#searchFailure = undefined
-    this.#loading = undefined
-    this.#searchCalls = { grep: 0, tree: 0 }
   }
 
   async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
@@ -608,6 +568,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<ReviewSkip | undefined> {
+    this.#runs.dropStale(incoming.key.number)
     const staleBuild = isOlder(this.version(), callerVersion)
     const pr = await this.freshPullRequest()
     if (pr.state !== "open") {
@@ -771,6 +732,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
+    this.#runs.start()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
@@ -822,8 +784,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
-          greps: this.#searchCalls.grep,
-          trees: this.#searchCalls.tree,
+          ...this.#runs.calls(),
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -832,7 +793,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       throw error
     } finally {
-      await this.#dropSnapshot("review_end")
+      await this.#runs.end(pr.number, "review_end")
     }
   }
 
@@ -1117,6 +1078,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async comment(incoming: CommentIncoming, callerVersion?: Version): Promise<void> {
     const key = await this.key()
+    this.#runs.dropStale(key.number)
     const github = await this.github()
     const thread = await this.threadFor(github, key, incoming.thread)
     const command = incoming.thread
@@ -1293,6 +1255,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     text: string,
     thread: ReviewThread | undefined,
   ): Promise<void> {
+    this.#runs.start()
     try {
       await this.harness.session().setModel(this.reviewModel())
       const operationId = `chat:${incoming.deliveryId}`
@@ -1316,7 +1279,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
             }.`
       await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
     } finally {
-      await this.#dropSnapshot("answer_end")
+      await this.#runs.end(key.number, "answer_end")
     }
   }
 

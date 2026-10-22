@@ -159,13 +159,22 @@ export async function grepText(
   const problem = patternProblem(query.pattern)
   if (problem !== undefined) return `Pattern refused: ${problem}`
   const access = await host.repositorySearch("grep")
-  return access.kind === "ready" ? grep(access.files, query) : searchRefusal(access)
+  if (access.kind !== "ready") return searchRefusal(access)
+  return access.files.record() === undefined ? searchRefusal(SNAPSHOT_REPLACED) : grep(access.files, query)
 }
 
 export async function treeText(host: ReviewHost, args: { path?: string; depth?: number }): Promise<string> {
   const access = await host.repositorySearch("tree")
-  return access.kind === "ready" ? tree(access.files, args.path, args.depth) : searchRefusal(access)
+  if (access.kind !== "ready") return searchRefusal(access)
+  return access.files.record() === undefined
+    ? searchRefusal(SNAPSHOT_REPLACED)
+    : tree(access.files, args.path, args.depth)
 }
+
+const SNAPSHOT_REPLACED = {
+  kind: "unavailable",
+  reason: "the snapshot was replaced while searching; search again",
+} as const
 
 function searchRefusal(access: Exclude<SearchAccess, { kind: "ready" }>): string {
   if (access.kind === "spent") {
