@@ -333,8 +333,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async pathFilters(): Promise<readonly string[]> {
+    const pending = await this.readPending()
     const stored = await this.ctx.storage.get("scope")
-    return filtersInForce(Value.Check(ReviewScope, stored) ? stored : undefined, async () => {
+    const inFlight = Value.Check(ReviewScope, stored) && stored.deliveryId === pending?.deliveryId ? stored : undefined
+    return filtersInForce(inFlight, async () => {
       const { config } = await this.repositoryConfig(await this.pullRequest())
       return config.reviews.path_filters
     })
