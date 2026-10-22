@@ -82,9 +82,15 @@ export class SnapshotRuns {
   async end(number: number, reason: RunEnd): Promise<void> {
     this.#active = Math.max(0, this.#active - 1)
     if (this.#active > 0) return
-    await this.#loading?.access
+    await this.#loadsSettled()
     if (this.#active > 0) return
     this.#drop(number, reason)
+  }
+
+  async #loadsSettled(): Promise<void> {
+    while (this.#loading !== undefined) {
+      await this.#loading.access
+    }
   }
 
   dropStale(number: number): void {

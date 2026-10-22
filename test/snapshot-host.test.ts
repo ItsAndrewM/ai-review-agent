@@ -109,6 +109,43 @@ class UndroppableFiles extends MemorySnapshotFiles {
   }
 }
 
+class RecordingFiles extends MemorySnapshotFiles {
+  readonly events: string[] = []
+
+  override finish(finished: SnapshotRecord): void {
+    this.events.push(`finish ${finished.sha}`)
+    super.finish(finished)
+  }
+
+  override drop(): boolean {
+    this.events.push("drop")
+    return super.drop()
+  }
+}
+
+const OTHER_SHA = "fedcba9876543210"
+
+const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+function gatedLoader() {
+  const gates = new Map<string, () => void>()
+  const loadInto: LoadInto = async (store, sha) => {
+    store.begin(sha)
+    store.add([{ path: `src/${sha}.ts`, content: sha }])
+    await new Promise<void>((resolve) => {
+      gates.set(sha, resolve)
+    })
+    const loaded = { ...record, sha }
+    store.finish(loaded)
+    return loaded
+  }
+  return {
+    loadInto,
+    waiting: (sha: string) => gates.has(sha),
+    open: (sha: string) => gates.get(sha)?.(),
+  }
+}
+
 describe("SnapshotRuns", () => {
   let logged: MockInstance<typeof console.log>
   let errors: MockInstance<typeof console.error>
@@ -150,14 +187,52 @@ describe("SnapshotRuns", () => {
   })
 
   it("shares one load between parallel calls for the same head", async () => {
-    const { loads, runs } = runsWith()
+    const gated = gatedLoader()
+    const { loads, runs } = runsWith(gated.loadInto)
     runs.start()
-    const [grepAccess, treeAccess] = await Promise.all([
-      runs.access("grep", headAt(SHA)),
-      runs.access("tree", headAt(SHA)),
-    ])
+    const grepAccess = runs.access("grep", headAt(SHA))
+    const treeAccess = runs.access("tree", headAt(SHA))
+    await vi.waitFor(() => expect(gated.waiting(SHA)).toBe(true))
+    await nextTask()
     expect(loads).toEqual([SHA])
-    expect([grepAccess.kind, treeAccess.kind]).toEqual(["ready", "ready"])
+    gated.open(SHA)
+    expect([(await grepAccess).kind, (await treeAccess).kind]).toEqual(["ready", "ready"])
+    expect(loads).toEqual([SHA])
+  })
+
+  it("skips the drop when another run starts while the last run's end waits on a load", async () => {
+    const gated = gatedLoader()
+    const files = new RecordingFiles()
+    const { runs } = runsWith(gated.loadInto, files)
+    runs.start()
+    const access = runs.access("grep", headAt(SHA))
+    await vi.waitFor(() => expect(gated.waiting(SHA)).toBe(true))
+    const ended = runs.end(NUMBER, "review_end")
+    runs.start()
+    gated.open(SHA)
+    await Promise.all([access, ended])
+    expect(files.events).toEqual([`finish ${SHA}`])
+    expect(files.record()?.sha).toBe(SHA)
+    expect(logged).not.toHaveBeenCalledWith(dropped("review_end"))
+  })
+
+  it("waits out a newer load that starts while the last run's end waits, so the drop never lands mid-load", async () => {
+    const gated = gatedLoader()
+    const files = new RecordingFiles()
+    const { runs } = runsWith(gated.loadInto, files)
+    runs.start()
+    const first = runs.access("grep", headAt(SHA))
+    await vi.waitFor(() => expect(gated.waiting(SHA)).toBe(true))
+    const resumed = runs.access("grep", headAt(OTHER_SHA))
+    await nextTask()
+    const ended = runs.end(NUMBER, "review_end")
+    gated.open(SHA)
+    await vi.waitFor(() => expect(gated.waiting(OTHER_SHA)).toBe(true))
+    expect(files.events).toEqual([`finish ${SHA}`])
+    gated.open(OTHER_SHA)
+    await Promise.all([first, resumed, ended])
+    expect(files.events).toEqual([`finish ${SHA}`, `finish ${OTHER_SHA}`, "drop"])
+    expect(files.record()).toBeUndefined()
   })
 
   it("remembers a failed load until the last run ends, so a review does not retry it on every call", async () => {
