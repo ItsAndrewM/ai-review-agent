@@ -1273,7 +1273,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const justResolved = new Set(resolved.map((thread) => thread.threadId))
     const outcome = await this.evaluateApproval("resolve", incoming.deliveryId, justResolved)
-    const note = approvalNote(outcome, (await this.readLastReview())?.heldBack ?? 0, this.botLogin())
+    const note = await this.approvalNoteFor(outcome)
     log("command.resolved", {
       number: key.number,
       author: incoming.author,
@@ -1284,6 +1284,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reason: waitReasonOf(outcome),
     })
     await this.respond(github, key, incoming, resolveReply({ resolved: resolved.length, failed: failed.length, note }))
+  }
+
+  private async approvalNoteFor(outcome: ApprovalOutcome): Promise<string | undefined> {
+    if (this.env.REQUEST_CHANGES_WORKFLOW !== "true") return undefined
+    return approvalNote(outcome, (await this.readLastReview())?.heldBack ?? 0, this.botLogin())
   }
 
   private async summarize(call: CommandCall): Promise<void> {
