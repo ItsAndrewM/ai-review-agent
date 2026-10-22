@@ -65,7 +65,7 @@ curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-de
 
 1. GitHub posts `pull_request` (opened, reopened, ready for review, synchronize) to `/webhook`, drafts included.
 2. The Worker verifies the signature and hands the event to the Durable Object named `<installation>/<owner>/<repo>#<number>`.
-3. The object fetches the PR and reads `.andabot.yaml` at its base commit (section 6). When the file's settings skip the push, a draft by default among them, it logs `review.skip` with the reason and stops there; otherwise it fetches the files.
+3. The object fetches the PR and reads `.andabot.yaml` at its base commit (section 6). When `auto`, `drafts`, `base_branches` or a title keyword skips the push, a draft by default among them, it logs `review.skip` with the reason and stops there. When the file sets `path_filters`, it then fetches the files and checks them, and stops the same way if the filters leave out every one; otherwise it fetches the files as the review opens.
 4. It opens a check run named after the bot on the head commit, titled "Review in progress", and prompts the Pi session with the diff.
 5. The model reads what it needs with `read_file`, then calls `submit_review`.
 6. The host validates each finding against the diff, edits the summary comment in place, and submits one review with inline comments. Blocking findings make it a request-changes review. A clean approve verdict makes it an approval once the head's other checks pass; until they do, the review posts as a comment that says approval waits for the checks. The run completes with the verdict in its title; a review that does not complete fails the run, and a push mid-review cancels it as superseded by the new head.

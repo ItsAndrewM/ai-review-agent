@@ -201,6 +201,11 @@ describe("filterGlobs and isFiltered", () => {
     expect(filtered(".env.example", ["!*.example"])).toBe(true)
   })
 
+  it("reads a doubled !! as a literal !, never as a negation that would leave out everything else", () => {
+    expect(filtered("!foo", ["!!foo"])).toBe(true)
+    for (const path of ["foo", "src/index.ts", ".env"]) expect(filtered(path, ["!!foo"])).toBe(false)
+  })
+
   it("needs /** to leave out a directory's files, since !docs names only a file called docs", () => {
     expect(filtered("docs/guide.md", ["!docs"])).toBe(false)
     expect(filtered("docs/guide.md", ["!docs/**"])).toBe(true)

@@ -50,7 +50,8 @@ export function createReviewExtension(host: ReviewHost): Extension {
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
-    description: "List the files the pull request changes, with status and line counts.",
+    description:
+      "List the files the pull request changes, with status and line counts. A file marked (filtered) is left out of the review by the repository's .andabot.yaml path_filters: it needs no walkthrough row, and a finding on it is dropped.",
     parameters: Type.Object({}),
     replay: "safe",
     async execute() {

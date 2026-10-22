@@ -26,6 +26,7 @@ import {
   planThreads,
   promptFiles,
   filtersInForce,
+  pathFiltersSkip,
   resolveThreads,
   ReviewedRecord,
   ReviewScope,
@@ -34,9 +35,11 @@ import {
   submissionFromRecord,
   threadLists,
   threadsToRecheck,
+  withFilteredUnfounded,
   type OpenThread,
   type StoredFinding,
 } from "../src/review/incremental.ts"
+import { holdsApprovalBack } from "../src/review/render.ts"
 
 const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
 
@@ -411,7 +414,7 @@ describe("path filters", () => {
     expect(reads).toEqual(["config"])
   })
 
-  it("reject a finding on a filtered file as not a changed file, since the findings are checked against the scope's files", () => {
+  it("reject a finding on a filtered file as left out by the filters and unfounded, so even a blocking one holds no approval back", () => {
     const scope = buildScope({
       deliveryId: "d",
       mode: "full",
@@ -420,25 +423,61 @@ describe("path filters", () => {
       threads: undefined,
       pathFilters: filters,
     })
-    const onFile = (path: string, quote: string): FindingInput => ({
+    const onFile = (path: string, quote: string, severity: FindingInput["severity"]): FindingInput => ({
       path,
       line: 1,
       quote,
       basis_kind: "defect",
       basis: "a snapshot that no longer matches the component",
-      severity: "suggestion",
+      severity,
       title: "t",
       body: "b",
     })
-    const { accepted, rejected } = validateFindings(
-      [onFile("src/x.ts", "y"), onFile("a.snap", "new")],
+    const validated = validateFindings(
+      [onFile("src/x.ts", "y", "suggestion"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
       indexCommentableLines(scopedFiles(scope, prFiles)),
       false,
     )
+    const { accepted, rejected } = withFilteredUnfounded(validated, scope)
     expect(accepted.map((finding) => finding.path)).toEqual(["src/x.ts"])
-    expect(rejected.map(({ finding, reason }) => [finding.path, reason])).toEqual([
-      ["a.snap", 'path "a.snap" is not a changed file'],
+    expect(rejected.map(({ finding, reason, unfounded }) => [finding.path, reason, unfounded])).toEqual([
+      ["a.snap", 'path "a.snap" is left out of the review by path_filters; drop the finding', true],
+      ["gone.ts", 'path "gone.ts" is not a changed file', false],
     ])
+    expect(rejected.map(holdsApprovalBack)).toEqual([false, true])
+  })
+
+  it("leave a review's rejections as they were when it has no filters", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    const finding: FindingInput = {
+      path: "a.snap",
+      line: 9,
+      quote: "q",
+      basis_kind: "defect",
+      basis: "b",
+      severity: "blocking",
+      title: "t",
+      body: "b",
+    }
+    const validated = validateFindings([finding], indexCommentableLines(scopedFiles(scope, prFiles)), false)
+    expect(withFilteredUnfounded(validated, scope)).toEqual(validated)
+  })
+
+  it("skip as path_filters only when filters leave out every changed file, and list the files only when filters exist", async () => {
+    const listed: string[] = []
+    const lister = (files: readonly ChangedFile[]) => async () => {
+      listed.push("files")
+      return files
+    }
+    const onlyFiltered = [
+      changed("a.snap", "@@ -1 +1 @@\n-old\n+new"),
+      changed("fixtures/b.json", "@@ -1 +1 @@\n-{}\n+[]"),
+    ]
+    expect(await pathFiltersSkip([], lister(prFiles))).toBeUndefined()
+    expect(listed).toEqual([])
+    expect(await pathFiltersSkip(filters, lister(onlyFiltered))).toBe("path_filters")
+    expect(await pathFiltersSkip(filters, lister(prFiles))).toBeUndefined()
+    expect(listed).toEqual(["files", "files"])
   })
 })
 

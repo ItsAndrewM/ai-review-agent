@@ -3,6 +3,9 @@ import type { CompareStatus, PostedComment, ReviewThread } from "../github/clien
 import {
   comparableText,
   deltaLines,
+  everyFileFiltered,
+  filterGlobs,
+  isFiltered,
   markedLines,
   reviewableFiles,
   type ChangedFile,
@@ -386,6 +389,27 @@ export function nothingToReview(scope: ReviewScope): boolean {
 
 export const scopedFiles = (scope: ReviewScope, files: readonly ChangedFile[]): ChangedFile[] =>
   reviewableFiles(files, scope.pathFilters ?? [])
+
+export function withFilteredUnfounded(validated: ValidatedReview, scope: ReviewScope): ValidatedReview {
+  const globs = filterGlobs(scope.pathFilters ?? [])
+  const leftOut = (rejection: Rejected): Rejected =>
+    isFiltered(rejection.finding.path, globs)
+      ? {
+          finding: rejection.finding,
+          reason: `path "${rejection.finding.path}" is left out of the review by path_filters; drop the finding`,
+          unfounded: true,
+        }
+      : rejection
+  return { ...validated, rejected: validated.rejected.map(leftOut) }
+}
+
+export async function pathFiltersSkip(
+  patterns: readonly string[],
+  changedFiles: () => Promise<readonly ChangedFile[]>,
+): Promise<"path_filters" | undefined> {
+  if (patterns.length === 0) return undefined
+  return everyFileFiltered(await changedFiles(), patterns) ? "path_filters" : undefined
+}
 
 export async function filtersInForce(
   scope: ReviewScope | undefined,

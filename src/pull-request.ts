@@ -19,13 +19,7 @@ import {
   type ReviewThread,
   type UpdateCheckRun,
 } from "./github/client.ts"
-import {
-  everyFileFiltered,
-  indexCommentableLines,
-  reviewableFiles,
-  type ChangedFile,
-  type MarkedLines,
-} from "./github/diff.ts"
+import { indexCommentableLines, reviewableFiles, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -128,6 +122,7 @@ import {
   nextReviewed,
   nothingToReview,
   openBlockingAfter,
+  pathFiltersSkip,
   pathsChangedSince,
   pathsNeedingRows,
   planThreads,
@@ -139,6 +134,7 @@ import {
   StoredFinding,
   submissionFromRecord,
   threadLists,
+  withFilteredUnfounded,
   type OpenThread,
   type ReviewMode,
   type ReviewPlan,
@@ -385,10 +381,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const files = await this.changedFiles()
     const scope = await this.scopeFor(pending.deliveryId)
     const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
-    const validated = validateFindings(
-      submission.findings,
-      indexCommentableLines(scopedFiles(scope, files)),
-      hasLinkedIssues,
+    const validated = withFilteredUnfounded(
+      validateFindings(submission.findings, indexCommentableLines(scopedFiles(scope, files)), hasLinkedIssues),
+      scope,
     )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
@@ -668,7 +663,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async filesSkip(config: AndabotConfig): Promise<"path_filters" | undefined> {
-    return everyFileFiltered(await this.changedFiles(), config.reviews.path_filters) ? "path_filters" : undefined
+    return pathFiltersSkip(config.reviews.path_filters, () => this.changedFiles())
   }
 
   private async clearFlight(headSha: string): Promise<FlightDecision> {

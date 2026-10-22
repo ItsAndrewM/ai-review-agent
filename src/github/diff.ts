@@ -143,7 +143,7 @@ const GENERATED = [
 ]
 
 const FILTER_MARK = /^!/
-const FILTER_OPTIONS = { dot: true }
+const FILTER_OPTIONS = { dot: true, nonegate: true }
 
 export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
