@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
-import { createReviewExtension, readIssue, submitResult, type ReviewHost } from "../src/review/tools.ts"
+import {
+  changedFilesText,
+  createReviewExtension,
+  readIssue,
+  submitResult,
+  type ReviewHost,
+} from "../src/review/tools.ts"
 
 const pr = {
   number: 21,
@@ -42,8 +48,30 @@ const host = {
   github: async () => new GitHubClient("token", "https://api.example", fakeFetch),
   pullRequest: async () => pr,
   changedFiles: async () => [],
+  pathFilters: async () => [],
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
 } satisfies ReviewHost
+
+describe("changedFilesText", () => {
+  const files = [
+    { filename: "src/x.ts", status: "modified", additions: 3, deletions: 1 },
+    { filename: "test/__snapshots__/x.test.ts.snap", status: "added", additions: 40, deletions: 0 },
+  ]
+
+  it("lists each changed file with its status and counts, and marks the ones path_filters leave out", async () => {
+    const filtering = { ...host, changedFiles: async () => files, pathFilters: async () => ["!**/*.snap"] }
+    expect(await changedFilesText(filtering)).toBe(
+      "modified  +3 -1  src/x.ts\nadded     +40 -0  test/__snapshots__/x.test.ts.snap (filtered)",
+    )
+  })
+
+  it("marks nothing when no filter applies, and says so when nothing changed", async () => {
+    expect(await changedFilesText({ ...host, changedFiles: async () => files })).toBe(
+      "modified  +3 -1  src/x.ts\nadded     +40 -0  test/__snapshots__/x.test.ts.snap",
+    )
+    expect(await changedFilesText(host)).toBe("(no files)")
+  })
+})
 
 describe("createReviewExtension", () => {
   it("offers the model four tools, with submit_review last", () => {

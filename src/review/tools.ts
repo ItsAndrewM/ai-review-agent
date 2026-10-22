@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai"
 import { defineExtension, defineTool, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
-import type { ChangedFile } from "../github/diff.ts"
+import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
 import { systemPrompt } from "./prompt.ts"
@@ -16,6 +16,7 @@ export interface ReviewHost {
   github(): Promise<GitHubClient>
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
+  pathFilters(): Promise<readonly string[]>
   submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome>
 }
 
@@ -53,11 +54,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: Type.Object({}),
     replay: "safe",
     async execute() {
-      const files = await host.changedFiles()
-      return text(
-        files.map((f) => `${f.status.padEnd(9)} +${f.additions} -${f.deletions}  ${f.filename}`).join("\n") ||
-          "(no files)",
-      )
+      return text(await changedFilesText(host))
     },
   })
 
@@ -88,6 +85,15 @@ export function createReviewExtension(host: ReviewHost): Extension {
     sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
     tools: [readFile, listChangedFiles, getIssue, submitReview],
   })
+}
+
+export async function changedFilesText(host: ReviewHost): Promise<string> {
+  const globs = filterGlobs(await host.pathFilters())
+  const line = (file: ChangedFile): string => {
+    const mark = isFiltered(file.filename, globs) ? " (filtered)" : ""
+    return `${file.status.padEnd(9)} +${file.additions} -${file.deletions}  ${file.filename}${mark}`
+  }
+  return (await host.changedFiles()).map(line).join("\n") || "(no files)"
 }
 
 export async function readIssue(host: ReviewHost, number: number): Promise<string> {

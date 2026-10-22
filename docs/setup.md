@@ -97,11 +97,11 @@ A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pu
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `reviews.auto` | `true` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
-| `reviews.drafts` | `false` | `false`: a draft waits until it is marked ready for review. `true`: a draft is reviewed like any pull request. |
+| `reviews.drafts` | `false` | `false`: a draft waits until it is marked ready for review. `true`: a draft is reviewed on each push like any pull request, so its review can post before its checks finish; an approval waiting on them follows once the draft is marked ready for review. |
 | `reviews.base_branches` | `[]`: any base | Review only pull requests whose base branch is listed, by its exact name: `release/*` names a branch called `release/*`, not every release branch. |
 | `reviews.ignore_title_keywords` | `[]` | Skip a pull request whose title contains one of these anywhere, ignoring case. `WIP` also matches `Wipe`, so `WIP:` or `[WIP]` is more precise. A blank entry matches nothing. |
 | `reviews.request_changes_workflow` | unset: the Worker's `REQUEST_CHANGES_WORKFLOW` | `true` or `false` for this repository, for both the review's event and the approval that follows resolved threads and passing checks. |
-| `reviews.path_filters` | `[]` | Files to leave out of the review, each a [minimatch](https://github.com/isaacs/minimatch) glob that starts with `!`. A filtered file gets no patch in the prompt and needs no walkthrough row. |
+| `reviews.path_filters` | `[]` | Files to leave out of the review, each a [minimatch](https://github.com/isaacs/minimatch) glob that starts with `!`. A filtered file gets no patch in the prompt, needs no walkthrough row and takes no finding. When every changed file is filtered, the pull request gets no review. |
 | `reviews.path_instructions` | `[]` | Entries of a `path` glob and its `instructions`, added to the review's standards, ahead of the repository's instruction files, when the glob matches a changed file. |
 | `model` | none | Accepted and ignored until the verify pass (#31). It takes a mapping only: `model: {}` or keys under `model:`, never `model: <name>`. |
 
@@ -118,14 +118,17 @@ reviews:
       instructions: "Receipts must stay decodable for 24 hours after a deploy."
 ```
 
-`auto`, `drafts`, `base_branches` and `ignore_title_keywords` decide what a push does, checked in that order. A command (`@andabot review`, `@andabot full review`) bypasses all four. Editing a pull request's title or base starts no review; the next push or a command does. A skipped push logs `review.skip` with the reason `auto`, `draft`, `base_branch` or `title_keyword`, and leaves the last review standing.
+`auto`, `drafts`, `base_branches` and `ignore_title_keywords` decide what a push does, checked in that order. A command (`@andabot review`, `@andabot full review`) bypasses all four. Editing a pull request's title or base starts no review; the next push or a command does. A skipped push logs `review.skip` with the reason `auto`, `draft`, `base_branch` or `title_keyword`, or `path_filters` when the filters leave out every changed file, and leaves the last review standing.
+
+A skipped push also leaves andabot's earlier approval standing, over commits andabot never reviewed. If andabot's approval counts toward a required review, turn on "Dismiss stale pull request approvals when new commits are pushed" in the branch's protection rule, so a new push clears it.
 
 What makes the file invalid, or match less than meant:
 
 - **Every `path_filters` entry starts with `!`.** An entry without it makes the whole file invalid. Quote each one, as in `"!**/*.snap"`: unquoted, YAML reads a leading `!` as a tag and a leading `*` as an alias, and the file fails to parse or is rejected.
 - **A glob without a slash matches at the root only.** `!pnpm-lock.yaml` leaves out the root lock file, and `!**/pnpm-lock.yaml` leaves out every one. Dotfiles and files under dot directories match like any other.
+- **A directory needs `/**`.** `!docs` names only a file called `docs`; `!docs/**` leaves out everything under the directory.
 - **Booleans are `true` and `false`.** The file is YAML 1.2, where `yes`, `no`, `on` and `off` are strings, and a string where a boolean belongs makes the file invalid.
 - **A key with nothing under it is invalid.** `reviews:` with every line under it commented out reads as null, and so does a bare `model:`. Delete the key, or keep at least one setting under it.
 - **An unknown key is invalid**, under `reviews` or at the top level, so a typo such as `draft: true` is reported rather than silently ignored.
 
-An invalid file applies none of its settings: the review runs with the defaults, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`. The problem names its place in the file, as in `/reviews/auto must be boolean`; an unknown key reads as `/reviews/draft schema is false`. A file GitHub fails to serve gets the same note, the defaults for that review only, and a `config.unreadable` log. `review.start` in Workers Logs shows which applied: `config` is `missing`, `file`, `invalid` or `unreadable`.
+An invalid file applies none of its settings: the review runs with the defaults, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`, the problem set as code. It names its place in the file, as in `/reviews/auto must be boolean`; an unknown key reads as `/reviews/draft schema is false`. A file GitHub fails to serve gets the same note, the defaults for that review only, and a `config.unreadable` log. `review.start` in Workers Logs shows which applied: `config` is `missing`, `file`, `invalid` or `unreadable`.

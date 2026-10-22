@@ -1,4 +1,4 @@
-import { minimatch } from "minimatch"
+import { Minimatch } from "minimatch"
 import { Type, type Static } from "typebox"
 
 export type Side = "LEFT" | "RIGHT"
@@ -149,17 +149,22 @@ export function isGenerated(path: string): boolean {
   return GENERATED.some((pattern) => pattern.test(path))
 }
 
-export function isFiltered(path: string, patterns: readonly string[]): boolean {
-  return patterns.some((pattern) => minimatch(path, pattern.replace(FILTER_MARK, ""), FILTER_OPTIONS))
-}
+export const filterGlobs = (patterns: readonly string[]): Minimatch[] =>
+  patterns.map((pattern) => new Minimatch(pattern.replace(FILTER_MARK, ""), FILTER_OPTIONS))
 
-export function requiresWalkthrough(file: ChangedFile, patterns: readonly string[]): boolean {
-  return !isGenerated(file.filename) && !isFiltered(file.filename, patterns)
+export const isFiltered = (path: string, globs: readonly Minimatch[]): boolean => globs.some((glob) => glob.match(path))
+
+export function requiresWalkthrough(file: ChangedFile): boolean {
+  return !isGenerated(file.filename)
 }
 
 export function reviewableFiles(files: readonly ChangedFile[], patterns: readonly string[]): ChangedFile[] {
-  return files.filter((file) => !isFiltered(file.filename, patterns))
+  const globs = filterGlobs(patterns)
+  return files.filter((file) => !isFiltered(file.filename, globs))
 }
+
+export const everyFileFiltered = (files: readonly ChangedFile[], patterns: readonly string[]): boolean =>
+  files.length > 0 && reviewableFiles(files, patterns).length === 0
 
 export function renderPatches(
   files: readonly ChangedFile[],

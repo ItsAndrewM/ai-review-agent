@@ -111,7 +111,8 @@ export function renderSummaryComment(input: {
 
 function configNoteLines(error: string | undefined): string[] {
   if (error === undefined) return []
-  return ["", `_${CONFIG_FILE} was ignored: ${clipped(error, MOST_CONFIG_ERROR_CHARS)}; the defaults applied._`]
+  const problem = codeSpan(cut(flattened(error), MOST_CONFIG_ERROR_CHARS))
+  return ["", `_${CONFIG_FILE} was ignored: ${problem}; the defaults applied._`]
 }
 
 function sinceLines(since: SinceSection | undefined): string[] {
@@ -255,8 +256,11 @@ function heldBack(rejected: readonly Rejected[]): string | undefined {
 }
 
 function clipped(text: string, most: number): string {
-  const flat = oneLine(text)
-  return flat.length > most ? `${flat.slice(0, most)}…` : flat
+  return cut(oneLine(text), most)
+}
+
+function cut(text: string, most: number): string {
+  return text.length > most ? `${text.slice(0, most)}…` : text
 }
 
 function inlineSummary(event: Verdict, accepted: readonly FindingInput[]): string {
@@ -302,6 +306,10 @@ export function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
   return !unfounded && finding.severity === "blocking"
 }
 
+function flattened(text: string): string {
+  return text.replace(/\s+/g, " ").trim()
+}
+
 function oneLine(text: string): string {
-  return text.replace(/\s+/g, " ").replace(/\|/g, "\\|").trim()
+  return flattened(text).replace(/\|/g, "\\|")
 }

@@ -4,6 +4,7 @@ import {
   comparableText,
   deltaLines,
   markedLines,
+  reviewableFiles,
   type ChangedFile,
   type DeltaLines,
   type MarkedLines,
@@ -383,14 +384,21 @@ export function nothingToReview(scope: ReviewScope): boolean {
   return scope.mode === "incremental" && scope.covered.length === 0 && scope.recheck.length === 0
 }
 
+export const scopedFiles = (scope: ReviewScope, files: readonly ChangedFile[]): ChangedFile[] =>
+  reviewableFiles(files, scope.pathFilters ?? [])
+
+export async function filtersInForce(
+  scope: ReviewScope | undefined,
+  configured: () => Promise<readonly string[]>,
+): Promise<readonly string[]> {
+  return scope?.pathFilters ?? (await configured())
+}
+
 export function pathsNeedingRows(scope: ReviewScope, files: readonly ChangedFile[]): string[] {
-  const pathFilters = scope.pathFilters ?? []
-  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(files, pathFilters)
+  const reviewed = scopedFiles(scope, files)
+  if (scope.mode !== "incremental" || scope.from === undefined) return walkthroughPaths(reviewed)
   const covered = new Set(scope.covered.map((file) => file.path))
-  return walkthroughPaths(
-    files.filter((file) => covered.has(file.filename)),
-    pathFilters,
-  )
+  return walkthroughPaths(reviewed.filter((file) => covered.has(file.filename)))
 }
 
 export function promptFiles(

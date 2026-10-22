@@ -389,8 +389,8 @@ function commentSizeProblem(finding: FindingInput): string | undefined {
   return `comment longer than ${MAX_COMMENT_CHARS} characters, GitHub's limit`
 }
 
-export function walkthroughPaths(files: readonly ChangedFile[], pathFilters: readonly string[]): string[] {
-  return files.filter((file) => requiresWalkthrough(file, pathFilters)).map((file) => file.filename)
+export function walkthroughPaths(files: readonly ChangedFile[]): string[] {
+  return files.filter((file) => requiresWalkthrough(file)).map((file) => file.filename)
 }
 
 export function missingWalkthrough(submission: ReviewSubmissionInput, needed: readonly string[]): string[] {

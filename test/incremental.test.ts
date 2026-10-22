@@ -1,8 +1,14 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
-import { renderPatches, reviewableFiles, type ChangedFile } from "../src/github/diff.ts"
-import type { FindingInput, MergeDangerInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
+import { indexCommentableLines, renderPatches, reviewableFiles, type ChangedFile } from "../src/github/diff.ts"
+import {
+  validateFindings,
+  type FindingInput,
+  type MergeDangerInput,
+  type ReviewSubmissionInput,
+  type ValidatedReview,
+} from "../src/review/findings.ts"
 import {
   addressedThreads,
   applyDeltaPolicy,
@@ -19,9 +25,11 @@ import {
   pathsNeedingRows,
   planThreads,
   promptFiles,
+  filtersInForce,
   resolveThreads,
   ReviewedRecord,
   ReviewScope,
+  scopedFiles,
   stricterMergeDanger,
   submissionFromRecord,
   threadLists,
@@ -381,6 +389,56 @@ describe("path filters", () => {
     expect(covered.size).toBe(0)
     expect(nothingToReview(scope)).toBe(true)
     expect(promptFiles(shown, since, scope).others.map((file) => file.filename)).toEqual(["src/x.ts"])
+  })
+
+  it("give the scope's files, the ones its filters leave in, and every changed file for a scope stored before filters", () => {
+    const older = { deliveryId: "d", mode: "full" as const, covered: [], recheck: [], open: [], threadsKnown: false }
+    expect(scopedFiles({ ...older, pathFilters: filters }, prFiles).map((file) => file.filename)).toEqual(["src/x.ts"])
+    expect(scopedFiles(older, prFiles)).toEqual(prFiles)
+  })
+
+  it("in force are the review's own while one is in flight, and the config's otherwise, as in a chat turn", async () => {
+    const reads: string[] = []
+    const configured = async () => {
+      reads.push("config")
+      return ["!docs/**"]
+    }
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(await filtersInForce({ ...scope, pathFilters: filters }, configured)).toEqual(filters)
+    expect(await filtersInForce({ ...scope, pathFilters: [] }, configured)).toEqual([])
+    expect(reads).toEqual([])
+    expect(await filtersInForce(undefined, configured)).toEqual(["!docs/**"])
+    expect(reads).toEqual(["config"])
+  })
+
+  it("reject a finding on a filtered file as not a changed file, since the findings are checked against the scope's files", () => {
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "full",
+      from: undefined,
+      covered: new Map(),
+      threads: undefined,
+      pathFilters: filters,
+    })
+    const onFile = (path: string, quote: string): FindingInput => ({
+      path,
+      line: 1,
+      quote,
+      basis_kind: "defect",
+      basis: "a snapshot that no longer matches the component",
+      severity: "suggestion",
+      title: "t",
+      body: "b",
+    })
+    const { accepted, rejected } = validateFindings(
+      [onFile("src/x.ts", "y"), onFile("a.snap", "new")],
+      indexCommentableLines(scopedFiles(scope, prFiles)),
+      false,
+    )
+    expect(accepted.map((finding) => finding.path)).toEqual(["src/x.ts"])
+    expect(rejected.map(({ finding, reason }) => [finding.path, reason])).toEqual([
+      ["a.snap", 'path "a.snap" is not a changed file'],
+    ])
   })
 })
 
