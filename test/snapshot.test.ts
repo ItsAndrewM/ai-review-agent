@@ -75,6 +75,18 @@ describe("MemorySnapshotFiles", () => {
     expect([...snapshot.files()]).toHaveLength(1)
   })
 
+  it("lists file paths sorted without reading contents", () => {
+    const snapshot = new MemorySnapshotFiles()
+    snapshot.begin("abc123")
+    snapshot.add([
+      { path: "src/b.ts", content: "b" },
+      { path: "README.md", content: "r" },
+      { path: "src/a.ts", content: "a" },
+    ])
+    snapshot.leaveOut([{ path: "logo.png", reason: "binary" }])
+    expect([...snapshot.paths()]).toEqual(["README.md", "src/a.ts", "src/b.ts"])
+  })
+
   it("record is undefined until finish, and after begin", () => {
     const snapshot = new MemorySnapshotFiles()
     expect(snapshot.record()).toBeUndefined()

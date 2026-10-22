@@ -75,6 +75,12 @@ export class SqlSnapshotFiles implements SnapshotFiles {
     yield* this.sql.exec<{ path: string; content: string }>("SELECT path, content FROM snapshot_files ORDER BY path")
   }
 
+  *paths(): Iterable<string> {
+    for (const row of this.sql.exec<{ path: string }>("SELECT path FROM snapshot_files ORDER BY path")) {
+      yield row.path
+    }
+  }
+
   *leftOut(): Iterable<LeftOut> {
     const rows = this.sql.exec<{ path: string; reason: string }>(
       "SELECT path, reason FROM snapshot_left_out ORDER BY path",

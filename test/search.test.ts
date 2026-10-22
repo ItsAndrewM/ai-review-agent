@@ -7,6 +7,7 @@ import {
   MAX_MATCHES,
   MAX_PATTERN_CHARS,
   MAX_SEARCH_CALLS,
+  MAX_SEARCHED_LINE_CHARS,
   MAX_TREE_ENTRIES,
   patternProblem,
   tree,
@@ -36,7 +37,8 @@ describe("limits", () => {
       MAX_TREE_ENTRIES,
       DEFAULT_TREE_DEPTH,
       MAX_SEARCH_CALLS,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40])
+      MAX_SEARCHED_LINE_CHARS,
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 2_000])
   })
 })
 
@@ -207,6 +209,47 @@ describe("grep", () => {
     )
   })
 
+  it("finds a match within the first 2,000 characters of a very long line", () => {
+    const files = snapshotOf({ "min.js": `foo${"x".repeat(50_000)}\n` })
+    const answer = grep(files, { pattern: "foo" })
+    expect(answer).toContain("min.js:1: foo")
+    expect(answer).toContain("1 long line searched only in its first 2,000 characters.")
+  })
+
+  it("does not find a match that starts after character 2,000 of a line and says one long line was cut", () => {
+    const files = snapshotOf({ "min.js": `${"x".repeat(2_500)}foo\n` })
+    expect(grep(files, { pattern: "foo" })).toBe(
+      ["No match for /foo/ in 1 file.", "1 long line searched only in its first 2,000 characters."].join("\n"),
+    )
+  })
+
+  it("counts the long lines across the files searched", () => {
+    const long = `${"x".repeat(2_001)}\n`
+    const files = snapshotOf({ "a.js": long.repeat(2), "b.js": long, "c.js": "short\n" })
+    expect(grep(files, { pattern: "short" })).toBe(
+      ["c.js:1: short", "3 long lines searched only in their first 2,000 characters."].join("\n"),
+    )
+  })
+
+  it("does not count a line of exactly 2,000 characters as long", () => {
+    const files = snapshotOf({ "a.js": `${"x".repeat(2_000)}\n` })
+    expect(grep(files, { pattern: "x{2000}" })).not.toContain("long line")
+  })
+
+  it("keeps the long-line note inside the 12,000-character budget", () => {
+    const files = snapshotOf({ "a.ts": `${"x".repeat(250)}\n`.repeat(90), "b.js": `${"y".repeat(2_500)}\n` })
+    const answer = grep(files, { pattern: "x" })
+    expect(answer.length).toBeLessThanOrEqual(MAX_GREP_CHARS)
+    expect(answer).toContain("1 long line searched only")
+  })
+
+  it("answers a backtracking-prone pattern over one very long line in under a second", () => {
+    const files = snapshotOf({ "min.js": `xx foo ${"x".repeat(199_990)}\n` })
+    const started = performance.now()
+    grep(files, { pattern: ".*foo.*bar" })
+    expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
   it("refuses a pattern with a nested quantifier without searching", () => {
     const answer = grep(snapshotOf({ "a.ts": "aaaa\n" }), { pattern: "(a+)+" })
     expect(answer).toBe(patternProblem("(a+)+"))
@@ -220,12 +263,18 @@ describe("patternProblem", () => {
     expect(patternProblem("a".repeat(500))).toBeUndefined()
   })
 
-  it.each(["(a+)+", "(a*)*", String.raw`(\w+\s?)+`, "((a+)b)+", "(a+){2,}", "(?:a+)*"])(
-    "refuses the nested quantifier in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toContain("nested quantifier")
-    },
-  )
+  it.each([
+    "(a+)+",
+    "(a*)*",
+    String.raw`(\w+\s?)+`,
+    "((a+)b)+",
+    "(a+){2,}",
+    "(?:a+)*",
+    "(a{2,})+",
+    String.raw`(\d{1,3}\.?)+`,
+  ])("refuses the nested quantifier in %s", (pattern) => {
+    expect(patternProblem(pattern)).toContain("nested quantifier")
+  })
 
   it.each([
     "foo(bar)+",

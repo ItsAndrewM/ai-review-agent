@@ -15,6 +15,8 @@ export const DEFAULT_TREE_DEPTH = 2
 
 export const MAX_SEARCH_CALLS = 40
 
+export const MAX_SEARCHED_LINE_CHARS = 2_000
+
 export interface GrepQuery {
   pattern: string
   glob?: string
@@ -31,6 +33,7 @@ interface Found {
   overflowMatches: number
   overflowFiles: Set<string>
   searched: number
+  longLines: number
 }
 
 interface Compiled {
@@ -42,12 +45,12 @@ type Selector = (path: string) => boolean
 
 const GLOB_OPTIONS = { dot: true, matchBase: true }
 const MAX_EXAMPLE_PATHS = 10
-const NOTE_RESERVE = 120
+const NOTE_RESERVE = 240
 const REGEX_SPECIALS = ".*+?^${}()|[]\\"
 const LEADING_DOT_SLASH = /^(?:\.\/)+/
 const LEADING_SLASHES = /^\/+/
 const TRAILING_SLASHES = /\/+$/
-const QUANTIFIERS = "+*"
+const QUANTIFIERS = "+*{"
 const REPEATERS = "+*{"
 const ATOM = "a"
 
@@ -134,7 +137,7 @@ function compile(pattern: string): Compiled {
 function* lineHits(file: SnapshotFile, regex: RegExp): Generator<Hit> {
   for (const [index, raw] of file.content.split("\n").entries()) {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw
-    if (regex.test(line)) {
+    if (regex.test(line.slice(0, MAX_SEARCHED_LINE_CHARS))) {
       yield { path: file.path, text: `${file.path}:${index + 1}: ${line.slice(0, MAX_LINE_CHARS)}` }
     }
   }
@@ -151,12 +154,25 @@ function record(found: Found, file: SnapshotFile, regex: RegExp): void {
   }
 }
 
+function longLineCount(content: string): number {
+  if (content.length <= MAX_SEARCHED_LINE_CHARS) return 0
+  let count = 0
+  let start = 0
+  for (let end = content.indexOf("\n"); end !== -1; end = content.indexOf("\n", start)) {
+    if (end - start > MAX_SEARCHED_LINE_CHARS) count++
+    start = end + 1
+  }
+  return content.length - start > MAX_SEARCHED_LINE_CHARS ? count + 1 : count
+}
+
 function search(files: SnapshotFiles, selected: Selector, regex: RegExp): Found {
-  const found: Found = { hits: [], overflowMatches: 0, overflowFiles: new Set(), searched: 0 }
+  const found: Found = { hits: [], overflowMatches: 0, overflowFiles: new Set(), searched: 0, longLines: 0 }
   for (const file of files.files()) {
     if (!selected(file.path)) continue
     found.searched++
-    if (regex.test(file.content)) record(found, file, regex)
+    const longLines = longLineCount(file.content)
+    found.longLines += longLines
+    if (longLines > 0 || regex.test(file.content)) record(found, file, regex)
   }
   return found
 }
@@ -190,6 +206,12 @@ function resultText(found: Found, pattern: string, room: number): string {
 interface Examples {
   groups: string[]
   shown: number
+}
+
+function longLineNote(count: number): string {
+  if (count === 0) return ""
+  const [subject, pronoun] = count === 1 ? ["long line", "its"] : ["long lines", "their"]
+  return `${count} ${subject} searched only in ${pronoun} first ${MAX_SEARCHED_LINE_CHARS.toLocaleString("en-US")} characters.`
 }
 
 function exampleGroups(chosen: readonly LeftOut[]): Examples {
@@ -226,8 +248,9 @@ export function grep(files: SnapshotFiles, query: GrepQuery): string {
   const opening = literal ? literalNote(query.pattern) : ""
   const closing = leftOutNote(files.leftOut(), selected)
   const room = MAX_GREP_CHARS - opening.length - closing.length - NOTE_RESERVE
-  const body = resultText(search(files, selected, regex), query.pattern, room)
-  return [opening, body, closing].filter((part) => part !== "").join("\n")
+  const found = search(files, selected, regex)
+  const body = resultText(found, query.pattern, room)
+  return [opening, body, longLineNote(found.longLines), closing].filter((part) => part !== "").join("\n")
 }
 
 interface Listed {
@@ -236,7 +259,7 @@ interface Listed {
 }
 
 function* listed(files: SnapshotFiles): Generator<Listed> {
-  for (const file of files.files()) yield { path: file.path, note: "" }
+  for (const path of files.paths()) yield { path, note: "" }
   for (const entry of files.leftOut()) yield { path: entry.path, note: ` (left out: ${entry.reason})` }
 }
 

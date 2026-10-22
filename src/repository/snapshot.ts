@@ -84,6 +84,7 @@ export interface SnapshotFiles {
   read(path: string): string | undefined
   reasonFor(path: string): LeftOutReason | undefined
   files(): Iterable<SnapshotFile>
+  paths(): Iterable<string>
   leftOut(): Iterable<LeftOut>
   has(path: string): boolean
   drop(): boolean
@@ -130,6 +131,10 @@ export class MemorySnapshotFiles implements SnapshotFiles {
 
   files(): Iterable<SnapshotFile> {
     return [...this.contents].map(([path, content]) => ({ path, content })).sort(byPath)
+  }
+
+  paths(): Iterable<string> {
+    return [...this.contents.keys()].sort()
   }
 
   leftOut(): Iterable<LeftOut> {
