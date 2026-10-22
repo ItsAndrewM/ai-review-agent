@@ -250,6 +250,14 @@ describe("grep", () => {
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
+  it("answers a pattern that spans lines over 20,000 short lines in under a second with no match", () => {
+    const files = snapshotOf({ "big.txt": "foo line\n".repeat(20_000) })
+    const started = performance.now()
+    const answer = grep(files, { pattern: String.raw`[\s\S]*foo[\s\S]*bar` })
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(answer).toBe("No match for /[\\s\\S]*foo[\\s\\S]*bar/ in 1 file.")
+  })
+
   it("refuses a pattern with a nested quantifier without searching", () => {
     const answer = grep(snapshotOf({ "a.ts": "aaaa\n" }), { pattern: "(a+)+" })
     expect(answer).toBe(patternProblem("(a+)+"))

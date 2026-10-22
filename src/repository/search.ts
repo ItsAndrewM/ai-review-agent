@@ -170,9 +170,8 @@ function search(files: SnapshotFiles, selected: Selector, regex: RegExp): Found 
   for (const file of files.files()) {
     if (!selected(file.path)) continue
     found.searched++
-    const longLines = longLineCount(file.content)
-    found.longLines += longLines
-    if (longLines > 0 || regex.test(file.content)) record(found, file, regex)
+    found.longLines += longLineCount(file.content)
+    record(found, file, regex)
   }
   return found
 }
