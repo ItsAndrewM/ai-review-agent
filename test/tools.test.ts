@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import {
+  changedFilesText,
   createReviewExtension,
   grepText,
   readFileText,
@@ -52,6 +53,7 @@ const host = {
   github: async () => new GitHubClient("token", "https://api.example", fakeFetch),
   pullRequest: async () => pr,
   changedFiles: async () => [],
+  pathFilters: async () => [],
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
@@ -99,6 +101,27 @@ function hostWith(options: { snapshot?: SnapshotFiles; search?: SearchAccess }) 
   } satisfies ReviewHost
   return { host: wired, requested, searched }
 }
+
+describe("changedFilesText", () => {
+  const files = [
+    { filename: "src/x.ts", status: "modified", additions: 3, deletions: 1 },
+    { filename: "test/__snapshots__/x.test.ts.snap", status: "added", additions: 40, deletions: 0 },
+  ]
+
+  it("lists each changed file with its status and counts, and marks the ones path_filters leave out", async () => {
+    const filtering = { ...host, changedFiles: async () => files, pathFilters: async () => ["!**/*.snap"] }
+    expect(await changedFilesText(filtering)).toBe(
+      "modified  +3 -1  src/x.ts\nadded     +40 -0  test/__snapshots__/x.test.ts.snap (filtered)",
+    )
+  })
+
+  it("marks nothing when no filter applies, and says so when nothing changed", async () => {
+    expect(await changedFilesText({ ...host, changedFiles: async () => files })).toBe(
+      "modified  +3 -1  src/x.ts\nadded     +40 -0  test/__snapshots__/x.test.ts.snap",
+    )
+    expect(await changedFilesText(host)).toBe("(no files)")
+  })
+})
 
 describe("createReviewExtension", () => {
   it("offers the model six tools, with submit_review last", () => {

@@ -19,11 +19,31 @@ import {
   type ReviewThread,
   type UpdateCheckRun,
 } from "./github/client.ts"
-import { indexCommentableLines, type ChangedFile, type MarkedLines } from "./github/diff.ts"
+import { indexCommentableLines, reviewableFiles, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
+import {
+  CONFIG_PREFIX,
+  configKey,
+  configReadOf,
+  configStatus,
+  isCacheable,
+  pullRequestFacts,
+  readConfig,
+  requestChangesWorkflow,
+  reviewTrigger,
+  runSettings,
+  shouldReview,
+  staleConfigKeys,
+  StoredConfig,
+  storedConfig,
+  type AndabotConfig,
+  type ConfigRead,
+  type ConfigStatus,
+  type SkipReason,
+} from "./repository/config.ts"
 import {
   CONTEXT_PREFIX,
   contextInputs,
@@ -37,6 +57,7 @@ import {
   type RepositoryContext,
   type ReviewStandards,
 } from "./repository/context.ts"
+import type { PathInstruction } from "./repository/instructions.ts"
 import { loadSnapshot } from "./repository/load-snapshot.ts"
 import { SnapshotRuns, snapshotSource } from "./repository/snapshot-host.ts"
 import type { SnapshotFiles } from "./repository/snapshot.ts"
@@ -44,7 +65,10 @@ import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   checksState,
   decideApproval,
+  evaluatedApprovalOf,
   evaluatesAfterReview,
+  evaluatesReviewedHead,
+  evaluationWorkflow,
   LastReview,
   lastReviewOf,
   openBlockingIn,
@@ -96,11 +120,13 @@ import {
   coveredFiles,
   coveredMap,
   deltaScopeOf,
+  filtersInForce,
   findingRecords,
   freshScope,
   nextReviewed,
   nothingToReview,
   openBlockingAfter,
+  pathFiltersSkip,
   pathsChangedSince,
   pathsNeedingRows,
   planThreads,
@@ -108,9 +134,11 @@ import {
   resolveThreads,
   ReviewedRecord,
   ReviewScope,
+  scopedFiles,
   StoredFinding,
   submissionFromRecord,
   threadLists,
+  withFilteredUnfounded,
   type OpenThread,
   type ReviewMode,
   type ReviewPlan,
@@ -192,6 +220,8 @@ type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
 type Replacement = Extract<FlightDecision, { kind: "replace" }>
 type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
+type HeadSkip = "not_open" | "superseded" | "already_reviewed"
+type SettingsSkip = SkipReason | "path_filters"
 
 interface Attribution {
   model: string
@@ -211,6 +241,8 @@ interface ReviewRun {
   staleBuild: boolean
   callerBuild: string | undefined
   skillsFingerprint: string
+  config: AndabotConfig
+  configStatus: ConfigStatus
 }
 
 type ReviewSource = "tool" | "text" | "retry" | "retry_text"
@@ -325,6 +357,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.#snapshot
   }
 
+  async pathFilters(): Promise<readonly string[]> {
+    const pending = await this.readPending()
+    const stored = await this.ctx.storage.get("scope")
+    const inFlight = Value.Check(ReviewScope, stored) && stored.deliveryId === pending?.deliveryId ? stored : undefined
+    return filtersInForce(inFlight, async () => {
+      const { config } = await this.repositoryConfig(await this.pullRequest())
+      return config.reviews.path_filters
+    })
+  }
+
   async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
     const pending = await this.readPending()
     if (!pending) return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
@@ -366,7 +408,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const files = await this.changedFiles()
     const scope = await this.scopeFor(pending.deliveryId)
     const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
-    const validated = validateFindings(submission.findings, indexCommentableLines(files), hasLinkedIssues)
+    const validated = withFilteredUnfounded(
+      validateFindings(submission.findings, indexCommentableLines(scopedFiles(scope, files)), hasLinkedIssues),
+      scope,
+    )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
     log("review.findings", {
@@ -412,7 +457,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       pr,
       addressedThreads(submission.addressed_threads, scope.recheck).resolve,
     )
-    const verdict = await this.reviewVerdict(pr, submission, scoped, openBlockingAfter(scope, resolved))
+    const workflow = requestChangesWorkflow(pending.requestChangesWorkflow, this.env.REQUEST_CHANGES_WORKFLOW)
+    const verdict = await this.reviewVerdict(pr, submission, scoped, openBlockingAfter(scope, resolved), workflow)
     const event = reviewEventOf(verdict)
     const key = await this.key()
     const github = await this.github()
@@ -440,6 +486,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       linkedIssues: pending.linkedIssues ?? [],
       instructionFiles: pending.instructionFiles ?? [],
       since: reviewed.since,
+      configError: pending.configError,
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
@@ -462,6 +509,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         verdict: submission.verdict,
         rejected: scoped.rejected,
         at: Date.now(),
+        requestChangesWorkflow: workflow,
       }),
     )
     await this.replyFixed(pr, resolved)
@@ -497,8 +545,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     submission: ReviewSubmissionInput,
     scoped: ScopedReview,
     openBlocking: number | "unknown",
+    workflow: boolean,
   ): Promise<Verdict> {
-    const workflow = this.env.REQUEST_CHANGES_WORKFLOW === "true"
     const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
     const checks = event === "APPROVE" ? await this.checksOn(pr.head.sha) : undefined
     return verdictAfterChecks(event, checks)
@@ -571,23 +619,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#runs.dropStale(incoming.key.number)
     const staleBuild = isOlder(this.version(), callerVersion)
     const pr = await this.freshPullRequest()
-    if (pr.state !== "open") {
-      log("review.skip", { reason: "not_open", state: pr.state, number: pr.number })
-      return "not_open"
-    }
-    if (pr.head.sha !== incoming.headSha) {
-      log("review.skip", {
-        reason: "superseded",
-        was: shortSha(incoming.headSha),
-        now: shortSha(pr.head.sha),
-        number: pr.number,
-      })
-      return "superseded"
-    }
-    if (!incoming.full && (await this.isPosted(pr))) {
-      log("review.skip", { reason: "already_reviewed", head: shortSha(pr.head.sha), number: pr.number })
-      return "already_reviewed"
-    }
+    const headSkip = await this.headSkip(pr, incoming)
+    if (headSkip !== undefined) return headSkip
+    const read = await this.repositoryConfig(pr)
+    const settingsSkip = await this.settingsSkip(pr, incoming, read)
+    if (settingsSkip !== undefined) return settingsSkip
     const skillsFingerprint = (await bundledSkills()).fingerprint
     const flight = await this.clearFlight(pr.head.sha)
     if (flight.kind === "skip") {
@@ -602,6 +638,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       staleBuild,
       callerBuild: callerVersion?.id,
       skillsFingerprint,
+      config: read.config,
+      configStatus: configStatus(read),
     }
     await this.ctx.storage.put<PendingReview>("pending", {
       headSha: pr.head.sha,
@@ -610,10 +648,50 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       started: run.started,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
+      ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW),
       ...(await this.usageBaseline()),
     })
     await this.runReview(pr, incoming, run)
     return undefined
+  }
+
+  private async headSkip(pr: PullRequestInfo, incoming: ReviewIncoming): Promise<HeadSkip | undefined> {
+    if (pr.state !== "open") {
+      log("review.skip", { reason: "not_open", state: pr.state, number: pr.number })
+      return "not_open"
+    }
+    if (pr.head.sha !== incoming.headSha) {
+      log("review.skip", {
+        reason: "superseded",
+        was: shortSha(incoming.headSha),
+        now: shortSha(pr.head.sha),
+        number: pr.number,
+      })
+      return "superseded"
+    }
+    if (incoming.full || !(await this.isPosted(pr))) return undefined
+    log("review.skip", { reason: "already_reviewed", head: shortSha(pr.head.sha), number: pr.number })
+    if (evaluatesReviewedHead(pr, reviewTrigger(incoming))) {
+      await this.evaluateApproval("already_reviewed", incoming.deliveryId)
+    }
+    return "already_reviewed"
+  }
+
+  private async settingsSkip(
+    pr: PullRequestInfo,
+    incoming: ReviewIncoming,
+    read: ConfigRead,
+  ): Promise<SettingsSkip | undefined> {
+    const decision = shouldReview(read.config, pullRequestFacts(pr), reviewTrigger(incoming))
+    const reason = decision.review ? await this.filesSkip(read.config) : decision.reason
+    if (reason !== undefined) {
+      log("review.skip", { reason, head: shortSha(pr.head.sha), number: pr.number, config: configStatus(read) })
+    }
+    return reason
+  }
+
+  private async filesSkip(config: AndabotConfig): Promise<"path_filters" | undefined> {
+    return pathFiltersSkip(config.reviews.path_filters, () => this.changedFiles())
   }
 
   private async clearFlight(headSha: string): Promise<FlightDecision> {
@@ -682,10 +760,45 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, linkedIssues })
   }
 
-  private async repositoryStandards(pr: PullRequestInfo, files: readonly ChangedFile[]): Promise<ReviewStandards> {
+  private async repositoryStandards(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    pathInstructions: readonly PathInstruction[],
+  ): Promise<ReviewStandards> {
     const { baseSha, changed } = contextInputs(pr, files)
     const context = await this.repositoryContext(pr.number, baseSha, changed)
-    return reviewStandards(context, changed, [])
+    return reviewStandards(context, changed, pathInstructions)
+  }
+
+  private async repositoryConfig(pr: PullRequestInfo): Promise<ConfigRead> {
+    const baseSha = pr.base.sha
+    const cached = await this.cachedConfig(baseSha)
+    if (cached !== undefined) return cached
+    const fields = { number: pr.number, base: shortSha(baseSha) }
+    const read = await readConfig(await this.github(), await this.key(), baseSha, (error) =>
+      logError("config.unreadable", { ...fields, error }),
+    )
+    if (isCacheable(read)) await this.cacheConfig(baseSha, read)
+    return read
+  }
+
+  private async cachedConfig(baseSha: string): Promise<ConfigRead | undefined> {
+    const key = configKey(baseSha)
+    const stored = await this.ctx.storage.get(key)
+    if (Value.Check(StoredConfig, stored)) return configReadOf(stored)
+    if (stored !== undefined) await this.ctx.storage.delete(key)
+    return undefined
+  }
+
+  private async cacheConfig(baseSha: string, read: ConfigRead): Promise<void> {
+    try {
+      const listed = await this.ctx.storage.list({ prefix: CONFIG_PREFIX })
+      const stale = staleConfigKeys([...listed.keys()], baseSha)
+      if (stale.length > 0) await this.ctx.storage.delete(stale)
+      await this.ctx.storage.put(configKey(baseSha), storedConfig(baseSha, read))
+    } catch (error) {
+      logError("config.uncached", { base: shortSha(baseSha), error: errorText(error) })
+    }
   }
 
   private async repositoryContext(
@@ -737,15 +850,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
       await this.recordLinkedIssues(run.deliveryId, issues)
-      const standards = await this.repositoryStandards(pr, files)
+      const standards = await this.repositoryStandards(pr, files, run.config.reviews.path_instructions)
       await this.recordInstructionFiles(run.deliveryId, standards.used)
-      const { scope, since } = await this.planReview(pr, files, incoming, run)
-      const prompt = promptFor(pr, files, scope, since, issues)
+      const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
+      const { scope, since } = await this.planReview(pr, reviewable, incoming, run)
+      const prompt = promptFor(pr, reviewable, scope, since, issues)
       log("review.start", {
         number: pr.number,
         head: shortSha(pr.head.sha),
         base: shortSha(pr.base.sha),
+        config: run.configStatus,
         files: files.length,
+        filesFiltered: files.length - reviewable.length,
         linkedIssues: issues.length,
         instructionFiles: standards.used.length,
         standardsCut: standards.cut.length,
@@ -811,7 +927,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const covered = coveredFiles(files, since)
     const threads = await this.threadPlan(pr, mode, covered, since)
     const changed = pathsChangedSince(files, since)
-    const scope = buildScope({ deliveryId: run.deliveryId, mode, from: reviewed?.headSha, covered, threads, changed })
+    const scope = buildScope({
+      deliveryId: run.deliveryId,
+      mode,
+      from: reviewed?.headSha,
+      covered,
+      threads,
+      changed,
+      pathFilters: run.config.reviews.path_filters,
+    })
     if (await this.ownsPending(run.deliveryId)) await this.ctx.storage.put<ReviewScope>("scope", scope)
     return { scope, since }
   }
@@ -1150,14 +1274,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async approvalState(pr: PullRequestInfo): Promise<ApprovalState> {
+    const lastReview = await this.readLastReview()
     return {
-      workflow: this.env.REQUEST_CHANGES_WORKFLOW === "true",
+      workflow: await evaluationWorkflow(
+        lastReview,
+        () => this.repositoryConfig(pr),
+        this.env.REQUEST_CHANGES_WORKFLOW,
+      ),
       paused: await this.isPaused(),
       open: pr.state === "open" && pr.draft !== true,
       reviewInFlight: (await this.readPending()) !== undefined,
       headSha: pr.head.sha,
       reviewedHead: (await this.readReviewed())?.headSha,
-      lastReview: await this.readLastReview(),
+      lastReview,
       openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), [])),
       checks: await this.checksOn(pr.head.sha),
     }
@@ -1204,13 +1333,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       body: approvalBody(head),
       comments: [],
     })
-    await this.ctx.storage.put<LastReview>("lastReview", {
-      reviewId: review.id,
-      event: "APPROVE",
-      headSha: head,
-      heldBack: 0,
-      at: Date.now(),
-    })
+    await this.ctx.storage.put<LastReview>(
+      "lastReview",
+      evaluatedApprovalOf({ reviewId: review.id, headSha: head, at: Date.now() }),
+    )
     await this.rewriteSummaryVerdict(head)
     log("approval.posted", { ...context, review: review.id })
   }

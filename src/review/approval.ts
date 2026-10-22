@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
+import { configStatus, requestChangesWorkflow, type ConfigRead, type ReviewTrigger } from "../repository/config.ts"
 import { countBySeverity, type FindingInput, type Rejected, type ReviewSubmissionInput } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
 import { holdsApprovalBack, type Verdict } from "./render.ts"
@@ -13,17 +14,21 @@ export const LastReview = Type.Object({
   ),
   heldBack: Type.Integer(),
   at: Type.Integer(),
+  requestChangesWorkflow: Type.Optional(Type.Boolean()),
 })
 
 export type LastReview = Static<typeof LastReview>
 
 export type ChecksState = "passing" | "pending" | "failing" | "unknown"
 
+export type WorkflowState = boolean | "unknown"
+
 export type WebhookTrigger = "thread_resolved" | "thread_unresolved" | "checks_completed"
 
-export type ApprovalTrigger = WebhookTrigger | "review"
+export type ApprovalTrigger = WebhookTrigger | "review" | "already_reviewed"
 
 export type DecidedWait =
+  | "workflow_unknown"
   | "workflow_off"
   | "paused"
   | "not_open"
@@ -43,7 +48,7 @@ export type WaitReason = DecidedWait | "head_moved" | "approving"
 export type ApprovalDecision = { kind: "approve" } | { kind: "wait"; reason: DecidedWait }
 
 export interface ApprovalState {
-  workflow: boolean
+  workflow: WorkflowState
   paused: boolean
   open: boolean
   reviewInFlight: boolean
@@ -61,6 +66,18 @@ export interface ReviewFacts {
   verdict: ReviewSubmissionInput["verdict"]
   rejected: readonly Rejected[]
   at: number
+  requestChangesWorkflow: boolean
+}
+
+export interface EvaluatedApproval {
+  reviewId: number
+  headSha: string
+  at: number
+}
+
+export interface PullRequestStanding {
+  state: string
+  draft?: boolean | undefined
 }
 
 const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"])
@@ -71,6 +88,7 @@ export function decideApproval(state: ApprovalState): ApprovalDecision {
 }
 
 function pullRequestWait(state: ApprovalState): DecidedWait | undefined {
+  if (state.workflow === "unknown") return "workflow_unknown"
   if (!state.workflow) return "workflow_off"
   if (state.paused) return "paused"
   if (!state.open) return "not_open"
@@ -134,7 +152,30 @@ export function lastReviewOf(facts: ReviewFacts): LastReview {
     verdict: facts.verdict,
     heldBack: facts.rejected.filter(holdsApprovalBack).length,
     at: facts.at,
+    requestChangesWorkflow: facts.requestChangesWorkflow,
   }
+}
+
+export function evaluatedApprovalOf({ reviewId, headSha, at }: EvaluatedApproval): LastReview {
+  return { reviewId, event: "APPROVE", headSha, heldBack: 0, at, requestChangesWorkflow: true }
+}
+
+export function workflowUnder(read: ConfigRead, variable: string | undefined): WorkflowState {
+  if (configStatus(read) === "unreadable") return "unknown"
+  return requestChangesWorkflow(read.config.reviews.request_changes_workflow, variable)
+}
+
+export async function evaluationWorkflow(
+  last: LastReview | undefined,
+  readConfig: () => Promise<ConfigRead>,
+  variable: string | undefined,
+): Promise<WorkflowState> {
+  if (last?.requestChangesWorkflow !== undefined) return last.requestChangesWorkflow
+  return workflowUnder(await readConfig(), variable)
+}
+
+export function evaluatesReviewedHead(pr: PullRequestStanding, trigger: ReviewTrigger): boolean {
+  return trigger === "push" && pr.state === "open" && pr.draft !== true
 }
 
 export function verdictAfterChecks(event: ReviewEvent, checks: ChecksState | undefined): Verdict {

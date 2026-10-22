@@ -2,10 +2,14 @@ import { describe, expect, it } from "vitest"
 import {
   commentableLines,
   deltaLines,
+  everyFileFiltered,
+  filterGlobs,
+  isFiltered,
   isGenerated,
   markedLines,
   renderPatches,
   requiresWalkthrough,
+  reviewableFiles,
 } from "../src/github/diff.ts"
 
 const patch = [
@@ -172,6 +176,48 @@ describe("isGenerated", () => {
   })
 })
 
+describe("filterGlobs and isFiltered", () => {
+  const filtered = (path: string, patterns: readonly string[]) => isFiltered(path, filterGlobs(patterns))
+
+  it("compiles each pattern once, without its leading !", () => {
+    expect(filterGlobs(["!**/*.snap", "!dist/**"]).map((glob) => glob.pattern)).toEqual(["**/*.snap", "dist/**"])
+  })
+
+  it("leaves out the root lock file with !pnpm-lock.yaml, and a nested one only with a **/ glob", () => {
+    expect(filtered("pnpm-lock.yaml", ["!pnpm-lock.yaml"])).toBe(true)
+    expect(filtered("apps/web/pnpm-lock.yaml", ["!pnpm-lock.yaml"])).toBe(false)
+    expect(filtered("apps/web/pnpm-lock.yaml", ["!**/pnpm-lock.yaml"])).toBe(true)
+  })
+
+  it("leaves out a snapshot in any directory with !**/*.snap, and nothing that only resembles one", () => {
+    for (const path of ["a.snap", "test/__snapshots__/route.test.ts.snap"])
+      expect(filtered(path, ["!**/*.snap"])).toBe(true)
+    for (const path of ["a.snap.ts", "src/snap.ts", "snap"]) expect(filtered(path, ["!**/*.snap"])).toBe(false)
+  })
+
+  it("matches dotfiles and paths through dot directories", () => {
+    expect(filtered(".storybook/__snapshots__/b.snap", ["!**/*.snap"])).toBe(true)
+    expect(filtered("docs/.vitepress/config.ts", ["!docs/**"])).toBe(true)
+    expect(filtered(".env.example", ["!*.example"])).toBe(true)
+  })
+
+  it("reads a doubled !! as a literal !, never as a negation that would leave out everything else", () => {
+    expect(filtered("!foo", ["!!foo"])).toBe(true)
+    for (const path of ["foo", "src/index.ts", ".env"]) expect(filtered(path, ["!!foo"])).toBe(false)
+  })
+
+  it("needs /** to leave out a directory's files, since !docs names only a file called docs", () => {
+    expect(filtered("docs/guide.md", ["!docs"])).toBe(false)
+    expect(filtered("docs/guide.md", ["!docs/**"])).toBe(true)
+  })
+
+  it("leaves out a path any one pattern matches, and none when there is no pattern", () => {
+    expect(filtered("dist/a.js", ["!**/*.snap", "!dist/**"])).toBe(true)
+    expect(filtered("src/index.ts", ["!**/*.snap", "!dist/**"])).toBe(false)
+    expect(filtered("src/index.ts", [])).toBe(false)
+  })
+})
+
 describe("requiresWalkthrough", () => {
   it("asks for a row on a source file and on a binary file with no patch, not on a lock file", () => {
     const source = { filename: "src/index.ts", status: "modified", additions: 1, deletions: 0, patch }
@@ -180,5 +226,48 @@ describe("requiresWalkthrough", () => {
     expect(requiresWalkthrough(source)).toBe(true)
     expect(requiresWalkthrough(binary)).toBe(true)
     expect(requiresWalkthrough(lock)).toBe(false)
+  })
+})
+
+const changedFile = (filename: string) => ({
+  filename,
+  status: "modified",
+  additions: 1,
+  deletions: 0,
+  patch: "@@ -1 +1 @@\n-x\n+y",
+})
+
+describe("reviewableFiles", () => {
+  const files = ["src/index.ts", "a.snap", "pnpm-lock.yaml", "docs/guide.md"].map(changedFile)
+
+  it("takes a.snap out with !**/*.snap and leaves the changed files it was given whole", () => {
+    const changedFiles = [changedFile("src/x.ts"), changedFile("a.snap")]
+    expect(reviewableFiles(changedFiles, ["!**/*.snap"]).map((file) => file.filename)).toEqual(["src/x.ts"])
+    expect(changedFiles.map((file) => file.filename)).toEqual(["src/x.ts", "a.snap"])
+  })
+
+  it("keeps, in diff order, the files no path filter leaves out, a generated file the filters spare included", () => {
+    expect(reviewableFiles(files, ["!**/*.snap", "!docs/**"]).map((file) => file.filename)).toEqual([
+      "src/index.ts",
+      "pnpm-lock.yaml",
+    ])
+  })
+
+  it("keeps every file when there is no filter", () => {
+    expect(reviewableFiles(files, [])).toEqual(files)
+  })
+})
+
+describe("everyFileFiltered", () => {
+  const files = ["a.snap", "b/c.snap"].map(changedFile)
+
+  it("holds when the filters leave out every changed file", () => {
+    expect(everyFileFiltered(files, ["!**/*.snap"])).toBe(true)
+  })
+
+  it("doesn't hold while one file is left, with no filter, or with no changed file at all", () => {
+    expect(everyFileFiltered([...files, changedFile("src/x.ts")], ["!**/*.snap"])).toBe(false)
+    expect(everyFileFiltered(files, [])).toBe(false)
+    expect(everyFileFiltered([], ["!**/*.snap"])).toBe(false)
   })
 })

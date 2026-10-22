@@ -1,7 +1,7 @@
 import { Type } from "@earendil-works/pi-ai"
 import { defineExtension, defineTool, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
-import type { ChangedFile } from "../github/diff.ts"
+import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
 import { grep, MAX_SEARCH_CALLS, patternProblem, tree } from "../repository/search.ts"
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
@@ -23,6 +23,7 @@ export interface ReviewHost {
   github(): Promise<GitHubClient>
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
+  pathFilters(): Promise<readonly string[]>
   submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
   loadedSnapshot(): SnapshotFiles | undefined
@@ -49,15 +50,12 @@ export function createReviewExtension(host: ReviewHost): Extension {
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
-    description: "List the files the pull request changes, with status and line counts.",
+    description:
+      "List the files the pull request changes, with status and line counts. A file marked (filtered) is left out of the review by the repository's .andabot.yaml path_filters: it needs no walkthrough row, and a finding on it is dropped.",
     parameters: Type.Object({}),
     replay: "safe",
     async execute() {
-      const files = await host.changedFiles()
-      return text(
-        files.map((f) => `${f.status.padEnd(9)} +${f.additions} -${f.deletions}  ${f.filename}`).join("\n") ||
-          "(no files)",
-      )
+      return text(await changedFilesText(host))
     },
   })
 
@@ -181,6 +179,15 @@ function searchRefusal(access: Exclude<SearchAccess, { kind: "ready" }>): string
     return `Search budget spent: ${MAX_SEARCH_CALLS} grep and tree calls this review. Use read_file.`
   }
   return `Repository search is unavailable for this review: ${access.reason}. Use read_file.`
+}
+
+export async function changedFilesText(host: ReviewHost): Promise<string> {
+  const globs = filterGlobs(await host.pathFilters())
+  const line = (file: ChangedFile): string => {
+    const mark = isFiltered(file.filename, globs) ? " (filtered)" : ""
+    return `${file.status.padEnd(9)} +${file.additions} -${file.deletions}  ${file.filename}${mark}`
+  }
+  return (await host.changedFiles()).map(line).join("\n") || "(no files)"
 }
 
 export async function readIssue(host: ReviewHost, number: number): Promise<string> {

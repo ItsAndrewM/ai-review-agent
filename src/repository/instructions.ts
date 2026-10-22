@@ -3,6 +3,7 @@ import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { parse } from "yaml"
 import type { TreeEntry } from "../github/client.ts"
+import { CONFIG_FILE } from "./config.ts"
 
 export type StandardSource = "path_instructions" | "instructions" | "nested" | "root"
 
@@ -25,7 +26,6 @@ export interface PathInstruction {
 
 export const MAX_STANDARDS_CHARS = 12_000
 
-const CONFIG_FILE = ".andabot.yaml"
 const HEADING = "## Repository standards"
 const INSTRUCTIONS_SUFFIX = ".instructions.md"
 const GLOB_OPTIONS = { dot: true }
