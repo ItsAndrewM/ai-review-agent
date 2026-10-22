@@ -1393,6 +1393,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       {
         instructions: renderSkillWithResources(skill, [mergeDanger]),
         thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
+        extensions: [],
         modelTools: [],
       },
       BACKGROUND_CONTEXT,
