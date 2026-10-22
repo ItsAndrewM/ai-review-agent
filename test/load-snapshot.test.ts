@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 import type { BlobText, ListedEntry, TreeListing } from "../src/github/client.ts"
-import { loadSnapshot, type SnapshotSource } from "../src/repository/load-snapshot.ts"
+import { ADD_BATCH_BYTES, ADD_BATCH_FILES, loadSnapshot, type SnapshotSource } from "../src/repository/load-snapshot.ts"
 import { MemorySnapshotFiles, SNAPSHOT_LIMITS, type SnapshotLimits } from "../src/repository/snapshot.ts"
 import { streamOf, tarOf, type TarEntry } from "./tar-archive.ts"
 
@@ -322,6 +322,87 @@ describe("loadSnapshot", () => {
     await loadSnapshot(fake.source, files, SHA)
 
     expect(batches).toEqual([200, 200, 50])
+  })
+
+  it("flushes a batch before it would pass 8 MB of pending text", async () => {
+    const entries = Array.from({ length: 12 }, (_, index) => file(`big${index}.txt`, "x".repeat(1_048_576)))
+    const fake = fakeSource({ tarballs: [await tarballOf(entries)] })
+    const batches: { files: number; bytes: number }[] = []
+    const files = new MemorySnapshotFiles()
+    const add = files.add.bind(files)
+    files.add = (batch) => {
+      batches.push({ files: batch.length, bytes: batch.reduce((sum, item) => sum + item.content.length, 0) })
+      add(batch)
+    }
+
+    const record = await loadSnapshot(fake.source, files, SHA)
+
+    expect(ADD_BATCH_FILES).toBe(200)
+    expect(ADD_BATCH_BYTES).toBe(8_388_608)
+    expect(record.files).toBe(12)
+    expect(batches.map((batch) => batch.files)).toEqual([8, 4])
+    expect(batches.every((batch) => batch.bytes <= ADD_BATCH_BYTES)).toBe(true)
+  })
+
+  it("keeps the snapshot and leaves the wanted paths out as unreadable when the gap fill fails", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([file("a.ts", "a\n")])],
+      listing: async () => ({ entries: [blob("a.ts"), blob("x.ts"), blob("y.ts"), blob("z.ts")], truncated: false }),
+    })
+    const failing = { ...fake.source, blobs: async () => Promise.reject(new Error("GraphQL returned 502")) }
+    const files = new MemorySnapshotFiles()
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined)
+
+    const record = await loadSnapshot(failing, files, SHA)
+
+    logged.mockRestore()
+    expect(record).toMatchObject({ files: 1, gapFilled: 0, leftOut: { unreadable: 3 } })
+    expect(files.record()).toEqual(record)
+    expect(files.reasonFor("y.ts")).toBe("unreadable")
+    expect(files.read("a.ts")).toBe("a\n")
+  })
+
+  it("leaves a gap-filled text longer than the file limit out as too_large", async () => {
+    const fake = fakeSource({
+      tarballs: [await tarballOf([])],
+      listing: async () => ({ entries: [blob("long.sql", 10), blob("ok.sql", 10)], truncated: false }),
+      blobs: () => [
+        { path: "long.sql", text: "é".repeat(60) },
+        { path: "ok.sql", text: "ok\n" },
+      ],
+    })
+    const files = new MemorySnapshotFiles()
+
+    const record = await loadSnapshot(fake.source, files, SHA, lowered({ maxFileBytes: 100 }))
+
+    expect(files.reasonFor("long.sql")).toBe("too_large")
+    expect(record).toMatchObject({ files: 1, gapFilled: 1, leftOut: { too_large: 1 } })
+  })
+
+  it("cancels the tarball once the snapshot cap is reached", async () => {
+    const bytes = await gzippedTarball([file("a.ts", "a\n"), file("b.ts", "b\n"), file("c.ts", "c\n")])
+    let cancelled = false
+    let offset = 0
+    const open = async () =>
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (offset >= bytes.length) {
+            return new Promise<void>(() => undefined)
+          }
+          controller.enqueue(bytes.slice(offset, offset + 700))
+          offset += 700
+          return undefined
+        },
+        cancel() {
+          cancelled = true
+        },
+      })
+    const fake = fakeSource({ tarballs: [open] })
+
+    const record = await loadSnapshot(fake.source, new MemorySnapshotFiles(), SHA, lowered({ maxFiles: 2 }))
+
+    expect(record.capped).toBe(true)
+    await vi.waitFor(() => expect(cancelled).toBe(true))
   })
 
   it("decodes what the tarball holds as UTF-8", async () => {

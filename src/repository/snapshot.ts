@@ -30,6 +30,7 @@ export const LEFT_OUT_REASONS = [
   "symlink",
   "gap_cap",
   "snapshot_cap",
+  "unreadable",
   "unlisted",
 ] as const
 

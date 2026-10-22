@@ -1,5 +1,5 @@
 import type { BlobText, ListedEntry, TreeListing } from "../github/client.ts"
-import { errorText } from "../log.ts"
+import { errorText, logError } from "../log.ts"
 import {
   classify,
   SNAPSHOT_LIMITS,
@@ -28,7 +28,11 @@ export class SnapshotUnavailable extends Error {
   }
 }
 
-const BATCH_SIZE = 200
+export const ADD_BATCH_FILES = 200
+
+export const ADD_BATCH_BYTES = 8_388_608
+
+const LEFT_OUT_BATCH = 200
 
 const SYMLINK_MODE = "120000"
 
@@ -44,6 +48,7 @@ class Collector {
   gapFilled = 0
   capped = false
   private readonly pendingFiles: SnapshotFile[] = []
+  private pendingBytes = 0
   private readonly pendingLeftOut: LeftOut[] = []
   private readonly seen = new Set<string>()
   private readonly counts: Record<string, number> = {}
@@ -62,11 +67,15 @@ class Collector {
       this.capped = true
       return false
     }
+    if (this.pendingBytes + size > ADD_BATCH_BYTES) {
+      this.flushFiles()
+    }
     this.seen.add(path)
     this.files += 1
     this.bytes += size
     this.pendingFiles.push({ path, content })
-    if (this.pendingFiles.length >= BATCH_SIZE) {
+    this.pendingBytes += size
+    if (this.pendingFiles.length >= ADD_BATCH_FILES) {
       this.flushFiles()
     }
     return true
@@ -76,7 +85,7 @@ class Collector {
     this.seen.add(path)
     this.counts[reason] = (this.counts[reason] ?? 0) + 1
     this.pendingLeftOut.push({ path, reason })
-    if (this.pendingLeftOut.length >= BATCH_SIZE) {
+    if (this.pendingLeftOut.length >= LEFT_OUT_BATCH) {
       this.flushLeftOut()
     }
   }
@@ -101,6 +110,7 @@ class Collector {
   private flushFiles(): void {
     if (this.pendingFiles.length > 0) {
       this.store.add(this.pendingFiles.splice(0))
+      this.pendingBytes = 0
     }
   }
 
@@ -208,7 +218,7 @@ function classifyListing(entries: readonly ListedEntry[], collector: Collector, 
   return candidates.sort(byPath)
 }
 
-function keepGapText(blob: BlobText, collector: Collector): void {
+function keepGapText(blob: BlobText, limits: SnapshotLimits, collector: Collector): void {
   if (blob.text === undefined) {
     collector.leaveOut(blob.path, "binary")
     return
@@ -217,10 +227,33 @@ function keepGapText(blob: BlobText, collector: Collector): void {
   const kind = classify(bytes)
   if (kind !== "text") {
     collector.leaveOut(blob.path, kind)
+  } else if (bytes.length > limits.maxFileBytes) {
+    collector.leaveOut(blob.path, "too_large")
   } else if (collector.tryAdd(blob.path, blob.text, bytes.length)) {
     collector.gapFilled += 1
   } else {
     collector.leaveOut(blob.path, "snapshot_cap")
+  }
+}
+
+async function fetchGap(
+  source: SnapshotSource,
+  sha: string,
+  wanted: readonly string[],
+  limits: SnapshotLimits,
+  collector: Collector,
+): Promise<void> {
+  try {
+    for (const blob of await source.blobs(sha, wanted)) {
+      keepGapText(blob, limits, collector)
+    }
+  } catch (cause) {
+    logError("snapshot.gap_fill_failed", { sha, files: wanted.length, cause: errorText(cause) })
+    for (const path of wanted) {
+      if (!collector.has(path)) {
+        collector.leaveOut(path, "unreadable")
+      }
+    }
   }
 }
 
@@ -235,11 +268,8 @@ async function fillGap(
   for (const path of candidates.slice(limits.maxGapFill)) {
     collector.leaveOut(path, "gap_cap")
   }
-  if (wanted.length === 0) {
-    return
-  }
-  for (const blob of await source.blobs(sha, wanted)) {
-    keepGapText(blob, collector)
+  if (wanted.length > 0) {
+    await fetchGap(source, sha, wanted, limits, collector)
   }
 }
 
