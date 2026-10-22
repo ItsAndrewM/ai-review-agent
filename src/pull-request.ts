@@ -37,7 +37,11 @@ import {
   type RepositoryContext,
   type ReviewStandards,
 } from "./repository/context.ts"
+import { loadSnapshot } from "./repository/load-snapshot.ts"
+import { MAX_SEARCH_CALLS } from "./repository/search.ts"
+import { loadedFields, snapshotFailure, snapshotSource } from "./repository/snapshot-host.ts"
 import type { SnapshotFiles } from "./repository/snapshot.ts"
+import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   checksState,
   decideApproval,
@@ -248,6 +252,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
+  #snapshot: SqlSnapshotFiles | undefined
+  #loading: { sha: string; access: Promise<SearchAccess> } | undefined
+  #searchFailure: string | undefined
+  #searchCalls = { grep: 0, tree: 0 }
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -301,12 +309,60 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.#files
   }
 
-  async repositorySearch(_tool: "grep" | "tree"): Promise<SearchAccess> {
-    return { kind: "unavailable", reason: "repository search is not wired yet" }
+  async repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess> {
+    if (this.#searchCalls.grep + this.#searchCalls.tree >= MAX_SEARCH_CALLS) return { kind: "spent" }
+    this.#searchCalls[tool] += 1
+    if (this.#searchFailure !== undefined) return { kind: "unavailable", reason: this.#searchFailure }
+    const pr = await this.pullRequest()
+    const files = this.#snapshotFiles()
+    if (files.record()?.sha === pr.head.sha) return { kind: "ready", files }
+    return this.#sharedLoad(pr.number, pr.head.sha)
   }
 
   loadedSnapshot(): SnapshotFiles | undefined {
-    return undefined
+    return this.#snapshotFiles()
+  }
+
+  #snapshotFiles(): SqlSnapshotFiles {
+    this.#snapshot ??= new SqlSnapshotFiles(this.ctx.storage.sql)
+    return this.#snapshot
+  }
+
+  async #sharedLoad(number: number, sha: string): Promise<SearchAccess> {
+    const inFlight = this.#loading
+    if (inFlight?.sha === sha) return inFlight.access
+    if (inFlight) {
+      await inFlight.access
+      return this.#sharedLoad(number, sha)
+    }
+    const access = this.#load(number, sha).finally(() => {
+      if (this.#loading?.access === access) this.#loading = undefined
+    })
+    this.#loading = { sha, access }
+    return access
+  }
+
+  async #load(number: number, sha: string): Promise<SearchAccess> {
+    const started = Date.now()
+    const files = this.#snapshotFiles()
+    try {
+      const record = await loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha)
+      log("snapshot.loaded", loadedFields(number, record, Date.now() - started))
+      return { kind: "ready", files }
+    } catch (cause) {
+      const failure = snapshotFailure(cause)
+      this.#searchFailure = failure.reason
+      logError("snapshot.failed", { number, head: shortSha(sha), step: failure.step, error: errorText(cause) })
+      return { kind: "unavailable", reason: failure.reason }
+    }
+  }
+
+  async #dropSnapshot(reason: "review_end" | "answer_end"): Promise<void> {
+    await this.#loading?.access
+    if (this.#snapshotFiles().drop()) log("snapshot.dropped", { number: (await this.key()).number, reason })
+    this.#searchFailure = undefined
+    this.#loading = undefined
+    this.#searchCalls = { grep: 0, tree: 0 }
   }
 
   async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
@@ -766,6 +822,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
+          greps: this.#searchCalls.grep,
+          trees: this.#searchCalls.tree,
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -773,6 +831,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } catch (error) {
       await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       throw error
+    } finally {
+      await this.#dropSnapshot("review_end")
     }
   }
 
@@ -1233,27 +1293,31 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     text: string,
     thread: ReviewThread | undefined,
   ): Promise<void> {
-    await this.harness.session().setModel(this.reviewModel())
-    const operationId = `chat:${incoming.deliveryId}`
-    const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
-    const prompt = incoming.thread
-      ? threadAnswerPrompt(incoming.author, text, skill, {
-          path: incoming.thread.path,
-          line: incoming.thread.line,
-          diffHunk: incoming.thread.diffHunk,
-          opening: thread?.firstCommentBody,
-        })
-      : answerPrompt(incoming.author, text, skill)
-    const result = await this.harness.prompt(prompt, { operationId })
-    const answer =
-      result.status === "done" && result.text?.trim()
-        ? result.text.trim()
-        : `I could not answer that: ${
-            result.status === "done"
-              ? "the model returned nothing"
-              : describeFailure(result, await this.storedFailureDetail(operationId))
-          }.`
-    await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+    try {
+      await this.harness.session().setModel(this.reviewModel())
+      const operationId = `chat:${incoming.deliveryId}`
+      const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
+      const prompt = incoming.thread
+        ? threadAnswerPrompt(incoming.author, text, skill, {
+            path: incoming.thread.path,
+            line: incoming.thread.line,
+            diffHunk: incoming.thread.diffHunk,
+            opening: thread?.firstCommentBody,
+          })
+        : answerPrompt(incoming.author, text, skill)
+      const result = await this.harness.prompt(prompt, { operationId })
+      const answer =
+        result.status === "done" && result.text?.trim()
+          ? result.text.trim()
+          : `I could not answer that: ${
+              result.status === "done"
+                ? "the model returned nothing"
+                : describeFailure(result, await this.storedFailureDetail(operationId))
+            }.`
+      await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+    } finally {
+      await this.#dropSnapshot("answer_end")
+    }
   }
 
   private async respond(github: GitHubClient, key: PullRequestKey, incoming: CommentIncoming, body: string) {

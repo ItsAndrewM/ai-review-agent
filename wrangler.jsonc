@@ -7,6 +7,9 @@
   "compatibility_flags": ["nodejs_compat"],
   "upload_source_maps": true,
   "observability": { "enabled": true },
+  // Repository search loads the head's files into the object: a vscode-size
+  // snapshot took 8.2 s of CPU to load and one grep up to about a second.
+  "limits": { "cpu_ms": 120000 },
   "ai": { "binding": "AI", "remote": true },
   // The running build's id and timestamp, so an object can tell it is older
   // than the Worker that called it during the eventually-consistent rollout.
