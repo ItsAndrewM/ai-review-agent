@@ -15,7 +15,7 @@ export const DEFAULT_TREE_DEPTH = 2
 
 export const MAX_SEARCH_CALLS = 40
 
-export const MAX_SEARCHED_LINE_CHARS = 2_000
+export const MAX_SEARCHED_LINE_CHARS = 500
 
 export const MAX_LONG_LINES_TESTED = 500
 

@@ -40,7 +40,7 @@ describe("limits", () => {
       MAX_SEARCH_CALLS,
       MAX_SEARCHED_LINE_CHARS,
       MAX_LONG_LINES_TESTED,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 2_000, 500])
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500, 500])
   })
 })
 
@@ -211,36 +211,36 @@ describe("grep", () => {
     )
   })
 
-  it("finds a match within the first 2,000 characters of a very long line", () => {
+  it("finds a match within the first 500 characters of a very long line", () => {
     const files = snapshotOf({ "min.js": `foo${"x".repeat(50_000)}\n` })
     const answer = grep(files, { pattern: "foo" })
     expect(answer).toContain("min.js:1: foo")
-    expect(answer).toContain("1 long line searched only in its first 2,000 characters.")
+    expect(answer).toContain("1 long line searched only in its first 500 characters.")
   })
 
-  it("does not find a match that starts after character 2,000 of a line and says one long line was cut", () => {
-    const files = snapshotOf({ "min.js": `${"x".repeat(2_500)}foo\n` })
+  it("does not find a match that starts after character 500 of a line and says one long line was cut", () => {
+    const files = snapshotOf({ "min.js": `${"x".repeat(600)}foo\n` })
     expect(grep(files, { pattern: "foo" })).toBe(
-      ["No match for /foo/ in 1 file.", "1 long line searched only in its first 2,000 characters."].join("\n"),
+      ["No match for /foo/ in 1 file.", "1 long line searched only in its first 500 characters."].join("\n"),
     )
   })
 
   it("counts the long lines across the files searched", () => {
-    const long = `${"x".repeat(2_001)}\n`
+    const long = `${"x".repeat(501)}\n`
     const files = snapshotOf({ "a.js": long.repeat(2), "b.js": long, "c.js": "short\n" })
     expect(grep(files, { pattern: "short" })).toBe(
-      ["c.js:1: short", "3 long lines searched only in their first 2,000 characters."].join("\n"),
+      ["c.js:1: short", "3 long lines searched only in their first 500 characters."].join("\n"),
     )
   })
 
-  it("does not count a line of exactly 2,000 characters as long", () => {
-    const files = snapshotOf({ "a.js": `${"x".repeat(2_000)}\n` })
-    expect(grep(files, { pattern: "x{2000}" })).not.toContain("long line")
+  it("does not count a line of exactly 500 characters as long", () => {
+    const files = snapshotOf({ "a.js": `${"x".repeat(500)}\n` })
+    expect(grep(files, { pattern: "x{500}" })).not.toContain("long line")
   })
 
-  it("does not count a CRLF line of exactly 2,000 characters as long", () => {
-    const files = snapshotOf({ "a.js": `${"x".repeat(2_000)}\r\n` })
-    expect(grep(files, { pattern: "x{2000}" })).not.toContain("long line")
+  it("does not count a CRLF line of exactly 500 characters as long", () => {
+    const files = snapshotOf({ "a.js": `${"x".repeat(500)}\r\n` })
+    expect(grep(files, { pattern: "x{500}" })).not.toContain("long line")
   })
 
   it("stops after 500 long lines and says how many files it searched", () => {
@@ -265,7 +265,7 @@ describe("grep", () => {
   })
 
   it("keeps the long-line note inside the 12,000-character budget", () => {
-    const files = snapshotOf({ "a.ts": `${"x".repeat(250)}\n`.repeat(90), "b.js": `${"y".repeat(2_500)}\n` })
+    const files = snapshotOf({ "a.ts": `${"x".repeat(250)}\n`.repeat(90), "b.js": `${"y".repeat(600)}\n` })
     const answer = grep(files, { pattern: "x" })
     expect(answer.length).toBeLessThanOrEqual(MAX_GREP_CHARS)
     expect(answer).toContain("1 long line searched only")
@@ -276,6 +276,17 @@ describe("grep", () => {
     const started = performance.now()
     grep(files, { pattern: String.raw`[\s\S]*foo` })
     expect(performance.now() - started).toBeLessThan(1_000)
+  })
+
+  it("answers a pattern with two braced wildcards over 200 lines of 2,000 characters in under 2 seconds", () => {
+    const prose = "the quick brown fox jumps over the lazy dog while seven eels evade the keen eye of the sea ".repeat(
+      25,
+    )
+    const files = snapshotOf({ "prose.txt": `${prose.slice(0, 2_000)}\n`.repeat(200) })
+    const started = performance.now()
+    const answer = grep(files, { pattern: ".{1,}e.{1,}zzz" })
+    expect(performance.now() - started).toBeLessThan(2_000)
+    expect(answer).toContain("No match for /.{1,}e.{1,}zzz/ in 1 file.")
   })
 
   it("answers a pattern that spans lines over 20,000 short lines in under a second with no match", () => {
