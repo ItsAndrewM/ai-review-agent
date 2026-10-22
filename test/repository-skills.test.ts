@@ -178,10 +178,11 @@ describe("repositorySkillFiles", () => {
     ])
   })
 
-  it("shadows exactly the skills the bundle holds", async () => {
+  it("shadows exactly the skills the bundle holds, the summary skill included", async () => {
     const bundled = (await (await bundledSkills()).source.list()).map(({ name }) => name)
     expect([...BUNDLED_SKILL_NAMES].sort()).toEqual([...bundled].sort())
-    expect([...BUNDLED_SKILL_NAMES].sort()).toEqual(["answer", "review"])
+    expect([...BUNDLED_SKILL_NAMES].sort()).toEqual(["answer", "review", "summary"])
+    expect(shadowedSkillFiles([blob(".claude/skills/summary/SKILL.md")]).map(({ name }) => name)).toEqual(["summary"])
   })
 
   it("refuses a path with a .. segment or a leading slash, whether it would be a skill or one of its files", () => {

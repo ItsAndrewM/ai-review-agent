@@ -12,9 +12,10 @@ describe("skippedReviewText", () => {
     expect(skippedReviewText("not_open", "abc1234def5678", "andabot")).toMatch(/closed/)
   })
 
-  it("says nothing when a review is already running or the head moved, since that review posts", () => {
+  it("says nothing when a review is already running or the head moved, since that review posts, or when paused, since a pause only skips reviews nobody asked for", () => {
     expect(skippedReviewText("in_progress", "abc1234def5678", "andabot")).toBeUndefined()
     expect(skippedReviewText("superseded", "abc1234def5678", "andabot")).toBeUndefined()
+    expect(skippedReviewText("paused", "abc1234def5678", "andabot")).toBeUndefined()
   })
 
   it("says the path filters leave out every changed file, the one setting that can skip a command", () => {
@@ -42,6 +43,19 @@ describe("helpText", () => {
       "Reply under one of my inline comments to ask about it, and I'll answer in that thread.",
     )
   })
+
+  it("lists all seven commands, one line each", () => {
+    const lines = helpText("andabot").split("\n")
+    expect(lines.filter((line) => line.startsWith("- `@andabot"))).toHaveLength(7)
+    for (const line of [
+      "- `@andabot summary`: rewrite the summary comment for the current head, without a review.",
+      "- `@andabot resolve`: resolve all my open threads, or only this one when you reply in one of my threads, then check whether I can approve.",
+      "- `@andabot pause`: stop reviewing pushes until `@andabot resume`. Commands keep working.",
+      "- `@andabot resume`: review pushes again, starting with the current head if it has no review yet.",
+    ]) {
+      expect(lines).toContain(line)
+    }
+  })
 })
 
 describe("parseCommand", () => {
@@ -54,6 +68,18 @@ describe("parseCommand", () => {
       kind: "chat",
       text: "why is this blocking?",
     })
+  })
+
+  it("reads each new command after the mention, in any case and spacing", () => {
+    expect(parseCommand("@andabot summary", "andabot")).toEqual({ kind: "summary" })
+    expect(parseCommand("@AndaBot RESOLVE", "andabot")).toEqual({ kind: "resolve" })
+    expect(parseCommand("@andabot  pause  ", "andabot")).toEqual({ kind: "pause" })
+    expect(parseCommand("@andabot resume", "andabot")).toEqual({ kind: "resume" })
+  })
+
+  it("keeps a command with words after it as a question", () => {
+    expect(parseCommand("@andabot pause please", "andabot")).toEqual({ kind: "chat", text: "pause please" })
+    expect(parseCommand("@andabot resolve all", "andabot")).toEqual({ kind: "chat", text: "resolve all" })
   })
 
   it("ignores comments without the mention, and other logins that share a prefix", () => {

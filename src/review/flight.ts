@@ -55,6 +55,27 @@ export function ownsOperation(pending: PendingReview, operationId: string): bool
   return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
 }
 
+export type SubmitStanding = { kind: "post"; deliveryId: string } | { kind: "no_review" } | { kind: "not_in_flight" }
+
+export interface SubmitCall<Conversation> {
+  caller: Conversation
+  root: Conversation
+  pending: PendingReview | undefined
+  running: string | undefined
+}
+
+export function submitStanding<Conversation>({
+  caller,
+  root,
+  pending,
+  running,
+}: SubmitCall<Conversation>): SubmitStanding {
+  if (caller !== root) return { kind: "not_in_flight" }
+  if (pending === undefined) return { kind: "no_review" }
+  if (running === undefined || !ownsOperation(pending, running)) return { kind: "not_in_flight" }
+  return { kind: "post", deliveryId: pending.deliveryId }
+}
+
 export function replacedExit(
   newerHeadSha: string | undefined,
   headSha: string,

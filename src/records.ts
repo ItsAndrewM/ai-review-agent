@@ -12,11 +12,13 @@ export type PullRequestKey = Static<typeof PullRequestKey>
 
 export const SummaryCommentId = Type.Integer()
 
-const SeverityCounts = Type.Object({
+export const SeverityCounts = Type.Object({
   blocking: Type.Integer(),
   suggestion: Type.Integer(),
   nitpick: Type.Integer(),
 })
+
+export type SeverityCounts = Static<typeof SeverityCounts>
 
 export const PostedReview = Type.Object({
   reviewId: Type.Integer(),

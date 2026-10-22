@@ -1,14 +1,20 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
-import { createRegistry, Harness, type Extension } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, skills as skillsExtension, type PiPromptResponse } from "agents/harness/pi"
+import { createRegistry, Harness, type ConversationId, type Extension } from "@earendil-works/pi-durable"
+import {
+  PiHarness,
+  ROOT_SESSION,
+  skills as skillsExtension,
+  type PiPromptResponse,
+  type PiSession,
+} from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
-import { helpText, parseCommand, skippedReviewText, type ReviewSkip } from "./commands.ts"
+import { helpText, parseCommand, skippedReviewText, type Command, type ReviewSkip } from "./commands.ts"
 import { createAppJwt, fetchInstallationToken, InstallationToken } from "./github/app-auth.ts"
 import {
   canCommand,
@@ -21,7 +27,7 @@ import {
 } from "./github/client.ts"
 import { indexCommentableLines, reviewableFiles, type ChangedFile, type MarkedLines } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "./models.ts"
+import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
@@ -61,9 +67,9 @@ import {
 import type { PathInstruction } from "./repository/instructions.ts"
 import { catalogFor, installCatalog, restoredCatalog, skillLogs, skillsStartFields } from "./repository/skills.ts"
 import {
+  approvalRecord,
   checksState,
   decideApproval,
-  evaluatedApprovalOf,
   evaluatesAfterReview,
   evaluatesReviewedHead,
   evaluationWorkflow,
@@ -71,11 +77,13 @@ import {
   lastReviewOf,
   openBlockingIn,
   verdictAfterChecks,
+  type ApprovalOutcome,
   type ApprovalState,
   type ApprovalTrigger,
   type ChecksState,
   type WaitReason,
   type WebhookTrigger,
+  type WorkflowState,
 } from "./review/approval.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
@@ -98,6 +106,7 @@ import {
   validateFindings,
   type FindingInput,
   type ReviewSubmissionInput,
+  type SummarySubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
 import {
@@ -107,6 +116,7 @@ import {
   replacedExit,
   runStanding,
   StoredPending,
+  submitStanding,
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
@@ -145,12 +155,27 @@ import {
 } from "./review/incremental.ts"
 import { linkedIssueNumbers, linkedIssuesFrom, readLinkedIssues, type LinkedIssue } from "./review/linked-issues.ts"
 import {
+  evaluatesAfterCatchUp,
+  headReviewed,
+  NOT_PAUSED_REPLY,
+  pausedLine,
+  PausedBy,
+  pauseReply,
+  pausesReview,
+  resumeReply,
+  resumeStep,
+  withoutPausedLine,
+  withPausedLine,
+  type ResumeStep,
+} from "./review/pause.ts"
+import {
   answerPrompt,
   fullPrompt,
   incrementalPrompt,
   problemsText,
   resubmitPrompt,
   reviewPrompt,
+  summaryPrompt,
   threadAnswerPrompt,
 } from "./review/prompt.ts"
 import {
@@ -159,6 +184,7 @@ import {
   incompleteNote,
   renderReviewBody,
   renderSummaryComment,
+  renderSummaryRun,
   renderUnpostedNote,
   renderUnpostedSummary,
   reviewEventOf,
@@ -168,7 +194,20 @@ import {
   type RetryOutcome,
   type Verdict,
 } from "./review/render.ts"
+import { approvalNote, resolveRefusal, resolveReply, resolveTargets, type ResolveScope } from "./review/resolve.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
+import {
+  oneClause,
+  parseWrittenSummary,
+  recordedVerdict,
+  Summarizing,
+  summarizedRecord,
+  summaryLive,
+  summaryReply,
+  SummarySessionId,
+  type SummaryOutcome,
+  type WrittenSummary,
+} from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
@@ -221,6 +260,13 @@ type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
 type HeadSkip = "not_open" | "superseded" | "already_reviewed"
 type SettingsSkip = SkipReason | "path_filters"
 
+interface CommandCall {
+  github: GitHubClient
+  key: PullRequestKey
+  incoming: CommentIncoming
+  thread: ReviewThread | undefined
+}
+
 interface Attribution {
   model: string
   fingerprint: string
@@ -263,7 +309,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       this.registry.install(createReviewExtension(this))
       await this.restoreCatalog()
       const models = createModels()
-      models.setProvider(withForcedResubmission(withOutputLimit(this.ai.provider, this.outputLimit())))
+      models.setProvider(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit())))
       return Harness.open(
         storage,
         {
@@ -346,11 +392,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
   }
 
-  async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
-    const pending = await this.readPending()
-    if (!pending) return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
-    if (!(await this.callerIsReviewInFlight(pending))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
-    return this.postReview(submission, pending.deliveryId)
+  async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
+    const standing = submitStanding({
+      caller: conversationId,
+      root: (await this.harness.conversation(ROOT_SESSION)).id,
+      pending: await this.readPending(),
+      running: await this.runningRootOperation(),
+    })
+    if (standing.kind === "no_review") {
+      return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
+    }
+    if (standing.kind === "not_in_flight") return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    return this.postReview(submission, standing.deliveryId)
   }
 
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
@@ -487,6 +540,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         event,
         headSha: pr.head.sha,
         verdict: submission.verdict,
+        shown: verdict,
+        accepted: scoped.accepted,
         rejected: scoped.rejected,
         at: Date.now(),
         requestChangesWorkflow: workflow,
@@ -591,11 +646,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "reaction":
         return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
       case "approval":
-        return this.evaluateApproval(incoming.trigger, incoming.deliveryId)
+        await this.evaluateApproval(incoming.trigger, incoming.deliveryId)
+        return
     }
   }
 
   private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<ReviewSkip | undefined> {
+    if (pausesReview(incoming, await this.isPaused())) {
+      log("review.skip", { reason: "paused", head: shortSha(incoming.headSha), number: incoming.key.number })
+      return "paused"
+    }
     const staleBuild = isOlder(this.version(), callerVersion)
     const pr = await this.freshPullRequest()
     const headSkip = await this.headSkip(pr, incoming)
@@ -1223,52 +1283,389 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await reactWithEyes(github, incoming.nodeId, key.number)
     const where = incoming.thread ? "thread" : "conversation"
     log("command.received", { kind: command.kind, author: incoming.author, number: key.number, where })
+    await this.runCommand(command, { github, key, incoming, thread }, callerVersion)
+  }
+
+  private async runCommand(command: Command, call: CommandCall, callerVersion?: Version): Promise<void> {
     switch (command.kind) {
       case "help":
-        await this.respond(github, key, incoming, helpText(this.botLogin()))
+        await this.respond(call.github, call.key, call.incoming, helpText(this.botLogin()))
         return
       case "review":
-        await this.reviewOnRequest(github, key, incoming, command.full, callerVersion)
+        await this.reviewOnRequest(call, command.full, callerVersion)
         return
       case "chat":
-        await this.answer(github, key, incoming, command.text, thread)
+        await this.answer(call.github, call.key, call.incoming, command.text, call.thread)
+        return
+      case "pause":
+        await this.pause(call)
+        return
+      case "resume":
+        await this.resume(call, callerVersion)
+        return
+      case "resolve":
+        await this.resolve(call)
+        return
+      case "summary":
+        await this.summarize(call)
         return
     }
   }
 
-  private async reviewOnRequest(
-    github: GitHubClient,
-    key: PullRequestKey,
-    incoming: CommentIncoming,
-    full: boolean,
-    callerVersion?: Version,
-  ): Promise<void> {
+  private async reviewOnRequest(call: CommandCall, full: boolean, callerVersion?: Version): Promise<void> {
     const pr = await this.freshPullRequest()
-    const skipped = await this.review(
-      {
-        kind: "review",
-        key,
-        deliveryId: incoming.deliveryId,
-        headSha: pr.head.sha,
-        full,
-        requestedBy: incoming.author,
-      },
-      callerVersion,
-    )
+    const skipped = await this.review(requestedReview(call, pr.head.sha, full), callerVersion)
     if (skipped === undefined) return
     const text = skippedReviewText(skipped, pr.head.sha, this.botLogin())
-    if (text !== undefined) await this.respond(github, key, incoming, text)
+    if (text !== undefined) await this.respond(call.github, call.key, call.incoming, text)
   }
 
-  private async evaluateApproval(trigger: ApprovalTrigger, deliveryId: string | undefined): Promise<void> {
+  private async pause(call: CommandCall): Promise<void> {
+    const alreadyPaused = await this.isPaused()
+    if (!alreadyPaused) await this.startPause(call)
+    await this.respond(call.github, call.key, call.incoming, pauseReply(alreadyPaused, this.botLogin()))
+  }
+
+  private async startPause({ key, incoming }: CommandCall): Promise<void> {
+    await this.ctx.storage.put({ paused: true, pausedBy: incoming.author })
+    log("command.paused", { number: key.number, author: incoming.author })
+    await this.refreshPausedLine(key.number)
+  }
+
+  private async refreshPausedLine(number: number): Promise<void> {
+    try {
+      const commentId = await this.findSummaryComment()
+      if (commentId !== undefined) await this.editPausedLine(commentId)
+      else if (await this.isPaused()) await this.createPausedSummary()
+    } catch (error) {
+      logError("command.summary_failed", { number, error: errorText(error) })
+    }
+  }
+
+  private async editPausedLine(commentId: number): Promise<void> {
+    const key = await this.key()
+    const github = await this.github()
+    const body = (await github.getIssueComment(key, commentId)).body ?? ""
+    const line = await this.shownPausedLine()
+    const edited = line === undefined ? withoutPausedLine(body) : withPausedLine(body, line)
+    if (edited !== body) await github.updateIssueComment(key, commentId, edited)
+  }
+
+  private async createPausedSummary(): Promise<void> {
+    const pr = await this.currentPullRequest()
+    const note = "_Not reviewed yet._"
+    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+  }
+
+  private async resume(call: CommandCall, callerVersion?: Version): Promise<void> {
+    if (await this.isPaused()) return this.resumePaused(call, callerVersion)
+    await this.respond(call.github, call.key, call.incoming, NOT_PAUSED_REPLY)
+  }
+
+  private async resumePaused(call: CommandCall, callerVersion?: Version): Promise<void> {
+    const { github, key, incoming } = call
+    const pr = await this.freshPullRequest()
+    await this.ctx.storage.delete(["paused", "pausedBy"])
+    await this.refreshPausedLine(key.number)
+    const step = await this.resumeStepFor(pr)
+    log("command.resumed", { number: key.number, author: incoming.author, head: shortSha(pr.head.sha), step })
+    await this.respond(github, key, incoming, resumeReply(step, pr.head.sha, this.botLogin()))
+    await this.catchUp(step, pr, call, callerVersion)
+  }
+
+  private async resumeStepFor(pr: PullRequestInfo): Promise<ResumeStep> {
+    return resumeStep({
+      open: pr.state === "open",
+      reviewRunning: await this.reviewRunning(pr.head.sha),
+      reviewed: headReviewed(pr.head.sha, (await this.readReviewed())?.headSha, await this.isPosted(pr)),
+      settingsSkip: await this.pushSettingsSkip(pr),
+    })
+  }
+
+  private async pushSettingsSkip(pr: PullRequestInfo): Promise<SkipReason | undefined> {
+    const read = await this.repositoryConfig(pr)
+    const decision = shouldReview(read.config, pullRequestFacts(pr), "push")
+    return decision.review ? undefined : decision.reason
+  }
+
+  private async reviewRunning(headSha: string): Promise<boolean> {
+    const pending = await this.readPending()
+    const running = (await this.operationsOf(pending)).length > 0
+    return decideFlight(pending, headSha, { running, now: Date.now() }).kind === "skip"
+  }
+
+  private async catchUp(
+    step: ResumeStep,
+    pr: PullRequestInfo,
+    call: CommandCall,
+    callerVersion?: Version,
+  ): Promise<void> {
+    const deliveryId = call.incoming.deliveryId
+    if (step === "evaluate") {
+      await this.evaluateApproval("resume", deliveryId)
+      return
+    }
+    if (step !== "review") return
+    await this.review(requestedReview(call, pr.head.sha, false), callerVersion)
+    if (await this.evaluatesAfterCatchUpReview(pr)) await this.evaluateApproval("resume", deliveryId)
+  }
+
+  private async evaluatesAfterCatchUpReview(pr: PullRequestInfo): Promise<boolean> {
+    return evaluatesAfterCatchUp({
+      headSha: pr.head.sha,
+      reviewedHead: (await this.readReviewed())?.headSha,
+      posted: await this.isPosted(pr),
+      inFlight: (await this.readPending()) !== undefined,
+    })
+  }
+
+  private async resolve(call: CommandCall): Promise<void> {
+    const scope = await this.resolveScope(call)
+    if (scope === undefined) return this.respond(call.github, call.key, call.incoming, resolveRefusal("unreadable"))
+    const targets = resolveTargets(scope, this.botLogin())
+    if (targets.kind !== "resolve") {
+      return this.respond(call.github, call.key, call.incoming, resolveRefusal(targets.kind))
+    }
+    await this.resolveOwnThreads(call, scope.where, targets.threads)
+  }
+
+  private async resolveScope({ github, key, incoming, thread }: CommandCall): Promise<ResolveScope | undefined> {
+    if (incoming.thread) return { where: "thread", thread }
+    try {
+      return { where: "conversation", threads: await github.listReviewThreads(key, key.number) }
+    } catch (error) {
+      logError("command.resolve_failed", { number: key.number, step: "read", error: errorText(error) })
+      return undefined
+    }
+  }
+
+  private async resolveOwnThreads(
+    call: CommandCall,
+    where: ResolveScope["where"],
+    threads: readonly OpenThread[],
+  ): Promise<void> {
+    const { github, key, incoming } = call
+    const { resolved, failed } = await resolveThreads(github, threads)
+    for (const { thread, error } of failed) {
+      logError("command.resolve_failed", { number: key.number, step: "resolve", thread: thread.threadId, error })
+    }
+    const justResolved = new Set(resolved.map((thread) => thread.threadId))
+    const outcome = await this.evaluateApproval("resolve", incoming.deliveryId, justResolved)
+    const note = await this.approvalNoteFor(outcome, key.number)
+    log("command.resolved", {
+      number: key.number,
+      author: incoming.author,
+      where,
+      resolved: resolved.length,
+      failed: failed.length,
+      approval: outcome.kind,
+      reason: waitReasonOf(outcome),
+    })
+    await this.respond(github, key, incoming, resolveReply({ resolved: resolved.length, failed: failed.length, note }))
+  }
+
+  private async approvalNoteFor(outcome: ApprovalOutcome, number: number): Promise<string | undefined> {
+    const lastReview = await this.readLastReview()
+    if ((await this.noteWorkflow(lastReview, number)) === false) return undefined
+    return approvalNote(outcome, lastReview?.heldBack ?? 0, this.botLogin())
+  }
+
+  private async noteWorkflow(lastReview: LastReview | undefined, number: number): Promise<WorkflowState> {
+    try {
+      const readConfig = async () => this.repositoryConfig(await this.currentPullRequest())
+      return await evaluationWorkflow(lastReview, readConfig, this.env.REQUEST_CHANGES_WORKFLOW)
+    } catch (error) {
+      logError("command.resolve_failed", { number, step: "workflow", error: errorText(error) })
+      return "unknown"
+    }
+  }
+
+  private async summarize(call: CommandCall): Promise<void> {
+    const outcome = await this.summaryOutcome(call)
+    await this.respond(call.github, call.key, call.incoming, summaryReply(outcome, this.botLogin()))
+  }
+
+  private async summaryOutcome({ key, incoming }: CommandCall): Promise<SummaryOutcome> {
+    try {
+      return await this.startSummary(incoming.deliveryId)
+    } catch (error) {
+      logError("summary.failed", { number: key.number, reason: errorText(error) })
+      return unusableSummary(errorText(error))
+    }
+  }
+
+  private async startSummary(deliveryId: string): Promise<SummaryOutcome> {
+    const pr = await this.currentPullRequest()
+    if (pr.state !== "open") {
+      log("summary.skip", { reason: "not_open", state: pr.state, number: pr.number })
+      return { kind: "closed" }
+    }
+    if (await this.summaryInFlight()) {
+      log("summary.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
+      return { kind: "busy" }
+    }
+    return this.summarizeOnce(pr, deliveryId)
+  }
+
+  private async summaryInFlight(): Promise<boolean> {
+    const record = await this.readSummarizing()
+    const running = record !== undefined && (await this.summaryOperationListed(record.operationId))
+    return summaryLive(record, { running, now: Date.now() })
+  }
+
+  private async summaryOperationListed(operationId: string): Promise<boolean> {
+    const session = await this.storedSummarySession()
+    if (session === undefined) return false
+    const operations = await this.harness.pending({ session })
+    return operations.some((operation) => operation.operationId === operationId)
+  }
+
+  private async summarizeOnce(pr: PullRequestInfo, deliveryId: string): Promise<SummaryOutcome> {
+    const run = { deliveryId, operationId: `summary:${deliveryId}:${pr.head.sha}`, started: Date.now() }
+    await this.ctx.storage.put<Summarizing>("summarizing", run)
+    try {
+      return await this.runSummary(pr, run)
+    } finally {
+      await this.releaseSummarizing(deliveryId)
+    }
+  }
+
+  private async releaseSummarizing(deliveryId: string): Promise<void> {
+    if ((await this.readSummarizing())?.deliveryId === deliveryId) await this.ctx.storage.delete("summarizing")
+  }
+
+  private async restartSummaryGrace(deliveryId: string): Promise<void> {
+    const record = await this.readSummarizing()
+    if (record?.deliveryId === deliveryId) {
+      await this.ctx.storage.put<Summarizing>("summarizing", { ...record, started: Date.now() })
+    }
+  }
+
+  private async runSummary(pr: PullRequestInfo, run: Summarizing): Promise<SummaryOutcome> {
+    const key = await this.key()
+    const files = await (await this.github()).listPullRequestFiles(key, key.number)
+    const issues = await this.linkedIssues(pr)
+    const written = await this.askForSummary(pr, files, issues, run.operationId)
+    await this.restartSummaryGrace(run.deliveryId)
+    if (written.kind === "unusable") {
+      logError("summary.failed", { number: pr.number, head: shortSha(pr.head.sha), reason: written.reason })
+      return unusableSummary(written.reason)
+    }
+    const now = await this.currentPullRequest()
+    if (now.head.sha !== pr.head.sha) {
+      log("summary.superseded", { number: pr.number, was: shortSha(pr.head.sha), now: shortSha(now.head.sha) })
+      return { kind: "moved", from: pr.head.sha, to: now.head.sha }
+    }
+    return this.postSummary(pr, files, issues, written.summary, run.started)
+  }
+
+  private async askForSummary(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    issues: readonly LinkedIssue[],
+    operationId: string,
+  ): Promise<WrittenSummary> {
+    const session = await this.summarySession()
+    await this.configureSummary(session)
+    const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
+    if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
+    return parseWrittenSummary(result.text ?? "")
+  }
+
+  private async summarySession(): Promise<PiSession> {
+    const stored = await this.storedSummarySession()
+    if (stored !== undefined) return this.harness.session(stored)
+    const session = await this.harness.sessions.create()
+    await this.ctx.storage.put("summarySession", session.id)
+    return session
+  }
+
+  private async storedSummarySession(): Promise<string | undefined> {
+    const stored = await this.ctx.storage.get("summarySession")
+    return Value.Check(SummarySessionId, stored) ? stored : undefined
+  }
+
+  private async configureSummary(session: PiSession): Promise<void> {
+    const { source } = await bundledSkills()
+    const skill = await loadSkill(source, "summary")
+    const mergeDanger = await loadReference(source, "review", MERGE_DANGER_REFERENCE)
+    await session.reset()
+    const conversation = await this.harness.conversation(session.id)
+    await conversation.configure(
+      {
+        instructions: renderSkillWithResources(skill, [mergeDanger]),
+        thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
+        extensions: [],
+        modelTools: [],
+      },
+      BACKGROUND_CONTEXT,
+    )
+    await session.setModel(this.reviewModel())
+  }
+
+  private async postSummary(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    issues: readonly LinkedIssue[],
+    answer: SummarySubmissionInput,
+    started: number,
+  ): Promise<SummaryOutcome> {
+    const reviewed = await this.readReviewed()
+    const summary = await this.storeSummary(reviewed, answer, files)
+    await this.upsertSummary(
+      renderSummaryRun({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        verdict: recordedVerdict(await this.readLastReview(), reviewed, pr.head.sha),
+        summary,
+        model: this.env.REVIEW_MODEL,
+        skillsFingerprint: (await bundledSkills()).fingerprint,
+        linkedIssues: issues.map(({ number }) => number),
+      }),
+    )
+    log("summary.posted", {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      model: this.env.REVIEW_MODEL,
+      ms: Date.now() - started,
+    })
+    return { kind: "posted", head: pr.head.sha, link: await this.summaryCommentUrl() }
+  }
+
+  private async storeSummary(
+    reviewed: ReviewedRecord | undefined,
+    answer: SummarySubmissionInput,
+    files: readonly ChangedFile[],
+  ): Promise<SummarySubmissionInput> {
+    if (reviewed === undefined) return answer
+    const record = summarizedRecord(reviewed, answer, files)
+    await this.ctx.storage.put<ReviewedRecord>("reviewed", record)
+    return {
+      summary: record.summary,
+      walkthrough: record.walkthrough,
+      merge_danger: record.merge_danger,
+    }
+  }
+
+  private async readSummarizing(): Promise<Summarizing | undefined> {
+    const stored = await this.ctx.storage.get("summarizing")
+    return Value.Check(Summarizing, stored) ? stored : undefined
+  }
+
+  private async evaluateApproval(
+    trigger: ApprovalTrigger,
+    deliveryId: string | undefined,
+    resolved: ReadonlySet<string> = new Set(),
+  ): Promise<ApprovalOutcome> {
     try {
       const pr = await this.currentPullRequest()
-      const decision = decideApproval(await this.approvalState(pr))
+      const decision = decideApproval(await this.approvalState(pr, resolved))
       const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
-      if (decision.kind === "wait") return logWait(context, decision.reason)
-      await this.approve(pr.head.sha, context)
+      if (decision.kind === "wait") return waited(context, decision.reason)
+      return await this.approve(pr.head.sha, context)
     } catch (error) {
       logError("approval.failed", { trigger, delivery: deliveryId, error: errorText(error) })
+      return { kind: "failed" }
     }
   }
 
@@ -1277,7 +1674,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return (await this.github()).getPullRequest(key, key.number)
   }
 
-  private async approvalState(pr: PullRequestInfo): Promise<ApprovalState> {
+  private async approvalState(pr: PullRequestInfo, resolved: ReadonlySet<string>): Promise<ApprovalState> {
     const lastReview = await this.readLastReview()
     return {
       workflow: await evaluationWorkflow(
@@ -1291,7 +1688,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       headSha: pr.head.sha,
       reviewedHead: (await this.readReviewed())?.headSha,
       lastReview,
-      openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), [])),
+      openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), []), resolved),
       checks: await this.checksOn(pr.head.sha),
     }
   }
@@ -1315,19 +1712,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async approve(head: string, context: ApprovalContext): Promise<void> {
-    if (this.#approving.has(head)) return logWait(context, "approving")
+  private async approve(head: string, context: ApprovalContext): Promise<ApprovalOutcome> {
+    if (this.#approving.has(head)) return waited(context, "approving")
     this.#approving.add(head)
     try {
-      await this.submitApproval(head, context)
+      return await this.submitApproval(head, context)
     } finally {
       this.#approving.delete(head)
     }
   }
 
-  private async submitApproval(head: string, context: ApprovalContext): Promise<void> {
-    if ((await this.currentPullRequest()).head.sha !== head) return logWait(context, "head_moved")
-    if ((await this.readLastReview())?.event === "APPROVE") return logWait(context, "approved")
+  private async submitApproval(head: string, context: ApprovalContext): Promise<ApprovalOutcome> {
+    if ((await this.currentPullRequest()).head.sha !== head) return waited(context, "head_moved")
+    if ((await this.readLastReview())?.event === "APPROVE") return waited(context, "approved")
     const key = await this.key()
     const review = await (
       await this.github()
@@ -1339,10 +1736,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     await this.ctx.storage.put<LastReview>(
       "lastReview",
-      evaluatedApprovalOf({ reviewId: review.id, headSha: head, at: Date.now() }),
+      approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
     )
     await this.rewriteSummaryVerdict(head)
     log("approval.posted", { ...context, review: review.id })
+    return { kind: "approved", head }
   }
 
   private async rewriteSummaryVerdict(headSha: string): Promise<void> {
@@ -1443,22 +1841,38 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     const github = await this.github()
     const ref: RepoRef = key
-    let commentId = await this.summaryCommentId()
-    if (commentId === undefined) {
-      const existing = (await github.listIssueComments(ref, key.number)).find((c) => c.body?.startsWith(SUMMARY_MARKER))
-      commentId = existing?.id
-    }
+    const commentId = await this.findSummaryComment()
+    const line = await this.shownPausedLine()
+    const shown = line === undefined ? body : withPausedLine(body, line)
     if (commentId !== undefined) {
       try {
-        await github.updateIssueComment(ref, commentId, body)
+        await github.updateIssueComment(ref, commentId, shown)
         await this.ctx.storage.put("summaryCommentId", commentId)
         return
       } catch (error) {
         console.warn("andabot: summary comment update failed, creating a new one", error)
       }
     }
-    const created = await github.createIssueComment(ref, key.number, body)
+    const created = await github.createIssueComment(ref, key.number, shown)
     await this.ctx.storage.put("summaryCommentId", created.id)
+  }
+
+  private async findSummaryComment(): Promise<number | undefined> {
+    const stored = await this.summaryCommentId()
+    if (stored !== undefined) return stored
+    const key = await this.key()
+    const comments = await (await this.github()).listIssueComments(key, key.number)
+    return comments.find((comment) => comment.body?.startsWith(SUMMARY_MARKER))?.id
+  }
+
+  private async shownPausedLine(): Promise<string | undefined> {
+    if (!(await this.isPaused())) return undefined
+    return pausedLine(await this.pausedBy(), this.botLogin())
+  }
+
+  private async pausedBy(): Promise<string | undefined> {
+    const stored = await this.ctx.storage.get("pausedBy")
+    return Value.Check(PausedBy, stored) ? stored : undefined
   }
 
   private async summaryCommentId(): Promise<number | undefined> {
@@ -1554,9 +1968,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, started: Date.now() })
   }
 
-  private async callerIsReviewInFlight(pending: PendingReview): Promise<boolean> {
-    const running = (await this.harness.pending()).find((op) => op.status === "running")
-    return running !== undefined && ownsOperation(pending, running.operationId)
+  private async runningRootOperation(): Promise<string | undefined> {
+    const running = (await this.harness.pending({ session: ROOT_SESSION })).find((op) => op.status === "running")
+    return running?.operationId
   }
 
   private async guardedCheck<T>(step: string, call: () => Promise<T>): Promise<T | undefined> {
@@ -1591,6 +2005,17 @@ function promptFor(
   })
 }
 
+function requestedReview(call: CommandCall, headSha: string, full: boolean): ReviewIncoming {
+  return {
+    kind: "review",
+    key: call.key,
+    deliveryId: call.incoming.deliveryId,
+    headSha,
+    full,
+    requestedBy: call.incoming.author,
+  }
+}
+
 function coverageOf(scope: ReviewScope, headSha: string, resolved: number): Coverage {
   const coverage = { mode: scope.mode, to: headSha, files: scope.covered.length, resolved }
   return scope.from === undefined ? coverage : { ...coverage, from: scope.from }
@@ -1606,8 +2031,13 @@ function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: P
   })
 }
 
-function logWait(context: ApprovalContext, reason: WaitReason): void {
+function waited(context: ApprovalContext, reason: WaitReason): ApprovalOutcome {
   log("approval.decided", { ...context, decision: "wait", reason })
+  return { kind: "wait", reason }
+}
+
+function waitReasonOf(outcome: ApprovalOutcome): WaitReason | undefined {
+  return outcome.kind === "wait" ? outcome.reason : undefined
 }
 
 function retryOutcome(failure: string | undefined, refusal: string | undefined): RetryOutcome {
@@ -1617,6 +2047,12 @@ function retryOutcome(failure: string | undefined, refusal: string | undefined):
 }
 
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
+
+const MERGE_DANGER_REFERENCE = "references/merge-danger.md"
+
+function unusableSummary(reason: string): SummaryOutcome {
+  return { kind: "unusable", reason: oneClause(reason) }
+}
 
 function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
   if (model === undefined || fingerprint === undefined) return undefined
