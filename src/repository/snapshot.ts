@@ -31,7 +31,6 @@ export const LEFT_OUT_REASONS = [
   "gap_cap",
   "snapshot_cap",
   "unreadable",
-  "unlisted",
 ] as const
 
 export type LeftOutReason = (typeof LEFT_OUT_REASONS)[number]

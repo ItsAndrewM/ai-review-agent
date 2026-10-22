@@ -44,6 +44,8 @@ These would make it a failure even if it technically worked:
   | facebook/react, 37 MB of text | over the 30 s limit; object reset | ≤ 0.9 s |
   | microsoft/vscode, 253 MB of text | not tried | 8.2 s |
 
+  During the build, the task review measured `.*foo.*bar` at 6.3 s on one 8.8 KB line, which is why grep tests only a line's first 500 characters and refuses patterns with two unbounded wildcards.
+
   A grep scan with no match took 70 ms of CPU on react and 619 ms on vscode. The clone downloads, inflates and stores every blob, binaries included, and no pure-JavaScript git client supports partial clone. The tarball streams past binaries and large files without storing them. It needs no dependency, where `@cloudflare/computer` with isomorphic-git and its `@platformatic/vfs` peer weighed 230 KB gzipped.
 - **The research found nothing better for a Worker.** Reviewers that grep the whole repository (CodeRabbit, Copilot, Cloudflare's own) run on a real filesystem in a microVM, container or CI runner. Cloudflare Artifacts stores a repository the way this design does, as SQLite rows in a Durable Object, but imports only public repositories, can't pin a commit and has no search yet. GitHub's code search sees only the default branch. A container is the phase 3 upgrade.
 
@@ -62,7 +64,7 @@ A snapshot is the head commit's text files, stored in the pull request's object.
 1. **The tarball.** `GET /repos/{owner}/{repo}/tarball/{headSha}` on the base repository with the installation token. GitHub redirects to `codeload.github.com` with a short-lived token in the URL, and `fetch` follows it. The base repository serves a fork pull request's head sha. One retry on a failed or cut-off download.
 2. **Streaming.** The body goes through `DecompressionStream("gzip")` into a tar reader that handles ustar headers with their prefix field, pax `x` and `g` headers, GNU long names (`L`), and zero blocks. Each entry's leading directory (`owner-repo-sha/`) is stripped. The reader keeps a regular file of 1 MB or less with no NUL byte in its first 8 KB, and skips past everything else without buffering it.
 3. **What the tarball leaves out.** A path marked `export-ignore` in `.gitattributes` is missing from GitHub's archives: `laravel/framework`'s tarball has no `tests/`, for example. So the loader reads the recursive tree at the head sha and compares it with what it kept. It fetches each missing blob of 1 MB or less through GraphQL, in aliased batches of 50 `object(expression: "sha:path") { ... on Blob { text isBinary isTruncated } }`, up to 500 files. A truncated or binary answer is skipped.
-4. **The record.** It lists the paths it couldn't hold, in groups: too large, binary, LFS pointer (content starting `version https://git-lfs.github.com/spec/v1`), submodule, symlink, beyond the gap-fill cap, and not in the tree's listing when the tree came back truncated.
+4. **The record.** It lists the paths it couldn't hold, in groups: too large, binary, LFS pointer (content starting `version https://git-lfs.github.com/spec/v1`), submodule, symlink, beyond the gap-fill cap, and a note that the tree came back truncated, so the gap fill covered only the paths it listed.
 
 A snapshot is capped at 50,000 files or 400 MB of text. Past the cap, loading stops, and the snapshot covers only the paths loaded, with a note that names the cap. `limits.cpu_ms` in `wrangler.jsonc` rises to 120,000, so a vscode-size load can't reset the object.
 
