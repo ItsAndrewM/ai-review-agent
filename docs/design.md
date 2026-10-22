@@ -224,6 +224,8 @@ The prompt carries the pull request's data, its linked issues and its whole diff
 
 One summary runs at a time. A `summary` that finds a live `summarizing` record replies that one is already being written, and logs `summary.skip` with reason `in_progress`. A record is live while Pi lists its operation, or within the grace, so a run killed by eviction doesn't block the next one for good. After an eviction or a deploy mid-summary, though, Pi resumes the operation with nothing waiting for its answer, so until it settles a second `summary` gets that reply though nothing will update the comment. On a closed pull request `summary` replies that there's nothing to summarize, and logs `summary.skip` with reason `not_open`. Every path replies, an unexpected error included, so its 👀 always gets an answer.
 
+A summary that lands while a review is publishing can be overwritten though its reply says it updated the comment: the review read `reviewed` before the summary wrote it, so the review's write, its old summary with its "Since" section, wins until the next summary or review rewrites `reviewed` and the comment. `pause` and `resume` edit the comment by reading it and writing it back, so a review's write that lands between the two can be undone, and as no automatic review repairs it during a pause, the stale comment can last until a `summary` or the next requested review.
+
 ### Configuration file
 
 `.andabot.yaml` at the PR head, optional:
