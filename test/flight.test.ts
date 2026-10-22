@@ -145,6 +145,18 @@ describe("migratePending", () => {
     expect(Value.Check(StoredPending, { ...pending, instructionFiles: "CLAUDE.md" })).toBe(false)
   })
 
+  it("keeps the request-changes workflow and the ignored config's error the run started with, which the publish reads back", () => {
+    const settled: PendingReview = {
+      ...pending,
+      requestChangesWorkflow: false,
+      configError: "/reviews/auto must be boolean",
+    }
+    expect(Value.Check(StoredPending, settled)).toBe(true)
+    expect(migratePending(settled)).toEqual(settled)
+    expect(Value.Check(StoredPending, { ...pending, requestChangesWorkflow: "true" })).toBe(false)
+    expect(Value.Check(StoredPending, { ...pending, configError: 5 })).toBe(false)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)

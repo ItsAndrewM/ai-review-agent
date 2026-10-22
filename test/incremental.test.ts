@@ -1,8 +1,14 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { ReviewThread } from "../src/github/client.ts"
-import type { ChangedFile } from "../src/github/diff.ts"
-import type { FindingInput, MergeDangerInput, ReviewSubmissionInput, ValidatedReview } from "../src/review/findings.ts"
+import { indexCommentableLines, renderPatches, reviewableFiles, type ChangedFile } from "../src/github/diff.ts"
+import {
+  validateFindings,
+  type FindingInput,
+  type MergeDangerInput,
+  type ReviewSubmissionInput,
+  type ValidatedReview,
+} from "../src/review/findings.ts"
 import {
   addressedThreads,
   applyDeltaPolicy,
@@ -19,16 +25,21 @@ import {
   pathsNeedingRows,
   planThreads,
   promptFiles,
+  filtersInForce,
+  pathFiltersSkip,
   resolveThreads,
   ReviewedRecord,
+  ReviewScope,
+  scopedFiles,
   stricterMergeDanger,
   submissionFromRecord,
   threadLists,
   threadsToRecheck,
+  withFilteredUnfounded,
   type OpenThread,
-  type ReviewScope,
   type StoredFinding,
 } from "../src/review/incremental.ts"
+import { holdsApprovalBack } from "../src/review/render.ts"
 
 const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
 
@@ -294,6 +305,179 @@ describe("pathsNeedingRows", () => {
   it("asks for every row when an incremental scope has no range, since its prompt then shows the whole diff", () => {
     const scope = buildScope({ deliveryId: "d", mode: "incremental", from: undefined, covered, threads: undefined })
     expect(pathsNeedingRows(scope, files)).toEqual(["a.ts", "b.ts"])
+  })
+
+  it("asks for no row on a file the review's path filters left out, in every mode", () => {
+    for (const mode of ["full", "fresh"] as const) {
+      const scope = buildScope({
+        deliveryId: "d",
+        mode,
+        from: "aaa",
+        covered,
+        threads: undefined,
+        pathFilters: ["!b.ts"],
+      })
+      expect(pathsNeedingRows(scope, files)).toEqual(["a.ts"])
+    }
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered,
+      threads: undefined,
+      pathFilters: ["!a.ts"],
+    })
+    expect(pathsNeedingRows(scope, files)).toEqual([])
+  })
+
+  it("reads a scope stored before path filters existed as filtering nothing", () => {
+    const stored = {
+      deliveryId: "d",
+      mode: "full" as const,
+      covered: [],
+      recheck: [],
+      open: [],
+      threadsKnown: false,
+      changed: [],
+    }
+    expect(Value.Check(ReviewScope, stored)).toBe(true)
+    expect(Value.Check(ReviewScope, { ...stored, pathFilters: ["!b.ts"] })).toBe(true)
+    expect(Value.Check(ReviewScope, { ...stored, pathFilters: "!b.ts" })).toBe(false)
+    expect(pathsNeedingRows(stored, files)).toEqual(["a.ts", "b.ts"])
+  })
+})
+
+describe("path filters", () => {
+  const filters = ["!**/*.snap", "!fixtures/**"]
+  const prFiles = [
+    changed("src/x.ts", "@@ -1 +1 @@\n-x\n+y"),
+    changed("a.snap", "@@ -1 +1 @@\n-old\n+new"),
+    changed("fixtures/payload.json", "@@ -1 +1 @@\n-{}\n+[]"),
+  ]
+
+  it("take a.snap out of the prompt's files and the rows needed with !**/*.snap, while the changed files still hold it", () => {
+    const shown = reviewableFiles(prFiles, filters)
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "full",
+      from: undefined,
+      covered: new Map(),
+      threads: undefined,
+      pathFilters: filters,
+    })
+    expect(renderPatches(prFiles)).toContain("### a.snap")
+    expect(renderPatches(shown)).not.toContain("a.snap")
+    expect(renderPatches(shown)).not.toContain("fixtures/payload.json")
+    expect(pathsNeedingRows(scope, prFiles)).toEqual(["src/x.ts"])
+    expect(prFiles.map((file) => file.filename)).toEqual(["src/x.ts", "a.snap", "fixtures/payload.json"])
+  })
+
+  it("leave a filtered file out of an incremental review's coverage and its listing, so a push touching only one has nothing to review", () => {
+    const shown = reviewableFiles(prFiles, filters)
+    const since = [
+      changed("a.snap", "@@ -1 +1 @@\n-old\n+new"),
+      changed("fixtures/payload.json", "@@ -1 +1 @@\n-{}\n+[]"),
+    ]
+    const covered = coveredFiles(shown, since)
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "incremental",
+      from: "aaa",
+      covered,
+      threads: undefined,
+      changed: pathsChangedSince(shown, since),
+      pathFilters: filters,
+    })
+    expect(coveredFiles(prFiles, since).size).toBe(2)
+    expect(covered.size).toBe(0)
+    expect(nothingToReview(scope)).toBe(true)
+    expect(promptFiles(shown, since, scope).others.map((file) => file.filename)).toEqual(["src/x.ts"])
+  })
+
+  it("give the scope's files, the ones its filters leave in, and every changed file for a scope stored before filters", () => {
+    const older = { deliveryId: "d", mode: "full" as const, covered: [], recheck: [], open: [], threadsKnown: false }
+    expect(scopedFiles({ ...older, pathFilters: filters }, prFiles).map((file) => file.filename)).toEqual(["src/x.ts"])
+    expect(scopedFiles(older, prFiles)).toEqual(prFiles)
+  })
+
+  it("in force are the review's own while one is in flight, and the config's otherwise, as in a chat turn", async () => {
+    const reads: string[] = []
+    const configured = async () => {
+      reads.push("config")
+      return ["!docs/**"]
+    }
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(await filtersInForce({ ...scope, pathFilters: filters }, configured)).toEqual(filters)
+    expect(await filtersInForce({ ...scope, pathFilters: [] }, configured)).toEqual([])
+    expect(reads).toEqual([])
+    expect(await filtersInForce(undefined, configured)).toEqual(["!docs/**"])
+    expect(reads).toEqual(["config"])
+  })
+
+  it("reject a finding on a filtered file as left out by the filters and unfounded, so even a blocking one holds no approval back", () => {
+    const scope = buildScope({
+      deliveryId: "d",
+      mode: "full",
+      from: undefined,
+      covered: new Map(),
+      threads: undefined,
+      pathFilters: filters,
+    })
+    const onFile = (path: string, quote: string, severity: FindingInput["severity"]): FindingInput => ({
+      path,
+      line: 1,
+      quote,
+      basis_kind: "defect",
+      basis: "a snapshot that no longer matches the component",
+      severity,
+      title: "t",
+      body: "b",
+    })
+    const validated = validateFindings(
+      [onFile("src/x.ts", "y", "suggestion"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
+      indexCommentableLines(scopedFiles(scope, prFiles)),
+      false,
+    )
+    const { accepted, rejected } = withFilteredUnfounded(validated, scope)
+    expect(accepted.map((finding) => finding.path)).toEqual(["src/x.ts"])
+    expect(rejected.map(({ finding, reason, unfounded }) => [finding.path, reason, unfounded])).toEqual([
+      ["a.snap", 'path "a.snap" is left out of the review by path_filters; drop the finding', true],
+      ["gone.ts", 'path "gone.ts" is not a changed file', false],
+    ])
+    expect(rejected.map(holdsApprovalBack)).toEqual([false, true])
+  })
+
+  it("leave a review's rejections as they were when it has no filters", () => {
+    const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    const finding: FindingInput = {
+      path: "a.snap",
+      line: 9,
+      quote: "q",
+      basis_kind: "defect",
+      basis: "b",
+      severity: "blocking",
+      title: "t",
+      body: "b",
+    }
+    const validated = validateFindings([finding], indexCommentableLines(scopedFiles(scope, prFiles)), false)
+    expect(withFilteredUnfounded(validated, scope)).toEqual(validated)
+  })
+
+  it("skip as path_filters only when filters leave out every changed file, and list the files only when filters exist", async () => {
+    const listed: string[] = []
+    const lister = (files: readonly ChangedFile[]) => async () => {
+      listed.push("files")
+      return files
+    }
+    const onlyFiltered = [
+      changed("a.snap", "@@ -1 +1 @@\n-old\n+new"),
+      changed("fixtures/b.json", "@@ -1 +1 @@\n-{}\n+[]"),
+    ]
+    expect(await pathFiltersSkip([], lister(prFiles))).toBeUndefined()
+    expect(listed).toEqual([])
+    expect(await pathFiltersSkip(filters, lister(onlyFiltered))).toBe("path_filters")
+    expect(await pathFiltersSkip(filters, lister(prFiles))).toBeUndefined()
+    expect(listed).toEqual(["files", "files"])
   })
 })
 

@@ -347,6 +347,20 @@ describe("reviewStandards", () => {
   it("is no standards at all for an unreadable context", () => {
     expect(reviewStandards(undefined, WEB, [])).toEqual(NO_STANDARDS)
   })
+
+  it("keeps the matching path instructions for an unreadable context, since .andabot.yaml is read on its own", () => {
+    const pathInstructions = [
+      { path: "docs/**", instructions: "Docs rule." },
+      { path: "apps/web/**", instructions: "Web path rule." },
+    ]
+    expect(reviewStandards(undefined, WEB, pathInstructions)).toEqual({
+      text: "## Repository standards\n\n### .andabot.yaml: apps/web/**\n\nWeb path rule.",
+      used: [".andabot.yaml: apps/web/**"],
+      cut: [],
+      loadsSkipped: 0,
+      treeTruncated: false,
+    })
+  })
 })
 
 describe("unloadedPaths", () => {

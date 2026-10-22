@@ -155,7 +155,10 @@ export function reviewStandards(
   changed: readonly string[],
   pathInstructions: readonly PathInstruction[],
 ): ReviewStandards {
-  if (context === undefined) return { text: "", used: [], cut: [], loadsSkipped: 0, treeTruncated: false }
+  if (context === undefined) {
+    const configured = renderStandards(orderedStandards([], changed, pathInstructions))
+    return { ...configured, loadsSkipped: 0, treeTruncated: false }
+  }
   return {
     ...standardsFor(context, changed, pathInstructions),
     loadsSkipped: unloadedPaths(context, changed).length,
