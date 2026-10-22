@@ -3,7 +3,14 @@ import { Value } from "typebox/value"
 import type { ChangedFile } from "../github/diff.ts"
 import { shortSha } from "../sha.ts"
 import type { LastReview } from "./approval.ts"
-import { jsonIn, rowPath, SummarySubmission, type SummarySubmissionInput, type WalkthroughInput } from "./findings.ts"
+import {
+  jsonIn,
+  rowPath,
+  SummarySubmission,
+  type MergeDangerInput,
+  type SummarySubmissionInput,
+  type WalkthroughInput,
+} from "./findings.ts"
 import { GRACE_MS, type Liveness } from "./flight.ts"
 import type { ReviewedRecord } from "./incremental.ts"
 import { VERDICT_LABEL, type VerdictLine } from "./render.ts"
@@ -41,11 +48,13 @@ export function parseWrittenSummary(text: string): WrittenSummary {
   return { kind: "unusable", reason: `the model's answer didn't fit: ${first?.instancePath || "/"}: ${first?.message}` }
 }
 
+export type SummarizedRecord = ReviewedRecord & { merge_danger: MergeDangerInput }
+
 export function summarizedRecord(
   reviewed: ReviewedRecord,
   summary: SummarySubmissionInput,
   files: readonly ChangedFile[],
-): ReviewedRecord {
+): SummarizedRecord {
   return {
     headSha: reviewed.headSha,
     baseRef: reviewed.baseRef,

@@ -108,6 +108,7 @@ import {
   replacedExit,
   runStanding,
   StoredPending,
+  submitStanding,
   type FlightDecision,
   type PendingReview,
 } from "./review/flight.ts"
@@ -382,11 +383,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
-    if (!(await this.isRootConversation(conversationId))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
-    const pending = await this.readPending()
-    if (!pending) return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
-    if (!(await this.callerIsReviewInFlight(pending))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
-    return this.postReview(submission, pending.deliveryId)
+    const standing = submitStanding({
+      caller: conversationId,
+      root: (await this.harness.conversation(ROOT_SESSION)).id,
+      pending: await this.readPending(),
+      running: await this.runningRootOperation(),
+    })
+    if (standing.kind === "no_review") {
+      return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
+    }
+    if (standing.kind === "not_in_flight") return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    return this.postReview(submission, standing.deliveryId)
   }
 
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
@@ -1595,7 +1602,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return {
       summary: record.summary,
       walkthrough: record.walkthrough,
-      merge_danger: record.merge_danger ?? answer.merge_danger,
+      merge_danger: record.merge_danger,
     }
   }
 
@@ -1920,13 +1927,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, started: Date.now() })
   }
 
-  private async isRootConversation(conversationId: ConversationId): Promise<boolean> {
-    return conversationId === (await this.harness.conversation(ROOT_SESSION)).id
-  }
-
-  private async callerIsReviewInFlight(pending: PendingReview): Promise<boolean> {
+  private async runningRootOperation(): Promise<string | undefined> {
     const running = (await this.harness.pending({ session: ROOT_SESSION })).find((op) => op.status === "running")
-    return running !== undefined && ownsOperation(pending, running.operationId)
+    return running?.operationId
   }
 
   private async guardedCheck<T>(step: string, call: () => Promise<T>): Promise<T | undefined> {
