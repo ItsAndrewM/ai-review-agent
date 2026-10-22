@@ -1327,7 +1327,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async summarizeOnce(pr: PullRequestInfo, deliveryId: string): Promise<SummaryOutcome> {
-    const run = { deliveryId, operationId: `summary:${deliveryId}`, started: Date.now() }
+    const run = { deliveryId, operationId: `summary:${deliveryId}:${pr.head.sha}`, started: Date.now() }
     await this.ctx.storage.put<Summarizing>("summarizing", run)
     try {
       return await this.runSummary(pr, run)
