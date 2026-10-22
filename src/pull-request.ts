@@ -37,6 +37,7 @@ import {
   type RepositoryContext,
   type ReviewStandards,
 } from "./repository/context.ts"
+import type { SnapshotFiles } from "./repository/snapshot.ts"
 import {
   checksState,
   decideApproval,
@@ -140,7 +141,7 @@ import {
 } from "./review/render.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
-import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
+import { createReviewExtension, type ReviewHost, type SearchAccess, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
@@ -298,6 +299,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     this.#files = await (await this.github()).listPullRequestFiles(key, key.number)
     return this.#files
+  }
+
+  async repositorySearch(_tool: "grep" | "tree"): Promise<SearchAccess> {
+    return { kind: "unavailable", reason: "repository search is not wired yet" }
+  }
+
+  loadedSnapshot(): SnapshotFiles | undefined {
+    return undefined
   }
 
   async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
