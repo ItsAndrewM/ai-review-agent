@@ -145,6 +145,13 @@ describe("migratePending", () => {
     expect(Value.Check(StoredPending, { ...pending, instructionFiles: "CLAUDE.md" })).toBe(false)
   })
 
+  it("keeps the fingerprint of the repository skills the review was offered, which the summary footer reads back", () => {
+    const offered: PendingReview = { ...pending, repoSkillsFingerprint: "1a2b3c4d".repeat(8) }
+    expect(Value.Check(StoredPending, offered)).toBe(true)
+    expect(migratePending(offered)).toEqual(offered)
+    expect(Value.Check(StoredPending, { ...pending, repoSkillsFingerprint: 5 })).toBe(false)
+  })
+
   it("keeps the request-changes workflow and the ignored config's error the run started with, which the publish reads back", () => {
     const settled: PendingReview = {
       ...pending,

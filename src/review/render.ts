@@ -62,6 +62,7 @@ export function renderSummaryComment(input: {
   droppedCount: number
   model?: string | undefined
   skillsFingerprint?: string | undefined
+  repoSkillsFingerprint?: string | undefined
   spend?: ReviewSpend | undefined
   linkedIssues: readonly number[]
   instructionFiles: readonly string[]
@@ -100,7 +101,7 @@ export function renderSummaryComment(input: {
     dropped,
     ...sinceLines(input.since),
     "",
-    ...reviewedBy(input.model, input.skillsFingerprint),
+    ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint),
     ...spendLines(input.spend),
     linkedIssuesLine(input.linkedIssues),
     standardsLine(input.instructionFiles),
@@ -147,9 +148,15 @@ function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
   return rows.map((row) => ({ ...row, path: rowPath(row.path) }))
 }
 
-function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
+function reviewedBy(
+  model: string | undefined,
+  skillsFingerprint: string | undefined,
+  repoSkillsFingerprint: string | undefined,
+): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
-  return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+  const repo = repoSkillsFingerprint === undefined ? [] : [`repo@${repoSkillsFingerprint.slice(0, 8)}`]
+  const skills = [`review@${skillsFingerprint.slice(0, 8)}`, ...repo].map((skill) => `\`${skill}\``).join(", ")
+  return [`<sub>Reviewed by \`${model}\` with skills ${skills}.</sub>`]
 }
 
 function spendLines(spend: ReviewSpend | undefined): string[] {

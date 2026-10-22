@@ -881,6 +881,7 @@ describe("renderSummaryComment", () => {
   const summaryWith = (attribution: {
     model?: string
     skillsFingerprint?: string
+    repoSkillsFingerprint?: string
     linkedIssues?: number[]
     spend?: ReviewSpend
     instructionFiles?: string[]
@@ -932,6 +933,26 @@ describe("renderSummaryComment", () => {
       instructionFiles: [],
     })
     expect(text).toContain("**Merge danger:** one-way door · billing and the invoices table\n\n### Summary")
+  })
+
+  it("names the repository's skills after the built-in ones in the skills claim when the review was offered them", () => {
+    const text = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "06bcba08ffffffff",
+      repoSkillsFingerprint: "1a2b3c4d5e6f7a8b",
+    })
+    expect(text).toContain(
+      "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@06bcba08`, `repo@1a2b3c4d`.</sub>\n<sub>",
+    )
+  })
+
+  it("claims no repository skill when the review was offered none, and no skill at all without the model and the built-in fingerprint", () => {
+    const text = summaryWith({ model: "@cf/zai-org/glm-5.3-flash", skillsFingerprint: "06bcba08ffffffff" })
+    expect(text).toContain("with skills `review@06bcba08`.</sub>")
+    expect(text).not.toContain("repo@")
+    expect(summaryWith({ model: "@cf/zai-org/glm-5.3-flash", repoSkillsFingerprint: "1a2b3c4d" })).not.toContain(
+      "Reviewed by",
+    )
   })
 
   it("leaves the skills claim out when the build that ran the review recorded no model or fingerprint", () => {

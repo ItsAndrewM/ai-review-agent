@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
 import { createRegistry, Harness } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, type PiPromptResponse } from "agents/harness/pi"
+import { PiHarness, ROOT_SESSION, skills as skillsExtension, type PiPromptResponse } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
@@ -50,14 +50,16 @@ import {
   contextKey,
   loadRepositoryContext,
   readRepositoryContext,
+  repositoryRecord,
   reviewInstructions,
-  reviewStandards,
+  reviewRepository,
   staleContextKeys,
   StoredRepositoryContext,
   type RepositoryContext,
-  type ReviewStandards,
+  type ReviewRepository,
 } from "./repository/context.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
+import { catalogFor, installCatalog, skillLogs, skillsStartFields, type InstalledCatalog } from "./repository/skills.ts"
 import {
   checksState,
   decideApproval,
@@ -279,6 +281,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
+  #catalog: InstalledCatalog | undefined
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -457,6 +460,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       droppedCount: scoped.rejected.length,
       model: attribution?.model,
       skillsFingerprint: attribution?.fingerprint,
+      repoSkillsFingerprint: pending.repoSkillsFingerprint,
       spend,
       linkedIssues: pending.linkedIssues ?? [],
       instructionFiles: pending.instructionFiles ?? [],
@@ -734,14 +738,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, linkedIssues })
   }
 
-  private async repositoryStandards(
+  private async repositoryContext(
     pr: PullRequestInfo,
     files: readonly ChangedFile[],
     pathInstructions: readonly PathInstruction[],
-  ): Promise<ReviewStandards> {
+  ): Promise<ReviewRepository> {
     const { baseSha, changed } = contextInputs(pr, files)
-    const context = await this.repositoryContext(pr.number, baseSha, changed)
-    return reviewStandards(context, changed, pathInstructions)
+    const context = await this.loadedContext(pr.number, baseSha, changed)
+    const repository = await reviewRepository(context, changed, pathInstructions)
+    for (const { event, fields } of skillLogs(pr.number, repository.skills)) log(event, fields)
+    return repository
   }
 
   private async repositoryConfig(pr: PullRequestInfo): Promise<ConfigRead> {
@@ -775,7 +781,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async repositoryContext(
+  private async loadedContext(
     number: number,
     baseSha: string,
     changed: readonly string[],
@@ -813,9 +819,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async recordInstructionFiles(deliveryId: string, used: readonly string[]): Promise<void> {
+  private async recordRepository(deliveryId: string, repository: ReviewRepository): Promise<void> {
     const pending = await this.pendingFor(deliveryId)
-    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, instructionFiles: [...used] })
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, ...repositoryRecord(repository) })
   }
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
@@ -823,8 +829,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
       await this.recordLinkedIssues(run.deliveryId, issues)
-      const standards = await this.repositoryStandards(pr, files, run.config.reviews.path_instructions)
-      await this.recordInstructionFiles(run.deliveryId, standards.used)
+      const repository = await this.repositoryContext(pr, files, run.config.reviews.path_instructions)
+      await this.recordRepository(run.deliveryId, repository)
+      const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
       const { scope, since } = await this.planReview(pr, reviewable, incoming, run)
       const prompt = promptFor(pr, reviewable, scope, since, issues)
@@ -840,6 +847,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         standardsCut: standards.cut.length,
         instructionLoadsSkipped: standards.loadsSkipped,
         treeTruncated: standards.treeTruncated,
+        ...skillsStartFields(repository.skills),
         promptChars: prompt.length,
         model: this.env.REVIEW_MODEL,
         thinkingLevel: this.env.REVIEW_THINKING_LEVEL,
@@ -859,7 +867,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
-      await this.configureReview(standards.text)
+      await this.configureReview(repository)
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       logTranscript(pr, "review", result)
@@ -974,18 +982,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
-  private async configureReview(standards: string): Promise<void> {
+  private async configureReview({ standards, skills }: ReviewRepository): Promise<void> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "review")
     const references = await loadReferences(source, skill)
     const root = await (await this.harness.pi()).root(BACKGROUND_CONTEXT)
     await root.configure(
       {
-        instructions: reviewInstructions(renderSkillWithResources(skill, references), standards),
+        instructions: reviewInstructions(renderSkillWithResources(skill, references), [standards.text]),
         thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
       },
       BACKGROUND_CONTEXT,
     )
+    const catalog = catalogFor(source, skills.offered)
+    this.#catalog = await installCatalog(this.registry, this.#catalog, catalog, skillsExtension)
   }
 
   private async finishReview(

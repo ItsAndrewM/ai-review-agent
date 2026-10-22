@@ -2,6 +2,7 @@ import { Type } from "typebox"
 import type { GitHubClient, RepoRef, RepositoryTree, TreeEntry } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { errorText } from "../log.ts"
+import type { StoredPending } from "../review/flight.ts"
 import {
   instructionCandidates,
   mayBeInstructionFile,
@@ -30,6 +31,8 @@ export interface ReviewRepository {
   readonly standards: ReviewStandards
   readonly skills: RepositorySkills
 }
+
+export type RepositoryRecord = Pick<StoredPending, "instructionFiles" | "repoSkillsFingerprint">
 
 export interface ContextInputs {
   readonly baseSha: string
@@ -182,6 +185,13 @@ export async function reviewRepository(
   }
 }
 
-export function reviewInstructions(skill: string, standards: string): string {
-  return standards === "" ? skill : `${skill}\n\n${standards}`
+export function repositoryRecord({ standards, skills }: ReviewRepository): RepositoryRecord {
+  const instructionFiles = [...standards.used]
+  return skills.offered === undefined
+    ? { instructionFiles }
+    : { instructionFiles, repoSkillsFingerprint: skills.offered.fingerprint }
+}
+
+export function reviewInstructions(skill: string, sections: readonly string[]): string {
+  return [skill, ...sections.filter((section) => section !== "")].join("\n\n")
 }
