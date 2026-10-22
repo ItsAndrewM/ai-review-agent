@@ -17,6 +17,8 @@ export const MAX_SEARCH_CALLS = 40
 
 export const MAX_SEARCHED_LINE_CHARS = 2_000
 
+export const MAX_LONG_LINES_TESTED = 500
+
 export interface GrepQuery {
   pattern: string
   glob?: string
@@ -34,6 +36,8 @@ interface Found {
   overflowFiles: Set<string>
   searched: number
   longLines: number
+  longTested: number
+  stopped: boolean
 }
 
 interface Compiled {
@@ -45,7 +49,7 @@ type Selector = (path: string) => boolean
 
 const GLOB_OPTIONS = { dot: true, matchBase: true }
 const MAX_EXAMPLE_PATHS = 10
-const NOTE_RESERVE = 240
+const NOTE_RESERVE = 400
 const REGEX_SPECIALS = ".*+?^${}()|[]\\"
 const LEADING_DOT_SLASH = /^(?:\.\/)+/
 const LEADING_SLASHES = /^\/+/
@@ -53,6 +57,11 @@ const TRAILING_SLASHES = /\/+$/
 const QUANTIFIERS = "+*{"
 const REPEATERS = "+*{"
 const ATOM = "a"
+const CARRIAGE_RETURN = 13
+const WILDCARD = "."
+const WILDCARD_ESCAPES = "SWD"
+const WILDCARD_REFUSAL =
+  "The pattern is refused: it has more than one unbounded wildcard (such as .* twice), which can run for minutes on long lines; grep for one distinctive term and read the file instead."
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
 
@@ -79,10 +88,10 @@ function structuralTokens(pattern: string): string[] {
       inClass = char !== "]"
     } else if (char === "\\") {
       index++
-      tokens.push(ATOM)
+      tokens.push(WILDCARD_ESCAPES.includes(pattern.charAt(index)) ? WILDCARD : ATOM)
     } else if (char === "[") {
       inClass = true
-      tokens.push(ATOM)
+      tokens.push(pattern.charAt(index + 1) === "^" ? WILDCARD : ATOM)
     } else {
       tokens.push(char)
     }
@@ -112,15 +121,21 @@ function hasNestedQuantifier(tokens: readonly string[]): boolean {
   return false
 }
 
+function hasTwoUnboundedWildcards(tokens: readonly string[]): boolean {
+  const wildcards = tokens.filter((token, index) => token === WILDCARD && "+*".includes(tokens[index + 1] ?? ATOM))
+  return wildcards.length >= 2
+}
+
 export function patternProblem(pattern: string): string | undefined {
   if (pattern === "") return "The pattern is empty."
   if (pattern.length > MAX_PATTERN_CHARS) {
     return `The pattern is ${pattern.length} characters, over the limit of ${MAX_PATTERN_CHARS}.`
   }
-  if (hasNestedQuantifier(structuralTokens(pattern))) {
+  const tokens = structuralTokens(pattern)
+  if (hasNestedQuantifier(tokens)) {
     return "The pattern has a nested quantifier (a repeated group that repeats inside), which can take far too long to match. Rewrite it without one."
   }
-  return undefined
+  return hasTwoUnboundedWildcards(tokens) ? WILDCARD_REFUSAL : undefined
 }
 
 const escaped = (text: string): string =>
@@ -134,9 +149,18 @@ function compile(pattern: string): Compiled {
   }
 }
 
-function* lineHits(file: SnapshotFile, regex: RegExp): Generator<Hit> {
-  for (const [index, raw] of file.content.split("\n").entries()) {
+const outOfLongLines = (found: Found): boolean => found.longTested >= MAX_LONG_LINES_TESTED
+
+function* lineHits(file: SnapshotFile, regex: RegExp, found: Found): Generator<Hit> {
+  const lines = file.content.split("\n")
+  for (const [index, raw] of lines.entries()) {
+    const trailingNewline = index === lines.length - 1 && raw === ""
+    if (outOfLongLines(found) && !trailingNewline) {
+      found.stopped = true
+      return
+    }
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw
+    if (line.length > MAX_LINE_CHARS) found.longTested++
     if (regex.test(line.slice(0, MAX_SEARCHED_LINE_CHARS))) {
       yield { path: file.path, text: `${file.path}:${index + 1}: ${line.slice(0, MAX_LINE_CHARS)}` }
     }
@@ -144,7 +168,7 @@ function* lineHits(file: SnapshotFile, regex: RegExp): Generator<Hit> {
 }
 
 function record(found: Found, file: SnapshotFile, regex: RegExp): void {
-  for (const hit of lineHits(file, regex)) {
+  for (const hit of lineHits(file, regex, found)) {
     if (found.hits.length < MAX_MATCHES) {
       found.hits.push(hit)
     } else {
@@ -154,21 +178,37 @@ function record(found: Found, file: SnapshotFile, regex: RegExp): void {
   }
 }
 
+function lineLength(content: string, start: number, end: number): number {
+  return end > start && content.charCodeAt(end - 1) === CARRIAGE_RETURN ? end - start - 1 : end - start
+}
+
 function longLineCount(content: string): number {
   if (content.length <= MAX_SEARCHED_LINE_CHARS) return 0
   let count = 0
   let start = 0
   for (let end = content.indexOf("\n"); end !== -1; end = content.indexOf("\n", start)) {
-    if (end - start > MAX_SEARCHED_LINE_CHARS) count++
+    if (lineLength(content, start, end) > MAX_SEARCHED_LINE_CHARS) count++
     start = end + 1
   }
-  return content.length - start > MAX_SEARCHED_LINE_CHARS ? count + 1 : count
+  return lineLength(content, start, content.length) > MAX_SEARCHED_LINE_CHARS ? count + 1 : count
 }
 
 function search(files: SnapshotFiles, selected: Selector, regex: RegExp): Found {
-  const found: Found = { hits: [], overflowMatches: 0, overflowFiles: new Set(), searched: 0, longLines: 0 }
+  const found: Found = {
+    hits: [],
+    overflowMatches: 0,
+    overflowFiles: new Set(),
+    searched: 0,
+    longLines: 0,
+    longTested: 0,
+    stopped: false,
+  }
   for (const file of files.files()) {
     if (!selected(file.path)) continue
+    if (outOfLongLines(found)) {
+      found.stopped = true
+      break
+    }
     found.searched++
     found.longLines += longLineCount(file.content)
     record(found, file, regex)
@@ -213,6 +253,11 @@ function longLineNote(count: number): string {
   return `${count} ${subject} searched only in ${pronoun} first ${MAX_SEARCHED_LINE_CHARS.toLocaleString("en-US")} characters.`
 }
 
+function stoppedNote(found: Found): string {
+  if (!found.stopped) return ""
+  return `Stopped early after ${plural(found.searched, "file", "files")}: too many long lines. Narrow the path or glob.`
+}
+
 function exampleGroups(chosen: readonly LeftOut[]): Examples {
   let room = MAX_EXAMPLE_PATHS
   const groups: string[] = []
@@ -249,7 +294,9 @@ export function grep(files: SnapshotFiles, query: GrepQuery): string {
   const room = MAX_GREP_CHARS - opening.length - closing.length - NOTE_RESERVE
   const found = search(files, selected, regex)
   const body = resultText(found, query.pattern, room)
-  return [opening, body, longLineNote(found.longLines), closing].filter((part) => part !== "").join("\n")
+  return [opening, body, stoppedNote(found), longLineNote(found.longLines), closing]
+    .filter((part) => part !== "")
+    .join("\n")
 }
 
 interface Listed {

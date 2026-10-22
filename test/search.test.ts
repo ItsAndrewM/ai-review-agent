@@ -4,6 +4,7 @@ import {
   grep,
   MAX_GREP_CHARS,
   MAX_LINE_CHARS,
+  MAX_LONG_LINES_TESTED,
   MAX_MATCHES,
   MAX_PATTERN_CHARS,
   MAX_SEARCH_CALLS,
@@ -38,7 +39,8 @@ describe("limits", () => {
       DEFAULT_TREE_DEPTH,
       MAX_SEARCH_CALLS,
       MAX_SEARCHED_LINE_CHARS,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 2_000])
+      MAX_LONG_LINES_TESTED,
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 2_000, 500])
   })
 })
 
@@ -236,6 +238,32 @@ describe("grep", () => {
     expect(grep(files, { pattern: "x{2000}" })).not.toContain("long line")
   })
 
+  it("does not count a CRLF line of exactly 2,000 characters as long", () => {
+    const files = snapshotOf({ "a.js": `${"x".repeat(2_000)}\r\n` })
+    expect(grep(files, { pattern: "x{2000}" })).not.toContain("long line")
+  })
+
+  it("stops after 500 long lines and says how many files it searched", () => {
+    const longLine = `${"x".repeat(399)}\n`
+    const contents = { ...numbered(600, longLine), "f599.ts": `needle${"x".repeat(394)}\n` }
+    expect(grep(snapshotOf(contents), { pattern: "needle" })).toBe(
+      [
+        "No match for /needle/ in 500 files.",
+        "Stopped early after 500 files: too many long lines. Narrow the path or glob.",
+      ].join("\n"),
+    )
+  })
+
+  it("stops in the middle of a file once 500 long lines have been tested", () => {
+    const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(600) })
+    expect(grep(files, { pattern: "needle" })).toContain("Stopped early after 1 file: too many long lines.")
+  })
+
+  it("does not say it stopped early when the long lines ran out at the limit", () => {
+    const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(500) })
+    expect(grep(files, { pattern: "needle" })).toBe("No match for /needle/ in 1 file.")
+  })
+
   it("keeps the long-line note inside the 12,000-character budget", () => {
     const files = snapshotOf({ "a.ts": `${"x".repeat(250)}\n`.repeat(90), "b.js": `${"y".repeat(2_500)}\n` })
     const answer = grep(files, { pattern: "x" })
@@ -246,7 +274,7 @@ describe("grep", () => {
   it("answers a backtracking-prone pattern over one very long line in under a second", () => {
     const files = snapshotOf({ "min.js": `xx foo ${"x".repeat(199_990)}\n` })
     const started = performance.now()
-    grep(files, { pattern: ".*foo.*bar" })
+    grep(files, { pattern: String.raw`[\s\S]*foo[\s\S]*bar` })
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
@@ -294,6 +322,25 @@ describe("patternProblem", () => {
     "(a)(b+)",
     String.raw`\(a+\)+`,
   ])("accepts %s", (pattern) => {
+    expect(patternProblem(pattern)).toBeUndefined()
+  })
+
+  it.each([".*foo.*bar", "foo.+bar.*baz", '[^"]*x[^"]*', String.raw`\S+\s\S+`, String.raw`\W*a\D+`, "(.*)x(.*)"])(
+    "refuses the two unbounded wildcards in %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toContain("more than one unbounded wildcard (such as .* twice)")
+    },
+  )
+
+  it.each([
+    "foo.*bar",
+    "a.?b.?c",
+    String.raw`\w+\(`,
+    '"[^"]*"',
+    String.raw`\d+\.\d+`,
+    String.raw`\.*x\.*`,
+    "[a-z]*x[a-z]*",
+  ])("accepts the single wildcard in %s", (pattern) => {
     expect(patternProblem(pattern)).toBeUndefined()
   })
 
