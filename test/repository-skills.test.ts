@@ -1,4 +1,5 @@
-import { createRegistry, defineExtension, type Extension, type Registry } from "@earendil-works/pi-durable"
+import { Type } from "@earendil-works/pi-ai"
+import { createRegistry, defineExtension, defineTool, type Extension, type Registry } from "@earendil-works/pi-durable"
 import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type TreeEntry } from "../src/github/client.ts"
@@ -16,6 +17,7 @@ import {
   MAX_DESCRIPTION_CHARS,
   MAX_SKILL_BYTES,
   MAX_SKILL_FILE_BYTES,
+  outputFromContent,
   repositorySkillFiles,
   repositorySkillFingerprint,
   repositorySkills,
@@ -26,10 +28,12 @@ import {
   skillsStartFields,
   unlisted,
   unloadedSkillPaths,
+  withContentAsOutput,
+  withOutputFromContent,
   type SkillState,
 } from "../src/repository/skills.ts"
 import { BUNDLED_SKILL_NAMES, bundledSkills } from "../src/review/bundled-skills.ts"
-import { sha256Hex } from "../src/review/skills.ts"
+import { renderActivatedSkill, sha256Hex } from "../src/review/skills.ts"
 
 const ref = { owner: "o", repo: "r" }
 const BASE = "ba5e5".repeat(8)
@@ -364,14 +368,15 @@ describe("loading a repository's skills at the base commit", () => {
     expect(reported).toEqual([FOO_RULES])
   })
 
-  it("never fetches a SKILL.md the listing sizes over 50 KiB, and reports its skill invalid", async () => {
+  it("never fetches a SKILL.md the listing sizes over 50 KiB, and reports its skill capped by the file cap", async () => {
     const huge = blob(".github/skills/huge/SKILL.md", "1", MAX_SKILL_FILE_BYTES + 1)
     const bodies = new Map([...SKILL_BODIES, file(huge.path, skillMd("Huge."))])
     const { github, calls } = fakeGitHub([huge, ...ALPHA.map((path) => blob(path))], bodies)
     const context = await loadRepositoryContext(github, ref, BASE, ["src/a.ts"], failOnUnreadable)
     expect(fetchesOf(calls, huge.path)).toBe(0)
     const skills = await repositorySkills(context)
-    expect(skills.invalid).toEqual([{ name: "huge", path: huge.path }])
+    expect(skills.capped).toEqual([{ name: "huge", path: huge.path, cap: "file" }])
+    expect(skills.invalid).toEqual([])
     expect(skills.offered?.names).toEqual(["alpha"])
   })
 
@@ -383,9 +388,13 @@ describe("loading a repository's skills at the base commit", () => {
     const loaded = contextOf(entries, Object.fromEntries(paths.slice(0, 10).map((path) => file(path, skillMd(path)))))
     const skills = await repositorySkills(loaded)
     expect(skills.offered?.names).toHaveLength(10)
-    expect(skills.capped.map(({ path }) => path)).toEqual(paths.slice(10))
+    expect(skills.capped).toEqual([
+      { name: "s-10", path: paths[10], cap: "base" },
+      { name: "s-11", path: paths[11], cap: "base" },
+      { name: "s-00", path: paths[0], cap: "base", resources: 1 },
+    ])
     expect(unloadedSkillPaths(loaded)).toEqual([])
-    expect(skillLogs(3, skills).filter(({ event }) => event === "skills.capped")).toHaveLength(2)
+    expect(skillLogs(3, skills).filter(({ event }) => event === "skills.capped")).toHaveLength(3)
   })
 
   it("never loads or serves a resource past 512 KiB of the listing's sizes, even one already cached", async () => {
@@ -395,10 +404,33 @@ describe("loading a repository's skills at the base commit", () => {
     const bodyOnly = contextOf(entries, Object.fromEntries([file(body, skillMd("Big."))]))
     expect(unloadedSkillPaths(bodyOnly)).toEqual(resources.slice(0, 9))
     const cached = Object.fromEntries([file(body, skillMd("Big.")), ...resources.map((path) => file(path, "Text."))])
-    const skill = await (await repositorySkills(contextOf(entries, cached))).offered?.source.load("big")
+    const skills = await repositorySkills(contextOf(entries, cached))
+    const skill = await skills.offered?.source.load("big")
     expect(skill?.resources?.map(({ path }) => path)).toEqual(
       resources.slice(0, 9).map((path) => path.slice(".github/skills/big/".length)),
     )
+    expect(skills.capped).toEqual([{ name: "big", path: body, cap: "base", resources: 1 }])
+  })
+
+  it("counts the resources each byte cap leaves out of an offered skill in one skills.capped event per cap", async () => {
+    const body = ".github/skills/lint/SKILL.md"
+    const heavy = Array.from({ length: 11 }, (_, index) => `.github/skills/lint/r-${indexed(index)}.md`)
+    const entries = [
+      blob(body),
+      blob(".github/skills/lint/huge.md", "1", MAX_SKILL_FILE_BYTES + 1),
+      blob(".github/skills/lint/vast.md", "1", MAX_SKILL_FILE_BYTES * 2),
+      ...heavy.map((path) => blob(path, "1", 50_000)),
+    ]
+    const skills = await repositorySkills(contextOf(entries, Object.fromEntries([file(body, skillMd("Lint."))])))
+    expect(skills.offered?.names).toEqual(["lint"])
+    expect(skills.capped).toEqual([
+      { name: "lint", path: body, cap: "file", resources: 2 },
+      { name: "lint", path: body, cap: "base", resources: 1 },
+    ])
+    expect(skillLogs(9, skills)).toEqual([
+      { event: "skills.capped", fields: { number: 9, name: "lint", path: body, cap: "file", resources: 2 } },
+      { event: "skills.capped", fields: { number: 9, name: "lint", path: body, cap: "base", resources: 1 } },
+    ])
   })
 
   it("counts no file of a skill whose SKILL.md is over 50 KiB toward the 512 KiB, since that skill is never served", async () => {
@@ -496,7 +528,7 @@ describe("the repository source", () => {
     expect(skills.invalid).toEqual([{ name: "lint", path: ".github/skills/lint/SKILL.md" }])
   })
 
-  it("reports a skill whose description passes 1,024 characters invalid, and offers one at the limit", async () => {
+  it("reports a skill whose description passes 1,024 characters capped by the description cap, and offers one at the limit", async () => {
     expect(MAX_DESCRIPTION_CHARS).toBe(1_024)
     const context = contextOf([blob(".github/skills/at/SKILL.md"), blob(".github/skills/over/SKILL.md")], {
       ".github/skills/at/SKILL.md": skillMd("d".repeat(MAX_DESCRIPTION_CHARS)),
@@ -504,7 +536,8 @@ describe("the repository source", () => {
     })
     const skills = await repositorySkills(context)
     expect(skills.offered?.names).toEqual(["at"])
-    expect(skills.invalid).toEqual([{ name: "over", path: ".github/skills/over/SKILL.md" }])
+    expect(skills.capped).toEqual([{ name: "over", path: ".github/skills/over/SKILL.md", cap: "description" }])
+    expect(skills.invalid).toEqual([])
   })
 
   it("offers skills in discovery order while their catalog lines fit in 12,000 characters, and reports capped every skill from the first that does not fit", async () => {
@@ -524,7 +557,10 @@ describe("the repository source", () => {
     expect(exact.capped.map(({ name }) => name)).toEqual(["s-12"])
     const over = await repositorySkills(catalogOf([...long, "d".repeat(894), "short"]))
     expect(over.offered?.names).toHaveLength(11)
-    expect(over.capped.map(({ name }) => name)).toEqual(["s-11", "s-12"])
+    expect(over.capped.map(({ name, cap }) => [name, cap])).toEqual([
+      ["s-11", "listing"],
+      ["s-12", "listing"],
+    ])
     expect((await over.offered?.source.list())?.map(({ name }) => name)).toEqual(over.offered?.names)
   })
 
@@ -547,7 +583,7 @@ describe("skillSourceFor", () => {
     const states: SkillState[] = [
       { kind: "offered", at: at("lint"), entry: entry("lint") },
       { kind: "invalid", at: at("broken") },
-      { kind: "capped", at: at("later") },
+      { kind: "capped", at: at("later"), cap: "listing" },
     ]
     const offered = skillSourceFor(states, FINGERPRINT)
     expect(offered?.names).toEqual(["lint"])
@@ -598,20 +634,30 @@ describe("repositorySkills", () => {
 })
 
 describe("skillLogs", () => {
-  it("logs each shadowed, unloaded, invalid and capped skill with the pull request, its name and its SKILL.md", () => {
+  it("logs each shadowed, unloaded, invalid and capped skill with the pull request, its name and its SKILL.md, naming the cap and counting the resources it left out", () => {
     const skills = {
       offered: undefined,
       shadowed: [{ name: "review", path: ".github/skills/review/SKILL.md" }],
       unloaded: [{ name: "later", path: ".claude/skills/later/SKILL.md" }],
       invalid: [{ name: "broken", path: ".agents/skills/broken/SKILL.md" }],
-      capped: [{ name: "last", path: ".claude/skills/last/SKILL.md" }],
+      capped: [
+        { name: "last", path: ".claude/skills/last/SKILL.md", cap: "listing" as const },
+        { name: "lint", path: ".github/skills/lint/SKILL.md", cap: "file" as const, resources: 2 },
+      ],
       loadsSkipped: 1,
     }
     expect(skillLogs(7, skills)).toEqual([
       { event: "skills.shadowed", fields: { number: 7, name: "review", path: ".github/skills/review/SKILL.md" } },
       { event: "skills.unloaded", fields: { number: 7, name: "later", path: ".claude/skills/later/SKILL.md" } },
       { event: "skills.invalid", fields: { number: 7, name: "broken", path: ".agents/skills/broken/SKILL.md" } },
-      { event: "skills.capped", fields: { number: 7, name: "last", path: ".claude/skills/last/SKILL.md" } },
+      {
+        event: "skills.capped",
+        fields: { number: 7, name: "last", path: ".claude/skills/last/SKILL.md", cap: "listing" },
+      },
+      {
+        event: "skills.capped",
+        fields: { number: 7, name: "lint", path: ".github/skills/lint/SKILL.md", cap: "file", resources: 2 },
+      },
     ])
   })
 })
@@ -694,18 +740,118 @@ describe("the catalog", () => {
     expect(catalogFor((await bundledSkills()).source, undefined)).toBeUndefined()
   })
 
+  function skipRecorder() {
+    const skipped: number[] = []
+    const report = (records: number): void => {
+      skipped.push(records)
+    }
+    return { report, skipped }
+  }
+
   it("rebuilds the catalog from the one context the object holds, so a review resumed after a restart keeps it", async () => {
     const { source } = await bundledSkills()
-    const sources = await restoredCatalog(source, [LINT])
+    const { report, skipped } = skipRecorder()
+    const sources = await restoredCatalog(source, [LINT], 1, report)
     expect(sources?.map(({ id }) => id)).toEqual(["builtin", "repo"])
     expect((await sources?.[1]?.list())?.map(({ name }) => name)).toEqual(["lint"])
+    expect(skipped).toEqual([])
   })
 
-  it("restores no catalog without a stored context, from more than one, or from one without skills", async () => {
+  it("restores nothing and reports nothing for an object that holds no context, or one without skills", async () => {
     const { source } = await bundledSkills()
-    expect(await restoredCatalog(source, [])).toBeUndefined()
-    expect(await restoredCatalog(source, [LINT, LINT])).toBeUndefined()
-    expect(await restoredCatalog(source, [contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })])).toBeUndefined()
+    const { report, skipped } = skipRecorder()
+    expect(await restoredCatalog(source, [], 0, report)).toBeUndefined()
+    const bare = contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })
+    expect(await restoredCatalog(source, [bare], 1, report)).toBeUndefined()
+    expect(skipped).toEqual([])
+  })
+
+  it("declines, reporting how many records it found, when the object holds several contexts or one its schema refuses", async () => {
+    const { source } = await bundledSkills()
+    const { report, skipped } = skipRecorder()
+    expect(await restoredCatalog(source, [LINT, LINT], 2, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [], 1, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [LINT], 2, report)).toBeUndefined()
+    expect(skipped).toEqual([2, 1, 2])
+  })
+
+  describe("the output channel", () => {
+    const SDK_TEXT = '<skill_content name="lint">\nCheck it.\n</skill_content>'
+
+    it("moves the content a tool returns to its output, the only channel pi-durable 1.3.0 shows the model", () => {
+      expect(outputFromContent({ content: [{ type: "text", text: SDK_TEXT }] })).toEqual({
+        output: [{ type: "text", text: SDK_TEXT }],
+      })
+    })
+
+    it("passes a result that already carries output through unchanged, even one that also has content", () => {
+      const own = { output: [{ type: "text" as const, text: "Ours." }] }
+      expect(outputFromContent(own)).toBe(own)
+      const both = {
+        output: [{ type: "text" as const, text: "Ours." }],
+        content: [{ type: "text" as const, text: "Theirs." }],
+      }
+      expect(outputFromContent(both)).toBe(both)
+      const neither = { isError: true }
+      expect(outputFromContent(neither)).toBe(neither)
+    })
+
+    async function lintSource(): Promise<SkillSource> {
+      const context = contextOf([blob(".github/skills/lint/SKILL.md"), blob(".github/skills/lint/rules.md")], {
+        ".github/skills/lint/SKILL.md": skillMd("Lint.", "Check every export."),
+        ".github/skills/lint/rules.md": "No default exports.",
+      })
+      const offered = (await repositorySkills(context)).offered
+      if (offered === undefined) throw new Error("the lint skill should be offered")
+      return offered.source
+    }
+
+    async function loaded<T>(value: Promise<T | null> | undefined): Promise<T> {
+      const resolved = await value
+      if (resolved === null || resolved === undefined) throw new Error("the lint skill and its resource should load")
+      return resolved
+    }
+
+    it("hands the model the skill body and the resource text that agents 0.28.1's textResult puts in content, since agents/harness/pi cannot load under vitest", async () => {
+      const source = await lintSource()
+      const skill = await loaded(source.load("lint"))
+      const resource = await loaded(source.readResource?.("lint", "rules.md"))
+      const textResult = (text: string) => ({ content: [{ type: "text" as const, text }] })
+      const activate = withOutputFromContent(async () => textResult(renderActivatedSkill(skill)))
+      const read = withOutputFromContent(async () =>
+        textResult(['<skill_resource name="lint" path="rules.md">', resource.content, "</skill_resource>"].join("\n")),
+      )
+      expect((await activate()).output?.[0]).toEqual({
+        type: "text",
+        text: expect.stringContaining("Check every export."),
+      })
+      expect((await read()).output?.[0]).toEqual({ type: "text", text: expect.stringContaining("No default exports.") })
+    })
+
+    it("wraps every tool of an extension, keeping its name, its sections and each tool's definition", () => {
+      const activate = defineTool({
+        name: "activate_skill",
+        description: "Activate a skill by name.",
+        parameters: Type.Object({ name: Type.String() }),
+        replay: "safe",
+        async execute() {
+          return { output: [] }
+        },
+      })
+      const section = { key: "skills", render: () => "Available skills." }
+      const extension = defineExtension({ name: "agents.skills", tools: [activate], sections: [section] })
+      const wrapped = withContentAsOutput(extension)
+      expect(wrapped.name).toBe("agents.skills")
+      expect(wrapped.sections).toBe(extension.sections)
+      const [tool] = wrapped.tools ?? []
+      expect([tool?.name, tool?.description, tool?.parameters, tool?.replay]).toEqual([
+        activate.name,
+        activate.description,
+        activate.parameters,
+        activate.replay,
+      ])
+      expect(tool?.execute).not.toBe(activate.execute)
+    })
   })
 
   describe("installCatalog", () => {
@@ -734,6 +880,24 @@ describe("the catalog", () => {
       expect(installedNames(registry)).toEqual(["andabot", "agents.skills"])
       expect(installed).toBe(registry.snapshot().extension("agents.skills"))
       expect(built).toHaveLength(1)
+    })
+
+    it("installs the catalog with every tool wrapped, so what the SDK's tools return reaches the model", async () => {
+      const registry = createRegistry()
+      const activate = defineTool({
+        name: "activate_skill",
+        description: "Activate a skill by name.",
+        parameters: Type.Object({ name: Type.String() }),
+        async execute() {
+          return { output: [] }
+        },
+      })
+      const sdkCatalog = defineExtension({ name: "agents.skills", tools: [activate] })
+      const installed = await installCatalog(registry, undefined, [], async () => sdkCatalog)
+      expect(installed).not.toBe(sdkCatalog)
+      const [tool] = registry.snapshot().extension("agents.skills")?.tools ?? []
+      expect(tool?.name).toBe("activate_skill")
+      expect(tool?.execute).not.toBe(activate.execute)
     })
 
     it("rebuilds the catalog in place every review, so a resource that loaded since is served", async () => {

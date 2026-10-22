@@ -821,15 +821,26 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async restoreCatalog(): Promise<void> {
+    const number = await this.storedNumber()
     try {
       const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
       const contexts = [...listed.values()].flatMap((stored) =>
         Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
       )
-      const sources = await restoredCatalog((await bundledSkills()).source, contexts)
+      const skipped = (records: number): void => log("skills.restore_skipped", { number, records })
+      const sources = await restoredCatalog((await bundledSkills()).source, contexts, listed.size, skipped)
       this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
     } catch (error) {
-      logError("skills.restore_failed", { error: errorText(error) })
+      logError("skills.restore_failed", { number, error: errorText(error) })
+    }
+  }
+
+  private async storedNumber(): Promise<number | undefined> {
+    try {
+      const key = await this.ctx.storage.get("key")
+      return Value.Check(PullRequestKey, key) ? key.number : undefined
+    } catch {
+      return undefined
     }
   }
 

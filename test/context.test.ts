@@ -192,6 +192,15 @@ describe("entriesThatMatter", () => {
     const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable)
     expect(context.tree.entries).toEqual(instructionFiles.map(blob))
   })
+
+  it("drops a blob the listing gives no size for, so the record never holds an entry its schema refuses and is never refetched for it", async () => {
+    const unsized = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
+    const entries = [blob("CLAUDE.md"), unsized("AGENTS.md"), unsized(".github/skills/lint/SKILL.md")]
+    expect(entriesThatMatter(entries)).toEqual([blob("CLAUDE.md")])
+    const { github } = fakeGitHub(entries, BODIES)
+    const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable)
+    expect(Value.Check(StoredRepositoryContext, structuredClone(context))).toBe(true)
+  })
 })
 
 describe("loadRepositoryContext", () => {

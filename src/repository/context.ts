@@ -85,8 +85,8 @@ export function contextInputs(
   return { baseSha: pr.base.sha, changed: files.map(({ filename }) => filename) }
 }
 
-const mayMatter = ({ path, type }: TreeEntry): boolean =>
-  type === "blob" && (mayBeInstructionFile(path) || isUnderSkillRoot(path))
+const mayMatter = ({ path, type, size }: TreeEntry): boolean =>
+  type === "blob" && size !== undefined && (mayBeInstructionFile(path) || isUnderSkillRoot(path))
 
 export const entriesThatMatter = (entries: readonly TreeEntry[]): TreeEntry[] => entries.filter(mayMatter)
 
