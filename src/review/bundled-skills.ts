@@ -18,6 +18,14 @@ export const BUNDLED_SKILL_FILES: readonly SkillFile[] = [
   { path: "review/references/tests.md", content: testsReference },
 ]
 
+const SKILL_FILE_SUFFIX = "/SKILL.md"
+
+export const BUNDLED_SKILL_NAMES = new Set(
+  BUNDLED_SKILL_FILES.flatMap(({ path }) =>
+    path.endsWith(SKILL_FILE_SUFFIX) ? [path.slice(0, -SKILL_FILE_SUFFIX.length)] : [],
+  ),
+)
+
 export interface BundledSkills {
   readonly source: SkillSource
   readonly fingerprint: string

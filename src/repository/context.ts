@@ -12,6 +12,7 @@ import {
   type RenderedStandards,
   type StandardSource,
 } from "./instructions.ts"
+import { isUnderSkillRoot, repositorySkills, unloadedSkillPaths, type RepositorySkills } from "./skills.ts"
 
 export interface RepositoryContext {
   readonly baseSha: string
@@ -22,6 +23,12 @@ export interface RepositoryContext {
 export interface ReviewStandards extends RenderedStandards {
   loadsSkipped: number
   treeTruncated: boolean
+}
+
+export interface ReviewRepository {
+  readonly context: RepositoryContext | undefined
+  readonly standards: ReviewStandards
+  readonly skills: RepositorySkills
 }
 
 export interface ContextInputs {
@@ -49,8 +56,6 @@ export const CONTEXT_PREFIX = "context:"
 
 const MISSING_AT_BASE = ""
 
-const SKILL_ROOTS = [".github/skills/", ".agents/skills/", ".claude/skills/"]
-
 const LOAD_ORDER = ["root", "nested", "instructions"] as const satisfies readonly StandardSource[]
 
 export const contextKey = (baseSha: string): string => `${CONTEXT_PREFIX}${baseSha}`
@@ -66,8 +71,6 @@ export function contextInputs(
 ): ContextInputs {
   return { baseSha: pr.base.sha, changed: files.map(({ filename }) => filename) }
 }
-
-const isUnderSkillRoot = (path: string): boolean => SKILL_ROOTS.some((root) => path.startsWith(root))
 
 const mayMatter = ({ path, type }: TreeEntry): boolean =>
   type === "blob" && (mayBeInstructionFile(path) || isUnderSkillRoot(path))
@@ -120,7 +123,8 @@ export async function loadRepositoryContext(
 ): Promise<RepositoryContext> {
   const context = await contextAt(github, ref, baseSha, cached)
   const read = (path: string): Promise<string | undefined> => github.getFileContent(ref, path, baseSha)
-  const paths = inLoadOrder(unloadedPaths(context, changed)).slice(0, MAX_INSTRUCTION_LOADS)
+  const unloaded = [...inLoadOrder(unloadedPaths(context, changed)), ...unloadedSkillPaths(context)]
+  const paths = unloaded.slice(0, MAX_INSTRUCTION_LOADS)
   const loaded = (await Promise.all(paths.map((path) => loadedFile(read, path, unreadable)))).flat()
   if (loaded.length === 0) return context
   return { ...context, files: { ...context.files, ...Object.fromEntries(loaded) } }
@@ -163,6 +167,18 @@ export function reviewStandards(
     ...standardsFor(context, changed, pathInstructions),
     loadsSkipped: unloadedPaths(context, changed).length,
     treeTruncated: context.tree.truncated,
+  }
+}
+
+export async function reviewRepository(
+  context: RepositoryContext | undefined,
+  changed: readonly string[],
+  pathInstructions: readonly PathInstruction[],
+): Promise<ReviewRepository> {
+  return {
+    context,
+    standards: reviewStandards(context, changed, pathInstructions),
+    skills: await repositorySkills(context),
   }
 }
 
