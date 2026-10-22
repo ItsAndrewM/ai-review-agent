@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
-import { createRegistry, Harness } from "@earendil-works/pi-durable"
-import { PiHarness, ROOT_SESSION, type PiPromptResponse } from "agents/harness/pi"
+import { createRegistry, Harness, type ConversationId } from "@earendil-works/pi-durable"
+import { PiHarness, ROOT_SESSION, type PiPromptResponse, type PiSession } from "agents/harness/pi"
 import { Lifecycle } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
@@ -74,6 +74,7 @@ import {
   validateFindings,
   type FindingInput,
   type ReviewSubmissionInput,
+  type SummarySubmissionInput,
   type WrittenReview,
 } from "./review/findings.ts"
 import {
@@ -136,6 +137,7 @@ import {
   problemsText,
   resubmitPrompt,
   reviewPrompt,
+  summaryPrompt,
   threadAnswerPrompt,
 } from "./review/prompt.ts"
 import {
@@ -144,6 +146,7 @@ import {
   incompleteNote,
   renderReviewBody,
   renderSummaryComment,
+  renderSummaryRun,
   renderUnpostedNote,
   renderUnpostedSummary,
   reviewEventOf,
@@ -155,6 +158,18 @@ import {
 } from "./review/render.ts"
 import { approvalNote, resolveRefusal, resolveReply, resolveTargets, type ResolveScope } from "./review/resolve.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
+import {
+  oneClause,
+  parseWrittenSummary,
+  recordedVerdict,
+  Summarizing,
+  summarizedRecord,
+  summaryLive,
+  summaryReply,
+  SummarySessionId,
+  type SummaryOutcome,
+  type WrittenSummary,
+} from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
@@ -323,7 +338,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.#files
   }
 
-  async submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome> {
+  async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
+    if (!(await this.isRootConversation(conversationId))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
     const pending = await this.readPending()
     if (!pending) return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
     if (!(await this.callerIsReviewInFlight(pending))) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
@@ -1117,6 +1133,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "resolve":
         await this.resolve(call)
         return
+      case "summary":
+        await this.summarize(call)
+        return
     }
   }
 
@@ -1265,6 +1284,169 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reason: waitReasonOf(outcome),
     })
     await this.respond(github, key, incoming, resolveReply({ resolved: resolved.length, failed: failed.length, note }))
+  }
+
+  private async summarize(call: CommandCall): Promise<void> {
+    const outcome = await this.summaryOutcome(call)
+    await this.respond(call.github, call.key, call.incoming, summaryReply(outcome, this.botLogin()))
+  }
+
+  private async summaryOutcome({ key, incoming }: CommandCall): Promise<SummaryOutcome> {
+    try {
+      return await this.startSummary(incoming.deliveryId)
+    } catch (error) {
+      logError("summary.failed", { number: key.number, reason: errorText(error) })
+      return unusableSummary(errorText(error))
+    }
+  }
+
+  private async startSummary(deliveryId: string): Promise<SummaryOutcome> {
+    const pr = await this.currentPullRequest()
+    if (pr.state !== "open") {
+      log("summary.skip", { reason: "not_open", state: pr.state, number: pr.number })
+      return { kind: "closed" }
+    }
+    if (await this.summaryInFlight()) {
+      log("summary.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
+      return { kind: "busy" }
+    }
+    return this.summarizeOnce(pr, deliveryId)
+  }
+
+  private async summaryInFlight(): Promise<boolean> {
+    const record = await this.readSummarizing()
+    const running = record !== undefined && (await this.summaryOperationListed(record.operationId))
+    return summaryLive(record, { running, now: Date.now() })
+  }
+
+  private async summaryOperationListed(operationId: string): Promise<boolean> {
+    const session = await this.storedSummarySession()
+    if (session === undefined) return false
+    const operations = await this.harness.pending({ session })
+    return operations.some((operation) => operation.operationId === operationId)
+  }
+
+  private async summarizeOnce(pr: PullRequestInfo, deliveryId: string): Promise<SummaryOutcome> {
+    const run = { deliveryId, operationId: `summary:${deliveryId}`, started: Date.now() }
+    await this.ctx.storage.put<Summarizing>("summarizing", run)
+    try {
+      return await this.runSummary(pr, run)
+    } finally {
+      await this.releaseSummarizing(deliveryId)
+    }
+  }
+
+  private async releaseSummarizing(deliveryId: string): Promise<void> {
+    if ((await this.readSummarizing())?.deliveryId === deliveryId) await this.ctx.storage.delete("summarizing")
+  }
+
+  private async runSummary(pr: PullRequestInfo, run: Summarizing): Promise<SummaryOutcome> {
+    const key = await this.key()
+    const files = await (await this.github()).listPullRequestFiles(key, key.number)
+    const issues = await this.linkedIssues(pr)
+    const written = await this.askForSummary(pr, files, issues, run.operationId)
+    if (written.kind === "unusable") {
+      logError("summary.failed", { number: pr.number, head: shortSha(pr.head.sha), reason: written.reason })
+      return unusableSummary(written.reason)
+    }
+    const now = await this.currentPullRequest()
+    if (now.head.sha !== pr.head.sha) {
+      log("summary.superseded", { number: pr.number, was: shortSha(pr.head.sha), now: shortSha(now.head.sha) })
+      return { kind: "moved", from: pr.head.sha, to: now.head.sha }
+    }
+    return this.postSummary(pr, files, issues, written.summary, run.started)
+  }
+
+  private async askForSummary(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    issues: readonly LinkedIssue[],
+    operationId: string,
+  ): Promise<WrittenSummary> {
+    const session = await this.summarySession()
+    await this.configureSummary(session)
+    const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
+    if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
+    return parseWrittenSummary(result.text ?? "")
+  }
+
+  private async summarySession(): Promise<PiSession> {
+    const stored = await this.storedSummarySession()
+    if (stored !== undefined) return this.harness.session(stored)
+    const session = await this.harness.sessions.create()
+    await this.ctx.storage.put("summarySession", session.id)
+    return session
+  }
+
+  private async storedSummarySession(): Promise<string | undefined> {
+    const stored = await this.ctx.storage.get("summarySession")
+    return Value.Check(SummarySessionId, stored) ? stored : undefined
+  }
+
+  private async configureSummary(session: PiSession): Promise<void> {
+    const { source } = await bundledSkills()
+    const skill = await loadSkill(source, "summary")
+    const mergeDanger = await loadReference(source, "review", MERGE_DANGER_REFERENCE)
+    await session.reset()
+    const conversation = await this.harness.conversation(session.id)
+    await conversation.configure(
+      {
+        instructions: renderSkillWithResources(skill, [mergeDanger]),
+        thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
+        modelTools: [],
+      },
+      BACKGROUND_CONTEXT,
+    )
+    await session.setModel(this.reviewModel())
+  }
+
+  private async postSummary(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    issues: readonly LinkedIssue[],
+    answer: SummarySubmissionInput,
+    started: number,
+  ): Promise<SummaryOutcome> {
+    const reviewed = await this.readReviewed()
+    const summary = await this.storeSummary(reviewed, answer, files)
+    await this.upsertSummary(
+      renderSummaryRun({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        verdict: recordedVerdict(await this.readLastReview(), reviewed, pr.head.sha),
+        summary,
+        model: this.env.REVIEW_MODEL,
+        skillsFingerprint: (await bundledSkills()).fingerprint,
+        linkedIssues: issues.map(({ number }) => number),
+      }),
+    )
+    log("summary.posted", {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      model: this.env.REVIEW_MODEL,
+      ms: Date.now() - started,
+    })
+    return { kind: "posted", head: pr.head.sha, link: await this.summaryCommentUrl() }
+  }
+
+  private async storeSummary(
+    reviewed: ReviewedRecord | undefined,
+    answer: SummarySubmissionInput,
+    files: readonly ChangedFile[],
+  ): Promise<SummarySubmissionInput> {
+    if (reviewed === undefined) return answer
+    const record = summarizedRecord(reviewed, answer, files)
+    await this.ctx.storage.put<ReviewedRecord>("reviewed", record)
+    return {
+      summary: record.summary,
+      walkthrough: record.walkthrough,
+      merge_danger: record.merge_danger ?? answer.merge_danger,
+    }
+  }
+
+  private async readSummarizing(): Promise<Summarizing | undefined> {
+    const stored = await this.ctx.storage.get("summarizing")
+    return Value.Check(Summarizing, stored) ? stored : undefined
   }
 
   private async evaluateApproval(
@@ -1578,8 +1760,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, started: Date.now() })
   }
 
+  private async isRootConversation(conversationId: ConversationId): Promise<boolean> {
+    return conversationId === (await this.harness.conversation(ROOT_SESSION)).id
+  }
+
   private async callerIsReviewInFlight(pending: PendingReview): Promise<boolean> {
-    const running = (await this.harness.pending()).find((op) => op.status === "running")
+    const running = (await this.harness.pending({ session: ROOT_SESSION })).find((op) => op.status === "running")
     return running !== undefined && ownsOperation(pending, running.operationId)
   }
 
@@ -1657,6 +1843,12 @@ function retryOutcome(failure: string | undefined, refusal: string | undefined):
 }
 
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
+
+const MERGE_DANGER_REFERENCE = "references/merge-danger.md"
+
+function unusableSummary(reason: string): SummaryOutcome {
+  return { kind: "unusable", reason: oneClause(reason) }
+}
 
 function attributionOf({ model, fingerprint }: PendingReview): Attribution | undefined {
   if (model === undefined || fingerprint === undefined) return undefined
