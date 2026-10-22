@@ -121,3 +121,10 @@ function postedReply(head: string, link: string | undefined): string {
   const summary = link === undefined ? "summary" : `[summary](${link})`
   return `Updated the ${summary} for \`${shortSha(head)}\`.`
 }
+
+export function oneClause(reason: string): string {
+  return reason
+    .replace(/\s+/g, " ")
+    .replace(/[\s.]+$/, "")
+    .trim()
+}

@@ -7,6 +7,7 @@ import { GRACE_MS } from "../src/review/flight.ts"
 import type { ReviewedRecord } from "../src/review/incremental.ts"
 import { renderSummaryRun, SUMMARY_MARKER, withApprovedVerdict, type SummaryRunInput } from "../src/review/render.ts"
 import {
+  oneClause,
   parseWrittenSummary,
   recordedVerdict,
   Summarizing,
@@ -359,5 +360,23 @@ describe("summaryReply", () => {
     expect(summaryReply({ kind: "closed" }, "andabot")).toBe(
       "The pull request is closed, so there's nothing to summarize.",
     )
+  })
+})
+
+describe("oneClause", () => {
+  it("flattens a provider's reason to one line with single spaces and no closing period", () => {
+    expect(oneClause("model_error: Upstream failed.\n Try later.")).toBe("model_error: Upstream failed. Try later")
+  })
+
+  it("trims the ends and drops every closing period, so the unusable reply ends in one", () => {
+    const reason = oneClause("  Error: the read timed out...\n\n")
+    expect(reason).toBe("Error: the read timed out")
+    expect(summaryReply({ kind: "unusable", reason }, "andabot")).toBe(
+      "I couldn't write the summary: Error: the read timed out.",
+    )
+  })
+
+  it("leaves a reason that is one clause already as it is", () => {
+    expect(oneClause("the model's answer wasn't valid JSON")).toBe("the model's answer wasn't valid JSON")
   })
 })
