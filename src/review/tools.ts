@@ -86,7 +86,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
       ),
       path: Type.Optional(Type.String({ description: "Only search under this directory, from the repository root." })),
     }),
-    replay: "safe",
+    replay: "unsafe",
     async execute(args) {
       return text(await grepText(host, args))
     },
@@ -99,7 +99,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
       path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
       depth: Type.Optional(Type.Integer({ description: "How many levels to list. Default 2." })),
     }),
-    replay: "safe",
+    replay: "unsafe",
     async execute(args) {
       return text(await treeText(host, args))
     },

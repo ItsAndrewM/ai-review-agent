@@ -22,6 +22,17 @@ function snapshotOf(contents: Record<string, string>, leftOut: readonly LeftOut[
   return files
 }
 
+function finished(files: MemorySnapshotFiles, flags: { capped: boolean; treeTruncated: boolean }): MemorySnapshotFiles {
+  files.finish({ sha: "abc", files: 0, bytes: 0, gapFilled: 0, leftOut: {}, ...flags })
+  return files
+}
+
+const CAPPED =
+  "The snapshot is incomplete (cap of 50,000 files or 400 MB reached); a missing match may be in a file it didn't load."
+
+const TRUNCATED =
+  "The snapshot is incomplete (GitHub truncated the tree listing); a missing match may be in a file it didn't load."
+
 function numbered(count: number, text: string): Record<string, string> {
   return Object.fromEntries(
     Array.from({ length: count }, (_, index) => [`f${String(index).padStart(3, "0")}.ts`, text]),
@@ -211,6 +222,38 @@ describe("grep", () => {
     )
   })
 
+  it("says a capped snapshot is incomplete under the matches", () => {
+    const files = finished(snapshotOf({ "a.ts": "hit\n" }), { capped: true, treeTruncated: false })
+    expect(grep(files, { pattern: "hit" })).toBe(["a.ts:1: hit", CAPPED].join("\n"))
+  })
+
+  it("says a snapshot of a truncated tree is incomplete when nothing matches", () => {
+    const files = finished(snapshotOf({ "a.ts": "nothing\n" }), { capped: false, treeTruncated: true })
+    expect(grep(files, { pattern: "hit" })).toBe(["No match for /hit/ in 1 file.", TRUNCATED].join("\n"))
+  })
+
+  it("gives both reasons when the snapshot is capped and the tree truncated", () => {
+    const files = finished(snapshotOf({ "a.ts": "nothing\n" }), { capped: true, treeTruncated: true })
+    expect(grep(files, { pattern: "hit" }).split("\n").at(-1)).toBe(
+      "The snapshot is incomplete (cap of 50,000 files or 400 MB reached; GitHub truncated the tree listing); a missing match may be in a file it didn't load.",
+    )
+  })
+
+  it("says nothing of completeness for a complete snapshot", () => {
+    const files = finished(snapshotOf({ "a.ts": "hit\n" }), { capped: false, treeTruncated: false })
+    expect(grep(files, { pattern: "hit" })).toBe("a.ts:1: hit")
+  })
+
+  it("keeps the incomplete-snapshot note inside the 12,000-character budget", () => {
+    const files = finished(
+      snapshotOf({ "a.ts": `${"x".repeat(250)}\n`.repeat(90) }, [{ path: "dist/app.js", reason: "too_large" }]),
+      { capped: true, treeTruncated: true },
+    )
+    const answer = grep(files, { pattern: "x" })
+    expect(answer.length).toBeLessThanOrEqual(MAX_GREP_CHARS)
+    expect(answer).toContain("The snapshot is incomplete (")
+  })
+
   it("finds a match within the first 500 characters of a very long line", () => {
     const files = snapshotOf({ "min.js": `foo${"x".repeat(50_000)}\n` })
     const answer = grep(files, { pattern: "foo" })
@@ -243,25 +286,41 @@ describe("grep", () => {
     expect(grep(files, { pattern: "x{500}" })).not.toContain("long line")
   })
 
-  it("stops after 500 long lines and says how many files it searched", () => {
+  it("stops a quantified pattern after 500 long lines and says how many files it searched", () => {
     const longLine = `${"x".repeat(399)}\n`
     const contents = { ...numbered(600, longLine), "f599.ts": `needle${"x".repeat(394)}\n` }
-    expect(grep(snapshotOf(contents), { pattern: "needle" })).toBe(
+    expect(grep(snapshotOf(contents), { pattern: "needle+" })).toBe(
       [
-        "No match for /needle/ in 500 files.",
+        "No match for /needle+/ in 500 files.",
         "Stopped early after 500 files: too many long lines. Narrow the path or glob.",
       ].join("\n"),
     )
   })
 
+  it("never stops a literal pattern early, since a literal search cannot backtrack", () => {
+    const longLine = `${"x".repeat(399)}\n`
+    const contents = { ...numbered(600, longLine), "f599.ts": `needle${"x".repeat(394)}\n` }
+    const answer = grep(snapshotOf(contents), { pattern: "needle" })
+    expect(answer).toBe(`f599.ts:1: needle${"x".repeat(MAX_LINE_CHARS - 6)}`)
+    expect(answer).not.toContain("Stopped early")
+  })
+
+  it("never stops a pattern searched as literal text early", () => {
+    const longLine = `${"x".repeat(399)}\n`
+    const contents = { ...numbered(600, longLine), "f599.ts": `needle(${"x".repeat(393)}\n` }
+    const answer = grep(snapshotOf(contents), { pattern: "needle(" })
+    expect(answer).toContain("f599.ts:1: needle(")
+    expect(answer).not.toContain("Stopped early")
+  })
+
   it("stops in the middle of a file once 500 long lines have been tested", () => {
     const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(600) })
-    expect(grep(files, { pattern: "needle" })).toContain("Stopped early after 1 file: too many long lines.")
+    expect(grep(files, { pattern: "needle?" })).toContain("Stopped early after 1 file: too many long lines.")
   })
 
   it("does not say it stopped early when the long lines ran out at the limit", () => {
     const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(500) })
-    expect(grep(files, { pattern: "needle" })).toBe("No match for /needle/ in 1 file.")
+    expect(grep(files, { pattern: "needle*" })).toBe("No match for /needle*/ in 1 file.")
   })
 
   it("keeps the long-line note inside the 12,000-character budget", () => {
@@ -278,15 +337,17 @@ describe("grep", () => {
     expect(performance.now() - started).toBeLessThan(1_000)
   })
 
-  it("answers a pattern with two braced wildcards over 100 lines of 2,000 characters in under 2 seconds", () => {
-    const prose = "the quick brown fox jumps over the lazy dog while seven eels evade the keen eye of the sea ".repeat(
-      25,
-    )
-    const files = snapshotOf({ "prose.txt": `${prose.slice(0, 2_000)}\n`.repeat(100) })
+  it("refuses a pattern with two open-ended braced wildcards without searching", () => {
+    expect(grep(snapshotOf({ "a.ts": "eee\n" }), { pattern: ".{1,}e.{1,}zzz" })).toBe(patternProblem(".{1,}e.{1,}zzz"))
+  })
+
+  it("answers an accepted alternation over 300 lines of 400 characters in under a second", () => {
+    const line = "  .set(getValue(key), setValue(value)) ; ".repeat(10).slice(0, 400)
+    const files = snapshotOf({ "a.ts": `${line}\n`.repeat(300) })
     const started = performance.now()
-    const answer = grep(files, { pattern: ".{1,}e.{1,}zzz" })
-    expect(performance.now() - started).toBeLessThan(2_000)
-    expect(answer).toContain("No match for /.{1,}e.{1,}zzz/ in 1 file.")
+    const answer = grep(files, { pattern: String.raw`(get|set)Value\s*\(\s*(key|val)ue?zzz` })
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(answer).toContain("No match")
   })
 
   it("answers a pattern that spans lines over 20,000 short lines in under a second with no match", () => {
@@ -323,18 +384,12 @@ describe("patternProblem", () => {
     expect(patternProblem(pattern)).toContain("nested quantifier")
   })
 
-  it.each([
-    "foo(bar)+",
-    "a+b+",
-    String.raw`(\++)`,
-    String.raw`(a\+)+`,
-    "([+*])+",
-    "(a|b)+",
-    "(a)(b+)",
-    String.raw`\(a+\)+`,
-  ])("accepts %s", (pattern) => {
-    expect(patternProblem(pattern)).toBeUndefined()
-  })
+  it.each(["foo(bar)+", "a+b+", String.raw`(\++)`, String.raw`(a\+)+`, "([+*])+", "(a)(b+)", String.raw`\(a+\)+`])(
+    "accepts %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toBeUndefined()
+    },
+  )
 
   it.each(
     [".*foo.*bar", "foo.+bar.*baz", '[^"]*x[^"]*', String.raw`\S+\s\S+`, String.raw`\W*a\D+`, "(.*)x(.*)"].concat([
@@ -360,6 +415,40 @@ describe("patternProblem", () => {
     String.raw`[\\s\\S]*x[\\s\\S]*`,
   ])("accepts the single wildcard in %s", (pattern) => {
     expect(patternProblem(pattern)).toBeUndefined()
+  })
+
+  it.each([".{1,}e.{1,}zzz", ".{2,}a.*b", String.raw`\S{3,}x.+`])(
+    "counts an open-ended brace as unbounded and refuses the two wildcards in %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toContain("more than one unbounded wildcard")
+    },
+  )
+
+  it.each([".{1,5}a.{0,3}b", String.raw`\d{2,}`, ".{2,}x", ".{3}a.*b"])(
+    "accepts the bounded or single wildcard in %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toBeUndefined()
+    },
+  )
+
+  it.each([String.raw`(.|\s)*`, String.raw`foo(.|\s)*bar`, String.raw`(\w|\d)+`, "(a|b){2,}", "(?:x|y)*", "(a|b)+"])(
+    "refuses the repeated alternation in %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toBe(
+        String.raw`it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
+      )
+    },
+  )
+
+  it.each(["(foo|bar)", "(get|set)Value", "x(a|b)?y", String.raw`[\s\S]*`, "a|b*", String.raw`\(a|b\)*`, "[(|)]*"])(
+    "accepts the unrepeated alternation or class in %s",
+    (pattern) => {
+      expect(patternProblem(pattern)).toBeUndefined()
+    },
+  )
+
+  it("states every refusal as a bare reason that reads after the words Pattern refused", () => {
+    expect(patternProblem(".*a.*b")).toMatch(/^it has more than one unbounded wildcard/)
   })
 
   it("refuses an empty pattern", () => {
@@ -425,5 +514,15 @@ describe("tree", () => {
   it("says so when nothing is under the path", () => {
     expect(tree(repository, "nowhere")).toBe("No files under `nowhere` in the snapshot.")
     expect(tree(snapshotOf({}))).toBe("The snapshot has no files.")
+  })
+
+  it("says a capped snapshot is incomplete", () => {
+    const files = finished(snapshotOf({ "a.ts": "" }), { capped: true, treeTruncated: false })
+    expect(tree(files)).toBe(["a.ts", CAPPED].join("\n"))
+  })
+
+  it("says a snapshot of a truncated tree is incomplete, even when nothing is under the path", () => {
+    const files = finished(snapshotOf({ "a.ts": "" }), { capped: false, treeTruncated: true })
+    expect(tree(files, "nowhere")).toBe(["No files under `nowhere` in the snapshot.", TRUNCATED].join("\n"))
   })
 })

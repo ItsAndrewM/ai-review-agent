@@ -135,10 +135,17 @@ describe("createReviewExtension", () => {
     ])
   })
 
-  it("lets grep and tree be replayed after an interruption, since they only read the snapshot", () => {
+  it("never reruns grep or tree after a reset, so a scan that reset the object cannot loop", () => {
     const tools = createReviewExtension(host).tools ?? []
     const replays = tools.filter((tool) => tool.name === "grep" || tool.name === "tree").map((tool) => tool.replay)
-    expect(replays).toEqual(["safe", "safe"])
+    expect(replays).toEqual(["unsafe", "unsafe"])
+  })
+
+  it("still reruns the API reads after a reset", () => {
+    const tools = createReviewExtension(host).tools ?? []
+    const reads = ["read_file", "list_changed_files", "get_issue"]
+    const replays = tools.filter((tool) => reads.includes(tool.name)).map((tool) => tool.replay)
+    expect(replays).toEqual(["safe", "safe", "safe"])
   })
 
   it("tells the model that a grep glob matches the repository-relative path at any depth", () => {
@@ -189,6 +196,21 @@ describe("grepText", () => {
     const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
     expect(await grepText(wired, { pattern: "" })).toBe("Pattern refused: The pattern is empty.")
     expect(searched).toEqual([])
+  })
+
+  it("refuses two wildcards with the prefix said once", async () => {
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    expect(await grepText(wired, { pattern: ".*a.*b" })).toMatch(
+      /^Pattern refused: it has more than one unbounded wildcard \(such as \.\* twice\)/,
+    )
+    expect(searched).toEqual([])
+  })
+
+  it("refuses a repeated alternation", async () => {
+    const { host: wired } = hostWith({ search: { kind: "ready", files: snapshot } })
+    expect(await grepText(wired, { pattern: String.raw`foo(.|\s)*bar` })).toBe(
+      String.raw`Pattern refused: it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
+    )
   })
 })
 

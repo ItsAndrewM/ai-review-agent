@@ -1,5 +1,11 @@
 import { Minimatch } from "minimatch"
-import { LEFT_OUT_REASONS, type LeftOut, type SnapshotFile, type SnapshotFiles } from "./snapshot.ts"
+import {
+  LEFT_OUT_REASONS,
+  type LeftOut,
+  type SnapshotFile,
+  type SnapshotFiles,
+  type SnapshotRecord,
+} from "./snapshot.ts"
 
 export const MAX_MATCHES = 100
 
@@ -38,11 +44,13 @@ interface Found {
   longLines: number
   longTested: number
   stopped: boolean
+  budgeted: boolean
 }
 
 interface Compiled {
   regex: RegExp
   literal: boolean
+  quantified: boolean
 }
 
 type Selector = (path: string) => boolean
@@ -56,12 +64,17 @@ const LEADING_SLASHES = /^\/+/
 const TRAILING_SLASHES = /\/+$/
 const QUANTIFIERS = "+*{"
 const REPEATERS = "+*{"
+const BACKTRACKING_QUANTIFIERS = "*+?{"
+const OPEN_ENDED_BRACE = /^\{\d+,\}$/
 const ATOM = "a"
 const CARRIAGE_RETURN = 13
 const WILDCARD = "."
 const WILDCARD_ESCAPES = "SWD"
 const WILDCARD_REFUSAL =
-  "The pattern is refused: it has more than one unbounded wildcard (such as .* twice), which can run for minutes on long lines; grep for one distinctive term and read the file instead."
+  "it has more than one unbounded wildcard (such as .* twice), which can run for minutes on long lines; grep for one distinctive term and read the file instead."
+const ALTERNATION_REFUSAL = String.raw`it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`
+const CAPPED_REASON = "cap of 50,000 files or 400 MB reached"
+const TRUNCATED_REASON = "GitHub truncated the tree listing"
 
 const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`
 
@@ -143,8 +156,33 @@ function hasNestedQuantifier(tokens: readonly string[]): boolean {
   return false
 }
 
+function hasRepeatedAlternation(tokens: readonly string[]): boolean {
+  const groups: boolean[] = []
+  for (const [index, token] of tokens.entries()) {
+    if (token === "(") {
+      groups.push(false)
+    } else if (token === "|") {
+      markEnclosingGroup(groups)
+    } else if (token === ")" && (groups.pop() ?? false) && isRepeater(tokens[index + 1])) {
+      return true
+    }
+  }
+  return false
+}
+
+function isOpenEndedBrace(tokens: readonly string[], open: number): boolean {
+  const close = tokens.indexOf("}", open)
+  return close !== -1 && OPEN_ENDED_BRACE.test(tokens.slice(open, close + 1).join(""))
+}
+
+function repeatsWithoutBound(tokens: readonly string[], index: number): boolean {
+  const next = tokens[index + 1]
+  if (next === "+" || next === "*") return true
+  return next === "{" && isOpenEndedBrace(tokens, index + 1)
+}
+
 function hasTwoUnboundedWildcards(tokens: readonly string[]): boolean {
-  const wildcards = tokens.filter((token, index) => token === WILDCARD && "+*".includes(tokens[index + 1] ?? ATOM))
+  const wildcards = tokens.filter((token, index) => token === WILDCARD && repeatsWithoutBound(tokens, index))
   return wildcards.length >= 2
 }
 
@@ -157,17 +195,21 @@ export function patternProblem(pattern: string): string | undefined {
   if (hasNestedQuantifier(tokens)) {
     return "The pattern has a nested quantifier (a repeated group that repeats inside), which can take far too long to match. Rewrite it without one."
   }
+  if (hasRepeatedAlternation(tokens)) return ALTERNATION_REFUSAL
   return hasTwoUnboundedWildcards(tokens) ? WILDCARD_REFUSAL : undefined
 }
+
+const hasQuantifier = (pattern: string): boolean =>
+  structuralTokens(pattern).some((token) => BACKTRACKING_QUANTIFIERS.includes(token))
 
 const escaped = (text: string): string =>
   [...text].map((char) => (REGEX_SPECIALS.includes(char) ? `\\${char}` : char)).join("")
 
 function compile(pattern: string): Compiled {
   try {
-    return { regex: new RegExp(pattern, "m"), literal: false }
+    return { regex: new RegExp(pattern, "m"), literal: false, quantified: hasQuantifier(pattern) }
   } catch {
-    return { regex: new RegExp(escaped(pattern), "m"), literal: true }
+    return { regex: new RegExp(escaped(pattern), "m"), literal: true, quantified: false }
   }
 }
 
@@ -182,7 +224,7 @@ function* lineHits(file: SnapshotFile, regex: RegExp, found: Found): Generator<H
       return
     }
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw
-    if (line.length > MAX_LINE_CHARS) found.longTested++
+    if (found.budgeted && line.length > MAX_LINE_CHARS) found.longTested++
     if (regex.test(line.slice(0, MAX_SEARCHED_LINE_CHARS))) {
       yield { path: file.path, text: `${file.path}:${index + 1}: ${line.slice(0, MAX_LINE_CHARS)}` }
     }
@@ -215,7 +257,7 @@ function longLineCount(content: string): number {
   return lineLength(content, start, content.length) > MAX_SEARCHED_LINE_CHARS ? count + 1 : count
 }
 
-function search(files: SnapshotFiles, selected: Selector, regex: RegExp): Found {
+function search(files: SnapshotFiles, selected: Selector, { regex, quantified }: Compiled): Found {
   const found: Found = {
     hits: [],
     overflowMatches: 0,
@@ -224,6 +266,7 @@ function search(files: SnapshotFiles, selected: Selector, regex: RegExp): Found 
     longLines: 0,
     longTested: 0,
     stopped: false,
+    budgeted: quantified,
   }
   for (const file of files.files()) {
     if (!selected(file.path)) continue
@@ -306,19 +349,27 @@ function leftOutNote(leftOut: Iterable<LeftOut>, selected: Selector): string {
 const literalNote = (pattern: string): string =>
   `Searched for the literal text \`${pattern}\` (not a valid regular expression).`
 
+function incompleteNote(record: SnapshotRecord | undefined): string {
+  const reasons = [record?.capped ? CAPPED_REASON : "", record?.treeTruncated ? TRUNCATED_REASON : ""].filter(present)
+  if (reasons.length === 0) return ""
+  return `The snapshot is incomplete (${reasons.join("; ")}); a missing match may be in a file it didn't load.`
+}
+
+const present = (part: string): boolean => part !== ""
+
+const joined = (parts: readonly string[]): string => parts.filter(present).join("\n")
+
 export function grep(files: SnapshotFiles, query: GrepQuery): string {
   const problem = patternProblem(query.pattern)
   if (problem !== undefined) return problem
-  const { regex, literal } = compile(query.pattern)
+  const compiled = compile(query.pattern)
   const selected = selectorFor(query)
-  const opening = literal ? literalNote(query.pattern) : ""
-  const closing = leftOutNote(files.leftOut(), selected)
+  const opening = compiled.literal ? literalNote(query.pattern) : ""
+  const closing = joined([leftOutNote(files.leftOut(), selected), incompleteNote(files.record())])
   const room = MAX_GREP_CHARS - opening.length - closing.length - NOTE_RESERVE
-  const found = search(files, selected, regex)
+  const found = search(files, selected, compiled)
   const body = resultText(found, query.pattern, room)
-  return [opening, body, stoppedNote(found), longLineNote(found.longLines), closing]
-    .filter((part) => part !== "")
-    .join("\n")
+  return joined([opening, body, stoppedNote(found), longLineNote(found.longLines), closing])
 }
 
 interface Listed {
@@ -352,6 +403,10 @@ function emptyTreeText(root: string): string {
 }
 
 export function tree(files: SnapshotFiles, path = "", depth = DEFAULT_TREE_DEPTH): string {
+  return joined([listing(files, path, depth), incompleteNote(files.record())])
+}
+
+function listing(files: SnapshotFiles, path: string, depth: number): string {
   const root = normalisePath(path)
   const levels = Number.isInteger(depth) ? Math.max(1, depth) : DEFAULT_TREE_DEPTH
   const entries = new Map<string, string>()
