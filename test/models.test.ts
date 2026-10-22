@@ -8,9 +8,10 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
-import { outputLimitOf, reviewThinkingLevel, withForcedResubmission, withOutputLimit } from "../src/models.ts"
-import { ReviewSubmission } from "../src/review/findings.ts"
-import { answerPrompt, resubmitPrompt } from "../src/review/prompt.ts"
+import type { PullRequestInfo } from "../src/github/client.ts"
+import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "../src/models.ts"
+import { ReviewSubmission, SummarySubmission } from "../src/review/findings.ts"
+import { answerPrompt, resubmitPrompt, summaryPrompt } from "../src/review/prompt.ts"
 
 const LIMIT = 16_000
 const GPT_OSS = { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000, maxTokens: 16_384 }
@@ -71,15 +72,30 @@ function user(content: Extract<Message, { role: "user" }>["content"]) {
 
 async function optionsSentFor(messages: Message[]) {
   const { faux, seen } = recordingProvider(GPT_OSS)
-  await withForcedResubmission(faux.provider).streamSimple(faux.getModel(), normalizeContext({ messages })).result()
+  await withForcedJson(faux.provider).streamSimple(faux.getModel(), normalizeContext({ messages })).result()
   return seen[0]
 }
+
+const pr = {
+  number: 21,
+  title: "Fix totals",
+  body: "Totals were NaN for an empty cart.",
+  state: "open",
+  user: { login: "andrew" },
+  base: { ref: "main", sha: "0123456789abcdef", repo: { full_name: "o/r" } },
+  head: { ref: "fix/totals.GH-7", sha: "fedcba9876543210" },
+  changed_files: 0,
+  additions: 0,
+  deletions: 0,
+  labels: [],
+} satisfies PullRequestInfo
 
 const reviewRequest = user("Review this pull request and submit the review with submit_review.")
 const proseReview = fauxAssistantMessage("## Summary\nLooks risky.\n\n**Verdict:** request_changes")
 const reviewAsJson = { type: "json_schema", json_schema: { name: "review_submission", schema: ReviewSubmission } }
+const summaryAsJson = { type: "json_schema", json_schema: { name: "summary_submission", schema: SummarySubmission } }
 
-describe("withForcedResubmission", () => {
+describe("withForcedJson", () => {
   it.each([undefined, "Error: GitHub POST /repos/o/r/pulls/5/reviews: 502"])(
     "holds the retry after a prose review to a submit_review call or the review as JSON, since Workers AI ignores tool_choice (refusal %s)",
     async (refusal) => {
@@ -106,6 +122,11 @@ describe("withForcedResubmission", () => {
     }
     expect((await optionsSentFor([reviewRequest]))?.samplingParams).toBeUndefined()
     expect((await optionsSentFor([reviewRequest, readFile, fileContents]))?.samplingParams).toBeUndefined()
+  })
+
+  it("holds a summary's requests to a summary as JSON", async () => {
+    const options = await optionsSentFor([user(summaryPrompt(pr, [], []))])
+    expect(options?.samplingParams?.["response_format"]).toEqual(summaryAsJson)
   })
 
   it("leaves a chat answer free to answer in text", async () => {

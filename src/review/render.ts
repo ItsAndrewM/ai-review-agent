@@ -1,4 +1,5 @@
 import type { ReviewEvent } from "../github/client.ts"
+import type { SeverityCounts } from "../records.ts"
 import { CONFIG_FILE } from "../repository/config.ts"
 import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
@@ -7,6 +8,7 @@ import {
   type Rejected,
   type ReviewSubmissionInput,
   rowPath,
+  type SummarySubmissionInput,
   type WalkthroughInput,
   type WrittenReview,
 } from "./findings.ts"
@@ -68,45 +70,106 @@ export function renderSummaryComment(input: {
   since?: SinceSection | undefined
   configError?: string | undefined
 }): string {
-  const counts = countBySeverity(input.accepted)
-  const { door, blast_radius } = input.submission.merge_danger
-  const walkthrough =
-    input.submission.walkthrough.length === 0
-      ? "_No per-file notes._"
-      : [
-          "| File | Change |",
-          "| --- | --- |",
-          ...input.submission.walkthrough.map((w) => `| \`${w.path}\` | ${oneLine(w.summary)} |`),
-        ].join("\n")
-  const dropped =
-    input.droppedCount > 0
-      ? `\n\n<sub>${input.droppedCount} finding(s) were dropped because they failed the host's checks, even after a retry.</sub>`
-      : ""
+  return summaryLayout({
+    botLogin: input.botLogin,
+    status: statusLine(input.headSha, { label: VERDICT_LABEL[input.event], counts: countBySeverity(input.accepted) }),
+    content: input.submission,
+    afterWalkthrough: [droppedLine(input.droppedCount), ...sinceLines(input.since)],
+    footer: [
+      ...reviewedBy(input.model, input.skillsFingerprint),
+      ...spendLines(input.spend),
+      linkedIssuesLine(input.linkedIssues),
+      standardsLine(input.instructionFiles),
+      commandsLine(input.botLogin),
+      ...configNoteLines(input.configError),
+    ],
+  })
+}
+
+export interface VerdictLine {
+  label: string
+  counts?: SeverityCounts
+}
+
+export interface SummaryRunInput {
+  botLogin: string
+  headSha: string
+  verdict: VerdictLine
+  summary: SummarySubmissionInput
+  model: string
+  skillsFingerprint: string
+  linkedIssues: readonly number[]
+}
+
+export function renderSummaryRun(input: SummaryRunInput): string {
+  return summaryLayout({
+    botLogin: input.botLogin,
+    status: statusLine(input.headSha, input.verdict),
+    content: input.summary,
+    afterWalkthrough: [],
+    footer: [
+      summarizedBy(input.model, input.skillsFingerprint),
+      linkedIssuesLine(input.linkedIssues),
+      commandsLine(input.botLogin),
+    ],
+  })
+}
+
+interface SummaryLayout {
+  botLogin: string
+  status: string
+  content: SummarySubmissionInput
+  afterWalkthrough: readonly string[]
+  footer: readonly string[]
+}
+
+function summaryLayout(layout: SummaryLayout): string {
+  const { door, blast_radius } = layout.content.merge_danger
   return [
     SUMMARY_MARKER,
-    `## ${input.botLogin} review`,
+    `## ${layout.botLogin} review`,
     "",
-    `**Head:** \`${input.headSha.slice(0, 7)}\` · **Verdict:** ${VERDICT_LABEL[input.event]} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`,
+    layout.status,
     "",
     `**Merge danger:** ${door} door · ${oneLine(blast_radius)}`,
     "",
     "### Summary",
     "",
-    input.submission.summary.trim(),
+    layout.content.summary.trim(),
     "",
     "### Walkthrough",
     "",
-    walkthrough,
-    dropped,
-    ...sinceLines(input.since),
+    walkthroughTable(layout.content.walkthrough),
+    ...layout.afterWalkthrough,
     "",
-    ...reviewedBy(input.model, input.skillsFingerprint),
-    ...spendLines(input.spend),
-    linkedIssuesLine(input.linkedIssues),
-    standardsLine(input.instructionFiles),
-    `<sub>Commands: \`@${input.botLogin} review\`, \`@${input.botLogin} full review\`, \`@${input.botLogin} help\`. Ask a question with \`@${input.botLogin} <question>\`.</sub>`,
-    ...configNoteLines(input.configError),
+    ...layout.footer,
   ].join("\n")
+}
+
+function statusLine(headSha: string, verdict: VerdictLine): string {
+  const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${verdict.label}`
+  const { counts } = verdict
+  if (counts === undefined) return status
+  return `${status} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
+}
+
+function walkthroughTable(rows: readonly WalkthroughInput[]): string {
+  if (rows.length === 0) return "_No per-file notes._"
+  return [
+    "| File | Change |",
+    "| --- | --- |",
+    ...rows.map((row) => `| \`${row.path}\` | ${oneLine(row.summary)} |`),
+  ].join("\n")
+}
+
+function droppedLine(droppedCount: number): string {
+  return droppedCount > 0
+    ? `\n\n<sub>${droppedCount} finding(s) were dropped because they failed the host's checks, even after a retry.</sub>`
+    : ""
+}
+
+function commandsLine(botLogin: string): string {
+  return `<sub>Commands: \`@${botLogin} review\`, \`@${botLogin} full review\`, \`@${botLogin} help\`. Ask a question with \`@${botLogin} <question>\`.</sub>`
 }
 
 function configNoteLines(error: string | undefined): string[] {
@@ -150,6 +213,10 @@ function normalisedRows(rows: readonly WalkthroughInput[]): WalkthroughInput[] {
 function reviewedBy(model: string | undefined, skillsFingerprint: string | undefined): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   return [`<sub>Reviewed by \`${model}\` with skills \`review@${skillsFingerprint.slice(0, 8)}\`.</sub>`]
+}
+
+function summarizedBy(model: string, skillsFingerprint: string): string {
+  return `<sub>Summarized by \`${model}\` with skills \`summary@${skillsFingerprint.slice(0, 8)}\`.</sub>`
 }
 
 function spendLines(spend: ReviewSpend | undefined): string[] {

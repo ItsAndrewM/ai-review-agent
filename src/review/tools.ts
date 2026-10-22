@@ -1,5 +1,11 @@
 import { Type } from "@earendil-works/pi-ai"
-import { defineExtension, defineTool, type Extension, type ToolExecutionResult } from "@earendil-works/pi-durable"
+import {
+  defineExtension,
+  defineTool,
+  type ConversationId,
+  type Extension,
+  type ToolExecutionResult,
+} from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
@@ -17,7 +23,7 @@ export interface ReviewHost {
   pullRequest(): Promise<PullRequestInfo>
   changedFiles(): Promise<ChangedFile[]>
   pathFilters(): Promise<readonly string[]>
-  submitReview(submission: ReviewSubmissionInput): Promise<SubmitOutcome>
+  submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
 }
 
 const MAX_FILE_CHARS = 60_000
@@ -76,8 +82,8 @@ export function createReviewExtension(host: ReviewHost): Extension {
       "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; rejected findings and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
     callers: ["model"],
-    async execute(submission) {
-      return submitResult(await host.submitReview(submission))
+    async execute(submission, api) {
+      return submitResult(await host.submitReview(submission, api.conversationId))
     },
   })
 

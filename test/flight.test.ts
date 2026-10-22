@@ -8,6 +8,7 @@ import {
   replacedExit,
   runStanding,
   StoredPending,
+  submitStanding,
   type PendingReview,
 } from "../src/review/flight.ts"
 
@@ -160,5 +161,32 @@ describe("migratePending", () => {
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)
+  })
+})
+
+describe("submitStanding", () => {
+  it("refuses a submit_review call from any conversation but the root, even while its review is in flight, so a summary session can never post as the review", () => {
+    expect(submitStanding({ caller: 2, root: 1, pending, running: "review:d-1" })).toEqual({ kind: "not_in_flight" })
+  })
+
+  it("has nothing to post for the root when no review is pending", () => {
+    expect(submitStanding({ caller: 1, root: 1, pending: undefined, running: undefined })).toEqual({
+      kind: "no_review",
+    })
+  })
+
+  it("posts only for the root's running operation that the pending review owns", () => {
+    expect(submitStanding({ caller: 1, root: 1, pending, running: "review:d-1" })).toEqual({
+      kind: "post",
+      deliveryId: "d-1",
+    })
+    expect(submitStanding({ caller: 1, root: 1, pending, running: "review:d-1:retry" })).toEqual({
+      kind: "post",
+      deliveryId: "d-1",
+    })
+    expect(submitStanding({ caller: 1, root: 1, pending, running: "summary:d-9:abc1234" })).toEqual({
+      kind: "not_in_flight",
+    })
+    expect(submitStanding({ caller: 1, root: 1, pending, running: undefined })).toEqual({ kind: "not_in_flight" })
   })
 })

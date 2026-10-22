@@ -1,20 +1,41 @@
 import { CONFIG_FILE, type SkipReason } from "./repository/config.ts"
 import { shortSha } from "./sha.ts"
 
-export type Command = { kind: "review"; full: boolean } | { kind: "help" } | { kind: "chat"; text: string }
+export type Command =
+  | { kind: "review"; full: boolean }
+  | { kind: "help" }
+  | { kind: "summary" }
+  | { kind: "resolve" }
+  | { kind: "pause" }
+  | { kind: "resume" }
+  | { kind: "chat"; text: string }
 
-export type ReviewSkip = "not_open" | "superseded" | "already_reviewed" | "in_progress" | SkipReason | "path_filters"
+const COMMAND_BY_TEXT = new Map<string, Command>([
+  ["", { kind: "review", full: false }],
+  ["review", { kind: "review", full: false }],
+  ["full review", { kind: "review", full: true }],
+  ["help", { kind: "help" }],
+  ["summary", { kind: "summary" }],
+  ["resolve", { kind: "resolve" }],
+  ["pause", { kind: "pause" }],
+  ["resume", { kind: "resume" }],
+])
+
+export type ReviewSkip =
+  | "paused"
+  | "not_open"
+  | "superseded"
+  | "already_reviewed"
+  | "in_progress"
+  | SkipReason
+  | "path_filters"
 
 export function parseCommand(body: string, botLogin: string): Command | undefined {
   const mention = new RegExp(`(?:^|\\s)@${escapeRegExp(botLogin)}(?![\\w-])\\s*([\\s\\S]*)`, "i")
   const match = mention.exec(body)
   if (!match) return undefined
   const text = (match[1] ?? "").trim()
-  const lower = text.toLowerCase()
-  if (lower === "" || lower === "review") return { kind: "review", full: false }
-  if (lower === "full review") return { kind: "review", full: true }
-  if (lower === "help") return { kind: "help" }
-  return { kind: "chat", text }
+  return COMMAND_BY_TEXT.get(text.toLowerCase()) ?? { kind: "chat", text }
 }
 
 export function helpText(botLogin: string): string {
@@ -23,6 +44,10 @@ export function helpText(botLogin: string): string {
     "",
     `- \`@${botLogin} review\`: review what changed since the last review, or the whole pull request if there was none.`,
     `- \`@${botLogin} full review\`: start over: review the whole pull request again, ignoring earlier reviews.`,
+    `- \`@${botLogin} summary\`: rewrite the summary comment for the current head, without a review.`,
+    `- \`@${botLogin} resolve\`: resolve all my open threads, or only this one when you reply in one of my threads, then check whether I can approve.`,
+    `- \`@${botLogin} pause\`: stop reviewing pushes until \`@${botLogin} resume\`. Commands keep working.`,
+    `- \`@${botLogin} resume\`: review pushes again, starting with the current head if it has no review yet.`,
     `- \`@${botLogin} help\`: this message.`,
     "",
     `Anything else after \`@${botLogin}\` is a question for the reviewer about this pull request.`,
