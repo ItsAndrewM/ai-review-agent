@@ -75,6 +75,23 @@ const Tree = Type.Object({
   tree: Type.Array(Type.Object({ path: Type.String(), type: Type.String(), sha: Type.String() })),
 })
 
+const TreeListingResponse = Type.Object({
+  truncated: Type.Boolean(),
+  tree: Type.Array(
+    Type.Object({ path: Type.String(), mode: Type.String(), type: Type.String(), size: Type.Optional(Type.Integer()) }),
+  ),
+})
+
+const BlobObject = Type.Object({
+  text: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  isBinary: Type.Optional(Type.Boolean()),
+  isTruncated: Type.Optional(Type.Boolean()),
+})
+
+const BlobTextsResponse = Type.Object({
+  data: Type.Object({ repository: Type.Record(Type.String(), Type.Union([Type.Null(), BlobObject])) }),
+})
+
 const PullRequestComments = Type.Array(
   Type.Object({
     id: Type.Integer(),
@@ -192,9 +209,30 @@ export interface RepositoryTree {
   truncated: boolean
 }
 
+export interface ListedEntry {
+  path: string
+  type: "blob" | "tree" | "commit"
+  mode: string
+  size: number | undefined
+}
+
+export interface TreeListing {
+  entries: readonly ListedEntry[]
+  truncated: boolean
+}
+
+export interface BlobText {
+  path: string
+  text: string | undefined
+}
+
 type CheckRunNode = Static<typeof CheckRunsPage>["check_runs"][number]
 
 type TreeNode = Static<typeof Tree>["tree"][number]
+
+type ListedNode = Static<typeof TreeListingResponse>["tree"][number]
+
+type BlobObject = Static<typeof BlobObject>
 
 type GraphQLVariables = Record<string, string | number | null>
 
@@ -245,6 +283,7 @@ const PER_PAGE = 100
 const MOST_FILES_GITHUB_LISTS = 3000
 const MOST_COMMENT_PAGES = 10
 const MOST_THREAD_PAGES = 5
+const BLOBS_PER_QUERY = 50
 const MOST_CHECK_RUN_PAGES = 10
 
 export class GitHubClient {
@@ -366,6 +405,32 @@ export class GitHubClient {
   async getTree(ref: RepoRef, sha: string): Promise<RepositoryTree> {
     const listing = await this.json(Tree, `/repos/${ref.owner}/${ref.repo}/git/trees/${sha}?recursive=1`)
     return { sha: listing.sha, entries: listing.tree.flatMap(blobOrTree), truncated: listing.truncated }
+  }
+
+  async downloadTarball(ref: RepoRef, sha: string): Promise<ReadableStream<Uint8Array>> {
+    const response = await this.request(`/repos/${ref.owner}/${ref.repo}/tarball/${sha}`)
+    if (!response.ok || !response.body) throw new Error(`GitHub tarball ${response.status}`)
+    return response.body
+  }
+
+  async getTreeListing(ref: RepoRef, sha: string): Promise<TreeListing> {
+    const listing = await this.json(TreeListingResponse, `/repos/${ref.owner}/${ref.repo}/git/trees/${sha}?recursive=1`)
+    return { entries: listing.tree.flatMap(listedEntry), truncated: listing.truncated }
+  }
+
+  async getBlobTexts(ref: RepoRef, sha: string, paths: readonly string[]): Promise<BlobText[]> {
+    const texts: BlobText[] = []
+    for (let start = 0; start < paths.length; start += BLOBS_PER_QUERY) {
+      texts.push(...(await this.blobTextsBatch(ref, sha, paths.slice(start, start + BLOBS_PER_QUERY))))
+    }
+    return texts
+  }
+
+  private async blobTextsBatch(ref: RepoRef, sha: string, paths: readonly string[]): Promise<BlobText[]> {
+    const expressions = Object.fromEntries(paths.map((path, index) => [`e${index}`, `${sha}:${path}`]))
+    const variables = { owner: ref.owner, name: ref.repo, ...expressions }
+    const { data } = await this.graphql(BlobTextsResponse, blobTextsQuery(paths.length), variables)
+    return paths.map((path, index) => ({ path, text: readableText(data.repository[`f${index}`]) }))
   }
 
   async listReviewComments(ref: RepoRef, number: number, reviewId: number): Promise<PostedComment[]> {
@@ -504,6 +569,24 @@ function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): Che
 
 function blobOrTree({ path, type, sha }: TreeNode): TreeEntry[] {
   return type === "blob" || type === "tree" ? [{ path, type, sha }] : []
+}
+
+function listedEntry({ path, mode, type, size }: ListedNode): ListedEntry[] {
+  return type === "blob" || type === "tree" || type === "commit" ? [{ path, mode, type, size }] : []
+}
+
+function blobTextsQuery(count: number): string {
+  const indexes = Array.from({ length: count }, (_, index) => index)
+  const declarations = indexes.map((index) => `, $e${index}: String!`).join("")
+  const fields = indexes
+    .map((index) => `f${index}: object(expression: $e${index}) { ... on Blob { text isBinary isTruncated } }`)
+    .join("\n    ")
+  return `query($owner: String!, $name: String!${declarations}) {\n  repository(owner: $owner, name: $name) {\n    ${fields}\n  }\n}`
+}
+
+function readableText(blob: BlobObject | null | undefined): string | undefined {
+  if (!blob || blob.isBinary || blob.isTruncated) return undefined
+  return blob.text ?? undefined
 }
 
 function encodePath(path: string): string {
