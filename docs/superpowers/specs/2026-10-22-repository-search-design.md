@@ -51,6 +51,8 @@ These would make it a failure even if it technically worked:
 
 ## How *(builder's call unless noted)*
 
+Two builder's calls changed what's below, as `docs/design.md` records: a pattern that doesn't compile is searched as literal text, and the answer says so, rather than refused, and the snapshot record lives in a `snapshot_meta` table beside `snapshot_files`, not in the key-value storage.
+
 ### The snapshot
 
 A snapshot is the head commit's text files, stored in the pull request's object.
@@ -76,7 +78,7 @@ A snapshot is capped at 50,000 files or 400 MB of text. Past the cap, loading st
 - **Budget.** There is no read budget today, so the per-call output caps bound what a search costs. A review gets at most 40 `grep` and `tree` calls together, after which the tools say the budget is spent.
 - **The answer flow.** A question asked in a thread gets the same tools.
 
-All three are `replay: "safe"`.
+`read_file` is `replay: "safe"`. `grep` and `tree` are not, so a scan that resets the object isn't rerun when it reopens.
 
 ### When search is unavailable
 
