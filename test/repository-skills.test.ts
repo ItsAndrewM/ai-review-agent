@@ -709,6 +709,7 @@ describe("reviewRepository", () => {
 
 describe("the catalog", () => {
   const LINT = contextOf([blob(".github/skills/lint/SKILL.md")], { ".github/skills/lint/SKILL.md": skillMd("Lint.") })
+  const BARE = contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })
 
   it("hides the built-in skills from the catalog's listing, keeping their names, metadata and bodies, so they shadow without being offered", async () => {
     const { source } = await bundledSkills()
@@ -751,7 +752,7 @@ describe("the catalog", () => {
     return { report, skipped }
   }
 
-  it("rebuilds the catalog from the one context the object holds, so a review resumed after a restart keeps it", async () => {
+  it("rebuilds the catalog from the one context the object holds while no review is pending, so a later question can open a repository skill", async () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
     const sources = await restoredCatalog(source, [LINT], 1, { pending: false }, report)
@@ -764,9 +765,8 @@ describe("the catalog", () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
     expect(await restoredCatalog(source, [], 0, { pending: false }, report)).toBeUndefined()
-    const bare = contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })
-    expect(await restoredCatalog(source, [bare], 1, { pending: false }, report)).toBeUndefined()
-    expect(await restoredCatalog(source, [bare], 1, { pending: true, fingerprint: undefined }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [BARE], 1, { pending: false }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [BARE], 1, { pending: true, fingerprint: undefined }, report)).toBeUndefined()
     expect(skipped).toEqual([])
   })
 
@@ -794,17 +794,12 @@ describe("the catalog", () => {
       await restoredCatalog(source, [LINT], 1, { pending: true, fingerprint: "0".repeat(64) }, report),
     ).toBeUndefined()
     expect(await restoredCatalog(source, [LINT], 1, { pending: true, fingerprint: undefined }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [BARE], 1, { pending: true, fingerprint }, report)).toBeUndefined()
     expect(skipped).toEqual([
       [1, "fingerprint"],
       [1, "fingerprint"],
+      [1, "fingerprint"],
     ])
-  })
-
-  it("rebuilds from the one record it holds when no review is pending, whatever its fingerprint", async () => {
-    const { source } = await bundledSkills()
-    const { report, skipped } = skipRecorder()
-    expect(await restoredCatalog(source, [LINT], 1, { pending: false }, report)).toHaveLength(2)
-    expect(skipped).toEqual([])
   })
 
   describe("the output channel", () => {
