@@ -77,6 +77,7 @@ import {
   lastReviewOf,
   nextRecheck,
   openBlockingIn,
+  ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
   type ApprovalOutcome,
@@ -1665,6 +1666,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async evaluateWithRecheck(trigger: ApprovalTrigger, deliveryId: string, attempt: number): Promise<void> {
     const recheck = nextRecheck(trigger, await this.evaluateApproval(trigger, deliveryId), attempt)
     if (recheck === undefined) return
+    const scheduled = this.scheduledRecheck()
+    if (!ownsRecheck(trigger, deliveryId, scheduled)) {
+      log("approval.recheck_yielded", { delivery: deliveryId, to: scheduled?.delivery })
+      return
+    }
     await this.lifecycle.jobs.push({
       id: RECHECK_JOB,
       fn: RECHECK_JOB,
@@ -1677,6 +1683,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       attempt: recheck.attempt,
       inMs: recheck.inMs,
     })
+  }
+
+  private scheduledRecheck(): RecheckJob | undefined {
+    const payload = this.lifecycle.jobs.get(RECHECK_JOB)?.payload
+    return Value.Check(RecheckJob, payload) ? payload : undefined
   }
 
   private async evaluateApproval(

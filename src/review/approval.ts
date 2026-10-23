@@ -246,3 +246,7 @@ export function nextRecheck(trigger: ApprovalTrigger, outcome: ApprovalOutcome, 
   const inMs = RECHECK_DELAYS_MS[attempt]
   return inMs === undefined ? undefined : { attempt: attempt + 1, inMs }
 }
+
+export function ownsRecheck(trigger: ApprovalTrigger, delivery: string, scheduled: RecheckJob | undefined): boolean {
+  return trigger !== "recheck" || scheduled === undefined || scheduled.delivery === delivery
+}

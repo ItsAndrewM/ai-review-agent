@@ -15,6 +15,7 @@ import {
   LastReview,
   nextRecheck,
   openBlockingIn,
+  ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
   type ApprovalState,
@@ -500,5 +501,20 @@ describe("RecheckJob", () => {
     expect(Value.Check(RecheckJob, { attempt: 0, delivery: "d" })).toBe(false)
     expect(Value.Check(RecheckJob, { attempt: 1.5, delivery: "d" })).toBe(false)
     expect(Value.Check(RecheckJob, { attempt: 2 })).toBe(false)
+  })
+})
+
+describe("ownsRecheck", () => {
+  it("lets a CI-completed event restart the chain over whatever is scheduled", () => {
+    expect(ownsRecheck("checks_completed", "new", { attempt: 2, delivery: "old" })).toBe(true)
+  })
+
+  it("lets a re-check continue its own chain, or one whose job is gone", () => {
+    expect(ownsRecheck("recheck", "d1", { attempt: 1, delivery: "d1" })).toBe(true)
+    expect(ownsRecheck("recheck", "d1", undefined)).toBe(true)
+  })
+
+  it("stops a re-check whose job a later completion's chain replaced while it read GitHub", () => {
+    expect(ownsRecheck("recheck", "old", { attempt: 1, delivery: "new" })).toBe(false)
   })
 })
