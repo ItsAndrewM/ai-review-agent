@@ -2,7 +2,7 @@
 
 `andabot` is a self-hosted pull request reviewer in the shape of CodeRabbit: it reviews every PR on its own, answers when tagged, posts a summary and inline findings with suggestions, requests changes when it finds something, and approves once its findings are resolved. It runs on Cloudflare: a Worker receives GitHub webhooks and hands each PR to its own Durable Object, where Pi Durable runs the agent loop.
 
-Status: phase 1, the walking skeleton, is built, deployed and reviewing this repository's pull requests (#1), and `pnpm check` runs on every pull request in GitHub Actions (#3). Phase 2's skills work has shipped its three slices, each measured on #2: the review procedure as skills (#11), basis, coverage and the spec axis (#22), and repository context (#29, #28, #75). Slice 3's catalog ruling stands: a repository's own skills reach the model through the Agents SDK catalog, which GLM-5.3 Flash called cleanly on #54 on 22 Oct 2026, while the built-in skill and its references stay inline. Next: the follow-ups from slice 3's final review (#80 and #81) and the verify pass (#31).
+Status: phase 1, the walking skeleton, is built, deployed and reviewing this repository's pull requests (#1), and `pnpm check` runs on every pull request in GitHub Actions (#3). Phase 2's skills work has shipped its three slices, each measured on #2: the review procedure as skills (#11), basis, coverage and the spec axis (#22), and repository context (#29, #28, #75). Slice 3's catalog ruling stands: a repository's own skills reach the model through the Agents SDK catalog, which GLM-5.3 Flash called cleanly on #54 on 22 Oct 2026, while the built-in skill and its references stay inline. Next: the verify pass (#31), once real false positives appear.
 
 ## Decisions so far
 
@@ -319,7 +319,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
    - **Baseline.** The planted-bug pull request reviewed on the phase 1 build, with the results recorded in #2.
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
-   - **Slice 3: repository context.** The repository's instruction files as standards (#29), `.andabot.yaml` (#28) and its own skills through the catalog (#75), measured on the fixtures #68, #72 and #77; the follow-ups are #80 and #81.
+   - **Slice 3: repository context.** The repository's instruction files as standards (#29), `.andabot.yaml` (#28) and its own skills through the catalog (#75), measured on the fixtures #68, #72 and #77; its follow-ups (#78 to #81, #83, #100) are closed.
 3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
 4. **Extras.** Sequence diagram, docstrings, unit test generation.
 

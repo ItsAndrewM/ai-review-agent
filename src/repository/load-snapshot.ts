@@ -1,4 +1,4 @@
-import type { BlobText, ListedEntry, TreeListing } from "../github/client.ts"
+import { SYMLINK_MODE, type BlobText, type ListedEntry, type TreeListing } from "../github/client.ts"
 import { errorText, logError } from "../log.ts"
 import {
   classify,
@@ -38,8 +38,6 @@ export const GAP_BATCH_FILES = 50
 export const GAP_BATCH_BYTES = 4_194_304
 
 const LEFT_OUT_BATCH = 200
-
-const SYMLINK_MODE = "120000"
 
 const decoder = new TextDecoder()
 

@@ -1,5 +1,5 @@
 import { Type } from "typebox"
-import type { GitHubClient, RepoRef, RepositoryTree, TreeEntry } from "../github/client.ts"
+import { SYMLINK_MODE, type GitHubClient, type RepoRef, type RepositoryTree, type TreeEntry } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { StoredPending } from "../review/flight.ts"
@@ -74,8 +74,6 @@ export const MAX_INSTRUCTION_LOADS = 24
 export const CONTEXT_PREFIX = "context:"
 
 const MISSING_AT_BASE = ""
-
-const SYMLINK_MODE = "120000"
 
 const LOAD_ORDER = ["root", "nested", "instructions"] as const satisfies readonly StandardSource[]
 

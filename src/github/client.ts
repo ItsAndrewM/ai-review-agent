@@ -205,6 +205,8 @@ export interface CheckRunSummary {
   app: string | null
 }
 
+export const SYMLINK_MODE = "120000"
+
 export interface TreeEntry {
   path: string
   type: "blob" | "tree"

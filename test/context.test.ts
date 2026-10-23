@@ -663,7 +663,7 @@ describe("the context cache", () => {
     expect(donorKey([`context:${OTHER_BASE}`, "context:abc", contextKey(BASE)], BASE)).toBeUndefined()
   })
 
-  it("keeps each entry's mode in the stored record, still reads a record written before modes were kept, and refuses a mode that is not a string", () => {
+  it("accepts an entry whose mode is a string or absent, as in records written before modes were kept, and refuses a numeric mode, which is what pins the field since the schema's objects are open", () => {
     const linked = contextOf([withMode(blobWithSha("AGENTS.md", "s1"), "120000")], {})
     expect(Value.Check(StoredRepositoryContext, structuredClone(linked))).toBe(true)
     expect(Value.Check(StoredRepositoryContext, structuredClone(contextOf([blobWithSha("AGENTS.md", "s1")], {})))).toBe(
