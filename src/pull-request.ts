@@ -361,6 +361,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
   #refusedCalls = 0
+  #activated: string[] = []
   #snapshot: SqlSnapshotFiles | undefined
   #runs = new SnapshotRuns(
     () => this.#snapshotFiles(),
@@ -991,10 +992,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
         skipped,
       )
-      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
+        this.reportActivation(name),
+      )
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
     }
+  }
+
+  private async reportActivation(name: string): Promise<void> {
+    this.#activated.push(name)
+    const pending = await this.readPending()
+    log("skills.activated", {
+      number: await this.storedNumber(),
+      head: pending === undefined ? undefined : shortSha(pending.headSha),
+      name,
+    })
   }
 
   private async storedNumber(): Promise<number | undefined> {
@@ -1013,6 +1026,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     this.#refusedCalls = 0
+    this.#activated = []
     this.#runs.start()
     try {
       const files = await this.openRun(pr, run)
@@ -1097,6 +1111,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       status: result.status,
       ...transcriptFields(summarizeTranscript(result.messages)),
       refusedCalls: this.#refusedCalls,
+      activated: this.#activated.join(" "),
     })
   }
 
@@ -1204,7 +1219,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       BACKGROUND_CONTEXT,
     )
     const sources = catalogFor(source, skills.offered)
-    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
+      this.reportActivation(name),
+    )
     return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }
 

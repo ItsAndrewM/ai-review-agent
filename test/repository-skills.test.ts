@@ -1,5 +1,14 @@
+import type { Context } from "@earendil-works/chord/context"
 import { Type } from "@earendil-works/pi-ai"
-import { createRegistry, defineExtension, defineTool, type Extension, type Registry } from "@earendil-works/pi-durable"
+import {
+  createRegistry,
+  defineExtension,
+  defineTool,
+  type Extension,
+  type Registry,
+  type ToolExecutionApi,
+  type ToolExecutionResult,
+} from "@earendil-works/pi-durable"
 import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type TreeEntry } from "../src/github/client.ts"
@@ -29,8 +38,10 @@ import {
   skillsStartFields,
   unlisted,
   unloadedSkillPaths,
+  withActivationReport,
   withContentAsOutput,
   withOutputFromContent,
+  type ReportActivation,
   type ReportSkippedRestore,
   type SkillState,
 } from "../src/repository/skills.ts"
@@ -752,6 +763,46 @@ describe("the catalog", () => {
     return { report, skipped }
   }
 
+  const ignoreActivation: ReportActivation = () => {}
+
+  function activationRecorder() {
+    const names: string[] = []
+    const report: ReportActivation = (name) => {
+      names.push(name)
+    }
+    return { report, names }
+  }
+
+  interface CalledWithoutHarness {
+    execute(args?: Record<string, string>, api?: ToolExecutionApi, context?: Context): Promise<ToolExecutionResult>
+  }
+
+  function toolCalledWithoutHarness(extension: Extension | undefined, name: string): CalledWithoutHarness {
+    const tool = extension?.tools?.find((candidate) => candidate.name === name)
+    if (tool === undefined) throw new Error(`the catalog should hold ${name}`)
+    return tool
+  }
+
+  const activateSkill = () =>
+    defineTool({
+      name: "activate_skill",
+      description: "Activate a skill by name.",
+      parameters: Type.Object({ name: Type.String() }),
+      async execute() {
+        return { output: [{ type: "text" as const, text: "Activated." }] }
+      },
+    })
+
+  const readSkillResource = () =>
+    defineTool({
+      name: "read_skill_resource",
+      description: "Read a resource of a skill.",
+      parameters: Type.Object({ name: Type.String(), path: Type.String() }),
+      async execute() {
+        return { output: [{ type: "text" as const, text: "Read." }] }
+      },
+    })
+
   it("rebuilds the catalog from the one context the object holds while no review is pending, so a later question can open a repository skill", async () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
@@ -867,7 +918,7 @@ describe("the catalog", () => {
       })
       const section = { key: "skills", render: () => "Available skills." }
       const extension = defineExtension({ name: "agents.skills", tools: [activate], sections: [section] })
-      const wrapped = withContentAsOutput(extension)
+      const wrapped = withContentAsOutput(extension, ignoreActivation)
       expect(wrapped.name).toBe("agents.skills")
       expect(wrapped.sections).toBe(extension.sections)
       const [tool] = wrapped.tools ?? []
@@ -897,13 +948,67 @@ describe("the catalog", () => {
           return { output: [] }
         },
       })
-      const wrapped = withContentAsOutput(defineExtension({ name: "agents.skills", tools: [activate, read] }))
+      const wrapped = withContentAsOutput(
+        defineExtension({ name: "agents.skills", tools: [activate, read] }),
+        ignoreActivation,
+      )
       expect((wrapped.tools ?? []).map((tool) => tool.outputLimits)).toEqual([
         CATALOG_OUTPUT_LIMITS,
         CATALOG_OUTPUT_LIMITS,
       ])
       expect(CATALOG_OUTPUT_LIMITS.maxBytes).toBeGreaterThan(MAX_SKILL_FILE_BYTES)
       expect(CATALOG_OUTPUT_LIMITS.maxLines).toBeGreaterThanOrEqual(CATALOG_OUTPUT_LIMITS.maxBytes)
+    })
+
+    it("reports the activated skill's name before running the activation, and reports nothing for a call without a name", async () => {
+      const events: string[] = []
+      const wrapped = withActivationReport(
+        async (args: { name?: string | number }) => {
+          events.push(`ran ${JSON.stringify(args)}`)
+          return { output: [] }
+        },
+        (name) => {
+          events.push(`reported ${name}`)
+        },
+      )
+      await wrapped({ name: "lint" })
+      await wrapped({})
+      await wrapped({ name: 7 })
+      expect(events).toEqual(["reported lint", 'ran {"name":"lint"}', "ran {}", 'ran {"name":7}'])
+    })
+
+    it("waits for an asynchronous report before running the activation, and returns the activation's own result", async () => {
+      const events: string[] = []
+      const answer = { content: [{ type: "text" as const, text: SDK_TEXT }] }
+      const wrapped = withActivationReport(
+        async (_args: { name: string }) => {
+          events.push("ran")
+          return answer
+        },
+        async (name) => {
+          await Promise.resolve()
+          events.push(`reported ${name}`)
+        },
+      )
+      expect(await wrapped({ name: "lint" })).toBe(answer)
+      expect(events).toEqual(["reported lint", "ran"])
+    })
+
+    it("wraps activate_skill with the activation report and leaves read_skill_resource with the content wrapper alone, even for a call that carries a name", async () => {
+      const { report, names } = activationRecorder()
+      const wrapped = withContentAsOutput(
+        defineExtension({ name: "agents.skills", tools: [activateSkill(), readSkillResource()] }),
+        report,
+      )
+      const activate = await toolCalledWithoutHarness(wrapped, "activate_skill").execute({ name: "lint" })
+      expect(activate.output).toEqual([{ type: "text", text: "Activated." }])
+      expect(names).toEqual(["lint"])
+      const read = await toolCalledWithoutHarness(wrapped, "read_skill_resource").execute({
+        name: "lint",
+        path: "rules.md",
+      })
+      expect(read.output).toEqual([{ type: "text", text: "Read." }])
+      expect(names).toEqual(["lint"])
     })
   })
 
@@ -929,7 +1034,7 @@ describe("the catalog", () => {
       const registry = createRegistry()
       registry.install(review)
       const { build, built } = builder()
-      const installed = await installCatalog(registry, undefined, [], build)
+      const installed = await installCatalog(registry, undefined, [], build, ignoreActivation)
       expect(installedNames(registry)).toEqual(["andabot", "agents.skills"])
       expect(installed).toBe(registry.snapshot().extension("agents.skills"))
       expect(built).toHaveLength(1)
@@ -946,11 +1051,23 @@ describe("the catalog", () => {
         },
       })
       const sdkCatalog = defineExtension({ name: "agents.skills", tools: [activate] })
-      const installed = await installCatalog(registry, undefined, [], async () => sdkCatalog)
+      const installed = await installCatalog(registry, undefined, [], async () => sdkCatalog, ignoreActivation)
       expect(installed).not.toBe(sdkCatalog)
       const [tool] = registry.snapshot().extension("agents.skills")?.tools ?? []
       expect(tool?.name).toBe("activate_skill")
       expect(tool?.execute).not.toBe(activate.execute)
+    })
+
+    it("threads its report to the installed activate_skill, so a call through the registry's tool is reported", async () => {
+      const registry = createRegistry()
+      const { report, names } = activationRecorder()
+      const sdkCatalog = defineExtension({ name: "agents.skills", tools: [activateSkill(), readSkillResource()] })
+      await installCatalog(registry, undefined, [], async () => sdkCatalog, report)
+      const installed = registry.snapshot().extension("agents.skills")
+      await toolCalledWithoutHarness(installed, "read_skill_resource").execute({ name: "lint", path: "rules.md" })
+      expect(names).toEqual([])
+      await toolCalledWithoutHarness(installed, "activate_skill").execute({ name: "lint" })
+      expect(names).toEqual(["lint"])
     })
 
     it("rebuilds the catalog in place every review, so a resource that loaded since is served", async () => {
@@ -963,8 +1080,14 @@ describe("the catalog", () => {
       const partial = await repositorySkills(contextOf(entries, body))
       const full = await repositorySkills(contextOf(entries, { ...body, ".github/skills/lint/rules.md": "Rules." }))
       expect(full.offered?.fingerprint).toBe(partial.offered?.fingerprint)
-      const first = await installCatalog(registry, undefined, catalogFor(source, partial.offered), build)
-      const second = await installCatalog(registry, first, catalogFor(source, full.offered), build)
+      const first = await installCatalog(
+        registry,
+        undefined,
+        catalogFor(source, partial.offered),
+        build,
+        ignoreActivation,
+      )
+      const second = await installCatalog(registry, first, catalogFor(source, full.offered), build, ignoreActivation)
       expect(installedNames(registry)).toEqual(["andabot", "agents.skills"])
       expect(registry.snapshot().extension("agents.skills")).toBe(second)
       expect(second).not.toBe(first)
@@ -976,8 +1099,8 @@ describe("the catalog", () => {
       const registry = createRegistry()
       registry.install(review)
       const { build } = builder()
-      const installed = await installCatalog(registry, undefined, [], build)
-      expect(await installCatalog(registry, installed, undefined, build)).toBeUndefined()
+      const installed = await installCatalog(registry, undefined, [], build, ignoreActivation)
+      expect(await installCatalog(registry, installed, undefined, build, ignoreActivation)).toBeUndefined()
       expect(installedNames(registry)).toEqual(["andabot"])
     })
 
@@ -985,7 +1108,7 @@ describe("the catalog", () => {
       const registry = createRegistry()
       registry.install(review)
       const { build, built } = builder()
-      expect(await installCatalog(registry, undefined, undefined, build)).toBeUndefined()
+      expect(await installCatalog(registry, undefined, undefined, build, ignoreActivation)).toBeUndefined()
       expect(installedNames(registry)).toEqual(["andabot"])
       expect(built).toHaveLength(0)
     })
