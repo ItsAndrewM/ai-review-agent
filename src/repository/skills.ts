@@ -99,7 +99,14 @@ export const SKILL_ROOTS = [".github/skills/", ".agents/skills/", ".claude/skill
 
 export const MAX_SKILL_FILE_BYTES = 51_200
 
-export const CATALOG_OUTPUT_LIMITS = { maxBytes: 2 * MAX_SKILL_FILE_BYTES, maxLines: 2 * MAX_SKILL_FILE_BYTES } as const
+const CATALOG_OUTPUT_MAX_BYTES = 2 * MAX_SKILL_FILE_BYTES
+
+const mostLinesIn = (bytes: number): number => bytes
+
+export const CATALOG_OUTPUT_LIMITS = {
+  maxBytes: CATALOG_OUTPUT_MAX_BYTES,
+  maxLines: mostLinesIn(CATALOG_OUTPUT_MAX_BYTES),
+} as const
 
 export const MAX_SKILL_BYTES = 524_288
 
