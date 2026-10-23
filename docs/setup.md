@@ -134,3 +134,5 @@ What makes the file invalid, or match less than meant:
 - **An unknown key is invalid**, under `reviews` or at the top level, so a typo such as `draft: true` is reported rather than silently ignored.
 
 An invalid file applies none of its settings: the review runs with the defaults, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`, the problem set as code. It names its place in the file, as in `/reviews/auto must be boolean`; an unknown key reads as `/reviews/draft schema is false`. A file GitHub fails to serve gets the same note, the defaults for that review only, and a `config.unreadable` log. `review.start` in Workers Logs shows which applied: `config` is `missing`, `file`, `invalid` or `unreadable`.
+
+The same file governs `@andabot summary`, which reads it at the base commit too.

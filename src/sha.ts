@@ -1,3 +1,3 @@
-export function shortSha(sha: string): string {
-  return sha.slice(0, 7)
+export function shortSha(fullSha: string): string {
+  return fullSha.slice(0, 7)
 }
