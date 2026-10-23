@@ -9,7 +9,7 @@
   "observability": { "enabled": true },
   // Repository search loads the head's files into the object: a vscode-size
   // snapshot took 8.2 s of CPU to load, and grep's work budget and the
-  // snapshot cap hold the costliest measured call to about 11 s. 300 s is the
+  // snapshot cap hold the costliest measured call to about 15 s. 300 s is the
   // maximum, so several calls in one event can't reset the object.
   "limits": { "cpu_ms": 300000 },
   "ai": { "binding": "AI", "remote": true },
