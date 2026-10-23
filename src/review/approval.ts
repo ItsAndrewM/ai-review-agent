@@ -35,7 +35,7 @@ export type WorkflowState = boolean | "unknown"
 
 export type WebhookTrigger = "thread_resolved" | "thread_unresolved" | "checks_completed"
 
-export type ApprovalTrigger = WebhookTrigger | "review" | "already_reviewed" | "resolve" | "resume"
+export type ApprovalTrigger = WebhookTrigger | "review" | "already_reviewed" | "resolve" | "resume" | "recheck"
 
 export type DecidedWait =
   | "workflow_unknown"
@@ -216,4 +216,33 @@ export function verdictAfterChecks(event: ReviewEvent, checks: ChecksState | und
 
 export function evaluatesAfterReview(event: ReviewEvent, accepted: readonly FindingInput[]): boolean {
   return event !== "APPROVE" && countBySeverity(accepted).blocking === 0
+}
+
+export const RecheckJob = Type.Object({
+  attempt: Type.Integer({ minimum: 1 }),
+  delivery: Type.String(),
+})
+
+export type RecheckJob = Static<typeof RecheckJob>
+
+export interface Recheck {
+  attempt: number
+  inMs: number
+}
+
+const RECHECK_DELAYS_MS = [20_000, 60_000, 300_000]
+
+const UNSETTLED_WAITS = new Set<WaitReason>([
+  "review_in_flight",
+  "checks_pending",
+  "checks_unknown",
+  "threads_unknown",
+  "workflow_unknown",
+])
+
+export function nextRecheck(trigger: ApprovalTrigger, outcome: ApprovalOutcome, attempt: number): Recheck | undefined {
+  if (trigger !== "checks_completed" && trigger !== "recheck") return undefined
+  if (outcome.kind === "approved" || (outcome.kind === "wait" && !UNSETTLED_WAITS.has(outcome.reason))) return undefined
+  const inMs = RECHECK_DELAYS_MS[attempt]
+  return inMs === undefined ? undefined : { attempt: attempt + 1, inMs }
 }
