@@ -125,6 +125,7 @@ import {
   submitStanding,
   type FlightDecision,
   type PendingReview,
+  type SubmitStanding,
 } from "./review/flight.ts"
 import {
   addressedThreads,
@@ -265,6 +266,7 @@ type Replacement = Extract<FlightDecision, { kind: "replace" }>
 type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
 type HeadSkip = "not_open" | "superseded" | "already_reviewed"
 type SettingsSkip = SkipReason | "path_filters"
+type SubmitRefusal = Exclude<SubmitStanding["kind"], "post"> | "head_moved" | "posted_already"
 
 interface CommandCall {
   github: GitHubClient
@@ -405,12 +407,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
+    const root = (await this.harness.conversation(ROOT_SESSION)).id
+    const pending = await this.readPending()
     const standing = submitStanding({
       caller: conversationId,
-      root: (await this.harness.conversation(ROOT_SESSION)).id,
-      pending: await this.readPending(),
+      root,
+      pending,
       running: await this.runningRootOperation(),
     })
+    if (standing.kind !== "post") await this.logRefusal(standing.kind, pending)
     if (standing.kind === "no_review") {
       return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
     }
@@ -418,17 +423,36 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.postReview(submission, standing.deliveryId)
   }
 
+  private async logRefusal(
+    reason: SubmitRefusal,
+    pending: PendingReview | undefined,
+    heads?: { was: string; now: string },
+  ): Promise<void> {
+    log("review.refused", {
+      number: (await this.key()).number,
+      reason,
+      head: pending === undefined ? undefined : shortSha(pending.headSha),
+      delivery: pending?.deliveryId,
+      ...heads,
+    })
+  }
+
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
     const pending = await this.pendingFor(deliveryId)
-    if (!pending) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    if (!pending) {
+      await this.logRefusal("not_in_flight", undefined)
+      return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    }
     const posted = await this.ctx.storage.get(`posted:${pending.headSha}`)
     if (Value.Check(PostedReview, posted)) {
+      await this.logRefusal("posted_already", pending)
       await this.completeAsPostedEarlier(deliveryId, posted)
       return { text: `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`, done: true }
     }
 
     const pr = await this.freshPullRequest()
     if (pr.head.sha !== pending.headSha) {
+      await this.logRefusal("head_moved", pending, { was: shortSha(pending.headSha), now: shortSha(pr.head.sha) })
       return {
         text: `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`,
         done: false,
