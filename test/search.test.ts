@@ -1,5 +1,6 @@
 import { RE2JS } from "re2js"
 import { describe, expect, it } from "vitest"
+import { engineFor, worstWork, type Engine } from "../src/repository/regex-work.ts"
 import {
   DEFAULT_TREE_DEPTH,
   grep,
@@ -34,10 +35,19 @@ const CAPPED =
 const TRUNCATED =
   "The snapshot is incomplete (GitHub truncated the tree listing); a missing match may be in a file it didn't load."
 
-const programSize = (pattern: string): number => RE2JS.compile(pattern).programSize()
+const LETTERS = "abcdefghijklmnopqrst"
 
-const fullLines = (count: number): string =>
-  Array.from({ length: count }, () => "x".repeat(MAX_SEARCHED_LINE_CHARS)).join("\n")
+const SPRAWLING = `${Array.from(LETTERS, (letter) => `.{0,999}${letter}`).join("")}zzz`
+
+const engineOf = (pattern: string): Engine => engineFor(RE2JS.compile(pattern))
+
+function fillerLines(units: number, length: number): string[] {
+  const lines: string[] = []
+  for (let left = units; left > 0; left -= Math.min(length + 1, left)) {
+    lines.push("x".repeat(Math.min(length + 1, left) - 1))
+  }
+  return lines
+}
 
 function numbered(count: number, text: string): Record<string, string> {
   return Object.fromEntries(
@@ -57,7 +67,7 @@ describe("limits", () => {
       MAX_SEARCH_CALLS,
       MAX_SEARCHED_LINE_CHARS,
       MAX_SEARCH_WORK,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500, 1_000_000_000])
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500, 750_000_000])
   })
 })
 
@@ -359,42 +369,54 @@ describe("grep", () => {
     )
   })
 
-  it("stops a pattern with a big program once its work passes the budget, and says how many files it searched", () => {
-    const pattern = ".{0,400}e.{0,400}t.{0,400}zzz"
-    const lineWork = (MAX_SEARCHED_LINE_CHARS + 1) * programSize(pattern)
-    const linesWithinBudget = Math.floor(MAX_SEARCH_WORK / lineWork)
-    const linesPerFile = Math.ceil((linesWithinBudget + 1) / 5)
-    const contents = { ...numbered(10, fullLines(linesPerFile)), "f009.ts": `${fullLines(linesPerFile)}\netzzz` }
-    expect(grep(snapshotOf(contents), { pattern })).toBe(
+  it("stops before a line whose worst case would pass the work budget, and says how many files it searched", () => {
+    expect(worstWork(engineOf(SPRAWLING), MAX_SEARCHED_LINE_CHARS)).toBeGreaterThan(MAX_SEARCH_WORK)
+    const contents = {
+      "a.ts": "short line\n",
+      "b.ts": `${"x".repeat(MAX_SEARCHED_LINE_CHARS)}\n`,
+      "c.ts": `${LETTERS}zzz\n`,
+    }
+    expect(grep(snapshotOf(contents), { pattern: SPRAWLING })).toBe(
       [
-        `No match for /${pattern}/ in ${Math.ceil(linesWithinBudget / linesPerFile)} files.`,
-        `Stopped early after ${Math.ceil(linesWithinBudget / linesPerFile)} files: this pattern costs too much to search everything. Narrow the path or glob, or use a simpler pattern (wide bounded repeats such as .{0,400} are the costly kind).`,
+        `No match for /${SPRAWLING}/ in 1 file.`,
+        "Stopped early after 1 file: this pattern costs too much to search everything. Narrow the path or glob, or use a simpler pattern (wide bounded repeats such as .{0,400} are the costly kind).",
       ].join("\n"),
     )
   })
 
-  it("leaves an ordinary pattern enough budget for every line of a react-size repository", () => {
-    const linesInReact = 36_000_000 / MAX_SEARCHED_LINE_CHARS
+  it("leaves an ordinary pattern the budget for a vscode-size repository, at seven times react's characters and lines", () => {
     const pattern = String.raw`\bcreateElement\(`
-    expect((MAX_SEARCHED_LINE_CHARS + 1) * programSize(pattern) * linesInReact).toBeLessThan(MAX_SEARCH_WORK)
+    const reactUnits = 36_092_141 + 1_179_032
+    expect(7 * reactUnits + 100 * engineOf(pattern).stateWork).toBeLessThan(MAX_SEARCH_WORK)
     const files = snapshotOf(numbered(10, `${"  const element = render(props) ;".repeat(15)}\n`.repeat(500)))
     expect(grep(files, { pattern })).toBe(`No match for /${pattern}/ in 10 files.`)
   })
 
-  it("searches a line whose work lands exactly on the budget and stops at one unit over", () => {
-    const pattern = ".{0,311}e.{0,311}zzz"
-    const units = MAX_SEARCH_WORK / programSize(pattern)
-    expect(Number.isInteger(units)).toBe(true)
-    const full = Math.ceil(units / (MAX_SEARCHED_LINE_CHARS + 1)) - 1
-    const lastLength = units - full * (MAX_SEARCHED_LINE_CHARS + 1) - 1
-    expect(lastLength).toBeGreaterThanOrEqual(4)
-    expect(lastLength).toBeLessThan(MAX_SEARCHED_LINE_CHARS)
-    const lastLine = (length: number): string => `${"x".repeat(length - 4)}ezzz`
-    const atBudget = snapshotOf({ "a.ts": `${fullLines(full)}\n${lastLine(lastLength)}` })
-    expect(grep(atBudget, { pattern })).toContain(`a.ts:${full + 1}: `)
-    const overBudget = snapshotOf({ "a.ts": `${fullLines(full)}\n${lastLine(lastLength + 1)}` })
-    expect(grep(overBudget, { pattern })).toContain("Stopped early after 1 file: this pattern costs too much")
+  it("searches a line whose worst case lands exactly on the budget and stops at one unit over", () => {
+    const engine = engineOf(SPRAWLING)
+    const length = Math.floor((MAX_SEARCH_WORK - 3 * engine.stateWork - 1) / (2 * engine.stateWork + 1))
+    expect(length).toBeLessThanOrEqual(MAX_SEARCHED_LINE_CHARS)
+    const filler = fillerLines(MAX_SEARCH_WORK - worstWork(engine, length), length)
+    const last = `${LETTERS}zzz`.padEnd(length, "x")
+    const atBudget = grep(snapshotOf({ "a.ts": [...filler, last].join("\n") }), { pattern: SPRAWLING })
+    expect(atBudget).toBe(`a.ts:${filler.length + 1}: ${last.slice(0, MAX_LINE_CHARS)}`)
+    const overBudget = grep(snapshotOf({ "a.ts": ["", ...filler, last].join("\n") }), { pattern: SPRAWLING })
+    expect(overBudget).toContain("Stopped early after 1 file: this pattern costs too much")
+    expect(overBudget).not.toContain("a.ts:")
   })
+
+  it.each([String.raw`(a)\1`, "(.{0,99}e){0,999}"])(
+    "searches %s, which re2js cannot compile, as literal text",
+    (pattern) => {
+      const files = snapshotOf({ "a.ts": `aa\nx ${pattern}\n` })
+      expect(grep(files, { pattern })).toBe(
+        [
+          `Searched for the literal text \`${pattern}\` (not a pattern this search supports).`,
+          `a.ts:2: x ${pattern}`,
+        ].join("\n"),
+      )
+    },
+  )
 
   it("reads JavaScript escapes such as \\u0041 the way a JavaScript regular expression does", () => {
     const files = snapshotOf({ "a.ts": "Apple\nbanana\n" })

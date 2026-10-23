@@ -1,5 +1,6 @@
 import { Minimatch } from "minimatch"
 import { RE2JS } from "re2js"
+import { engineFor, meteredTest, worstWork, type Engine } from "./regex-work.ts"
 import {
   LEFT_OUT_REASONS,
   type LeftOut,
@@ -24,7 +25,7 @@ export const MAX_SEARCH_CALLS = 40
 
 export const MAX_SEARCHED_LINE_CHARS = 500
 
-export const MAX_SEARCH_WORK = 1_000_000_000
+export const MAX_SEARCH_WORK = 750_000_000
 
 export interface GrepQuery {
   pattern: string
@@ -43,7 +44,6 @@ interface Found {
   overflowFiles: Set<string>
   searched: number
   longLines: number
-  program: number
   work: number
   stopped: boolean
 }
@@ -98,30 +98,24 @@ function compile(pattern: string): Compiled {
   }
 }
 
-function charged(found: Found, line: string): boolean {
-  const work = found.work + (Math.min(line.length, MAX_SEARCHED_LINE_CHARS) + 1) * found.program
-  if (work > MAX_SEARCH_WORK) {
-    found.stopped = true
-    return false
-  }
-  found.work = work
-  if (line.length > MAX_SEARCHED_LINE_CHARS) found.longLines++
-  return true
-}
-
-function* lineHits(file: SnapshotFile, regex: RE2JS, found: Found): Generator<Hit> {
+function* lineHits(file: SnapshotFile, engine: Engine, found: Found): Generator<Hit> {
   for (const [index, raw] of file.content.split("\n").entries()) {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw
-    if (!charged(found, line)) return
-    if (index === 0) found.searched++
-    if (regex.test(line.slice(0, MAX_SEARCHED_LINE_CHARS))) {
-      yield { path: file.path, text: `${file.path}:${index + 1}: ${line.slice(0, MAX_LINE_CHARS)}` }
+    const searched = line.slice(0, MAX_SEARCHED_LINE_CHARS)
+    if (found.work + worstWork(engine, searched.length) > MAX_SEARCH_WORK) {
+      found.stopped = true
+      return
     }
+    if (index === 0) found.searched++
+    if (line.length > MAX_SEARCHED_LINE_CHARS) found.longLines++
+    const { matched, work } = meteredTest(engine, searched)
+    found.work += work
+    if (matched) yield { path: file.path, text: `${file.path}:${index + 1}: ${line.slice(0, MAX_LINE_CHARS)}` }
   }
 }
 
-function record(found: Found, file: SnapshotFile, regex: RE2JS): void {
-  for (const hit of lineHits(file, regex, found)) {
+function record(found: Found, file: SnapshotFile, engine: Engine): void {
+  for (const hit of lineHits(file, engine, found)) {
     if (found.hits.length < MAX_MATCHES) {
       found.hits.push(hit)
     } else {
@@ -131,20 +125,19 @@ function record(found: Found, file: SnapshotFile, regex: RE2JS): void {
   }
 }
 
-function search(files: SnapshotFiles, selected: Selector, regex: RE2JS): Found {
+function search(files: SnapshotFiles, selected: Selector, engine: Engine): Found {
   const found: Found = {
     hits: [],
     overflowMatches: 0,
     overflowFiles: new Set(),
     searched: 0,
     longLines: 0,
-    program: regex.programSize(),
     work: 0,
     stopped: false,
   }
   for (const file of files.files()) {
     if (!selected(file.path)) continue
-    record(found, file, regex)
+    record(found, file, engine)
     if (found.stopped) break
   }
   return found
@@ -236,7 +229,7 @@ export function grep(files: SnapshotFiles, query: GrepQuery): string {
   const opening = compiled.literal ? literalNote(query.pattern) : ""
   const closing = joined([leftOutNote(files.leftOut(), selected), incompleteNote(files.record())])
   const room = MAX_GREP_CHARS - opening.length - closing.length - NOTE_RESERVE
-  const found = search(files, selected, compiled.regex)
+  const found = search(files, selected, engineFor(compiled.regex))
   const body = resultText(found, query.pattern, room)
   return joined([opening, body, stoppedNote(found), longLineNote(found.longLines), closing])
 }

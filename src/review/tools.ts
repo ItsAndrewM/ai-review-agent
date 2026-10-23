@@ -77,7 +77,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
     parameters: Type.Object({
       pattern: Type.String({
         description:
-          "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works; lookaround and backreferences aren't supported, and a pattern using them is searched as literal text.",
+          "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works, but \\s matches ASCII whitespace only, and lookaround and backreferences aren't supported: a pattern using them is searched as literal text.",
       }),
       glob: Type.Optional(
         Type.String({
