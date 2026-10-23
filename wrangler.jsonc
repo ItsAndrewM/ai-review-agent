@@ -8,9 +8,9 @@
   "upload_source_maps": true,
   "observability": { "enabled": true },
   // Repository search loads the head's files into the object: a vscode-size
-  // snapshot took 8.2 s of CPU to load, and grep's work budget stopped the
-  // costliest measured call after 5.6 s. 300 s is the maximum, so several calls
-  // in one event can't reset the object.
+  // snapshot took 8.2 s of CPU to load, and grep's work budget holds the
+  // costliest measured call to about 8.6 s. 300 s is the maximum, so several
+  // calls in one event can't reset the object.
   "limits": { "cpu_ms": 300000 },
   "ai": { "binding": "AI", "remote": true },
   // The running build's id and timestamp, so an object can tell it is older

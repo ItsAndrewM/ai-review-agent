@@ -1,6 +1,13 @@
 import { RE2JS } from "re2js"
 import { describe, expect, it } from "vitest"
-import { engineFor, LINE_UNITS, meteredTest } from "../src/repository/regex-work.ts"
+import { engineFor, LINE_UNITS, meteredTest, prefilterScans } from "../src/repository/regex-work.ts"
+
+const ALTERNATIONS = Array.from({ length: 32 }, (_, index) => `(?:P${index}a|Q${index}b)`).join("")
+
+function alternationLine(): string {
+  const words = Array.from({ length: 32 }, (_, index) => `P${index}a`).join(" ")
+  return words.padStart(500, "-")
+}
 
 function slowLines(count: number, alphabet: string): string[] {
   let seed = 7
@@ -54,5 +61,34 @@ describe("meteredTest", () => {
     const tested = meteredTest(engineFor(regex), "a".repeat(499))
     expect(tested.matched).toBe(true)
     expect(tested.work).toBeGreaterThanOrEqual(500 * regex.programSize())
+  })
+
+  it("charges a line under 32 all-exact alternation groups for each of the prefilter's automaton scans, even once the DFA is warm", () => {
+    const line = alternationLine()
+    const engine = engineFor(RE2JS.compile(ALTERNATIONS))
+    meteredTest(engine, line)
+    expect(meteredTest(engine, line).work).toBeGreaterThanOrEqual(LINE_UNITS + 32 * (line.length + 1))
+  })
+
+  it("charges 32 plain-substring prefilter scans two units per character more than one", () => {
+    const pattern = Array.from({ length: 32 }, (_, index) => `Z${index}a`).join(".*")
+    const line = Array.from({ length: 32 }, (_, index) => `Z${index}a`)
+      .join(" ")
+      .padStart(500, "x")
+    const engine = engineFor(RE2JS.compile(pattern))
+    meteredTest(engine, line)
+    expect(meteredTest(engine, line).work).toBeGreaterThanOrEqual(LINE_UNITS + 3 * (line.length + 1))
+  })
+})
+
+describe("prefilterScans", () => {
+  it.each([
+    [ALTERNATIONS, 32, 32],
+    ["foo.*bar", 2, 0],
+    ["TODO", 1, 0],
+    ["use(State|Effect|Memo)", 2, 1],
+    [".*", 0, 0],
+  ])("reads re2js's prefilter for %s as %i scans, %i of them automata", (pattern, cost, automata) => {
+    expect(prefilterScans(RE2JS.compile(pattern))).toEqual({ cost, automata })
   })
 })

@@ -35,7 +35,7 @@ const CAPPED =
 const TRUNCATED =
   "The snapshot is incomplete (GitHub truncated the tree listing); a missing match may be in a file it didn't load."
 
-const LETTERS = "abcdefghijklmnopqrst"
+const LETTERS = "acegikmoqsuwyA"
 
 const SPRAWLING = `${Array.from(LETTERS, (letter) => `.{0,999}${letter}`).join("")}zzz`
 
