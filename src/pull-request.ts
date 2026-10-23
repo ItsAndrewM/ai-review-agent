@@ -8,7 +8,7 @@ import {
   type PiPromptResponse,
   type PiSession,
 } from "agents/harness/pi"
-import { Lifecycle } from "agents/lifecycle"
+import { Lifecycle, type LifecycleJobContext } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
@@ -79,7 +79,10 @@ import {
   evaluationWorkflow,
   LastReview,
   lastReviewOf,
+  nextRecheck,
   openBlockingIn,
+  ownsRecheck,
+  RecheckJob,
   verdictAfterChecks,
   type ApprovalOutcome,
   type ApprovalState,
@@ -359,6 +362,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ),
     )
     return "accepted"
+  }
+
+  async onJob({ job }: LifecycleJobContext): Promise<void> {
+    if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
+      logError("job.unreadable", { id: job.id, fn: job.fn })
+      return
+    }
+    await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
   }
 
   botLogin(): string {
@@ -671,7 +682,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "reaction":
         return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
       case "approval":
-        await this.evaluateApproval(incoming.trigger, incoming.deliveryId)
+        await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
         return
     }
   }
@@ -1683,6 +1694,33 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return Value.Check(Summarizing, stored) ? stored : undefined
   }
 
+  private async evaluateWithRecheck(trigger: ApprovalTrigger, deliveryId: string, attempt: number): Promise<void> {
+    const recheck = nextRecheck(trigger, await this.evaluateApproval(trigger, deliveryId), attempt)
+    if (recheck === undefined) return
+    const scheduled = this.scheduledRecheck()
+    if (!ownsRecheck(trigger, deliveryId, scheduled)) {
+      log("approval.recheck_yielded", { delivery: deliveryId, to: scheduled?.delivery })
+      return
+    }
+    await this.lifecycle.jobs.push({
+      id: RECHECK_JOB,
+      fn: RECHECK_JOB,
+      time: Date.now() + recheck.inMs,
+      payload: { attempt: recheck.attempt, delivery: deliveryId } satisfies RecheckJob,
+    })
+    log("approval.recheck_scheduled", {
+      number: (await this.key()).number,
+      delivery: deliveryId,
+      attempt: recheck.attempt,
+      inMs: recheck.inMs,
+    })
+  }
+
+  private scheduledRecheck(): RecheckJob | undefined {
+    const payload = this.lifecycle.jobs.get(RECHECK_JOB)?.payload
+    return Value.Check(RecheckJob, payload) ? payload : undefined
+  }
+
   private async evaluateApproval(
     trigger: ApprovalTrigger,
     deliveryId: string | undefined,
@@ -2018,6 +2056,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 }
+
+const RECHECK_JOB = "approval.recheck"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128

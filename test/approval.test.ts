@@ -13,7 +13,10 @@ import {
   evaluationWorkflow,
   lastReviewOf,
   LastReview,
+  nextRecheck,
   openBlockingIn,
+  ownsRecheck,
+  RecheckJob,
   verdictAfterChecks,
   type ApprovalState,
 } from "../src/review/approval.ts"
@@ -438,5 +441,80 @@ describe("evaluatesAfterReview", () => {
     expect(evaluatesAfterReview("REQUEST_CHANGES", [finding("blocking")])).toBe(false)
     expect(evaluatesAfterReview("REQUEST_CHANGES", [finding("suggestion")])).toBe(true)
     expect(evaluatesAfterReview("COMMENT", [])).toBe(true)
+  })
+})
+
+describe("nextRecheck", () => {
+  const pending = { kind: "wait", reason: "checks_pending" } as const
+
+  it("re-checks a CI-completed evaluation that still reads the checks as pending 20 seconds, 1 minute and 5 minutes later, then stops", () => {
+    expect(nextRecheck("checks_completed", pending, 0)).toEqual({ attempt: 1, inMs: 20_000 })
+    expect(nextRecheck("recheck", pending, 1)).toEqual({ attempt: 2, inMs: 60_000 })
+    expect(nextRecheck("recheck", pending, 2)).toEqual({ attempt: 3, inMs: 300_000 })
+    expect(nextRecheck("recheck", pending, 3)).toBeUndefined()
+  })
+
+  it("re-checks while the review is in flight, when a read fails and when the evaluation throws", () => {
+    for (const reason of ["review_in_flight", "checks_unknown", "threads_unknown", "workflow_unknown"] as const) {
+      expect(nextRecheck("checks_completed", { kind: "wait", reason }, 0)).toEqual({ attempt: 1, inMs: 20_000 })
+    }
+    expect(nextRecheck("recheck", { kind: "failed" }, 1)).toEqual({ attempt: 2, inMs: 60_000 })
+  })
+
+  it("stops once the answer is final", () => {
+    expect(nextRecheck("recheck", { kind: "approved", head: "bbb" }, 1)).toBeUndefined()
+    const final = [
+      "approved",
+      "approving",
+      "head_moved",
+      "checks_failing",
+      "blocking_threads",
+      "review_stands",
+      "not_reviewed",
+      "no_record",
+      "paused",
+      "not_open",
+      "workflow_off",
+    ] as const
+    for (const reason of final) {
+      expect(nextRecheck("checks_completed", { kind: "wait", reason }, 0)).toBeUndefined()
+    }
+  })
+
+  it("leaves an evaluation no CI-completed event started to the events still to come", () => {
+    for (const trigger of [
+      "review",
+      "thread_resolved",
+      "thread_unresolved",
+      "already_reviewed",
+      "resolve",
+      "resume",
+    ] as const) {
+      expect(nextRecheck(trigger, pending, 0)).toBeUndefined()
+    }
+  })
+})
+
+describe("RecheckJob", () => {
+  it("reads a stored re-check, and refuses one without a positive whole attempt or a delivery", () => {
+    expect(Value.Check(RecheckJob, { attempt: 2, delivery: "d" })).toBe(true)
+    expect(Value.Check(RecheckJob, { attempt: 0, delivery: "d" })).toBe(false)
+    expect(Value.Check(RecheckJob, { attempt: 1.5, delivery: "d" })).toBe(false)
+    expect(Value.Check(RecheckJob, { attempt: 2 })).toBe(false)
+  })
+})
+
+describe("ownsRecheck", () => {
+  it("lets a CI-completed event restart the chain over whatever is scheduled", () => {
+    expect(ownsRecheck("checks_completed", "new", { attempt: 2, delivery: "old" })).toBe(true)
+  })
+
+  it("lets a re-check continue its own chain, or one whose job is gone", () => {
+    expect(ownsRecheck("recheck", "d1", { attempt: 1, delivery: "d1" })).toBe(true)
+    expect(ownsRecheck("recheck", "d1", undefined)).toBe(true)
+  })
+
+  it("stops a re-check whose job a later completion's chain replaced while it read GitHub", () => {
+    expect(ownsRecheck("recheck", "old", { attempt: 1, delivery: "new" })).toBe(false)
   })
 })
