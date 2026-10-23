@@ -4,7 +4,6 @@ import {
   grep,
   MAX_GREP_CHARS,
   MAX_LINE_CHARS,
-  MAX_LONG_LINES_TESTED,
   MAX_MATCHES,
   MAX_PATTERN_CHARS,
   MAX_SEARCH_CALLS,
@@ -50,8 +49,7 @@ describe("limits", () => {
       DEFAULT_TREE_DEPTH,
       MAX_SEARCH_CALLS,
       MAX_SEARCHED_LINE_CHARS,
-      MAX_LONG_LINES_TESTED,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500, 500])
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500])
   })
 })
 
@@ -158,7 +156,7 @@ describe("grep", () => {
     const files = snapshotOf({ "a.ts": "answerPrompt(x)\nanswerPrompt\n" })
     expect(grep(files, { pattern: "answerPrompt(" })).toBe(
       [
-        "Searched for the literal text `answerPrompt(` (not a valid regular expression).",
+        "Searched for the literal text `answerPrompt(` (not a pattern this search supports).",
         "a.ts:1: answerPrompt(x)",
       ].join("\n"),
     )
@@ -286,41 +284,12 @@ describe("grep", () => {
     expect(grep(files, { pattern: "x{500}" })).not.toContain("long line")
   })
 
-  it("stops a quantified pattern after 500 long lines and says how many files it searched", () => {
+  it("searches every file however many long lines a quantified pattern tests", () => {
     const longLine = `${"x".repeat(399)}\n`
-    const contents = { ...numbered(600, longLine), "f599.ts": `needle${"x".repeat(394)}\n` }
+    const contents = { ...numbered(600, longLine.repeat(2)), "f599.ts": `needle${"x".repeat(394)}\n` }
     expect(grep(snapshotOf(contents), { pattern: "needle+" })).toBe(
-      [
-        "No match for /needle+/ in 500 files.",
-        "Stopped early after 500 files: too many long lines. Narrow the path or glob.",
-      ].join("\n"),
+      `f599.ts:1: needle${"x".repeat(MAX_LINE_CHARS - 6)}`,
     )
-  })
-
-  it("never stops a literal pattern early, since a literal search cannot backtrack", () => {
-    const longLine = `${"x".repeat(399)}\n`
-    const contents = { ...numbered(600, longLine), "f599.ts": `needle${"x".repeat(394)}\n` }
-    const answer = grep(snapshotOf(contents), { pattern: "needle" })
-    expect(answer).toBe(`f599.ts:1: needle${"x".repeat(MAX_LINE_CHARS - 6)}`)
-    expect(answer).not.toContain("Stopped early")
-  })
-
-  it("never stops a pattern searched as literal text early", () => {
-    const longLine = `${"x".repeat(399)}\n`
-    const contents = { ...numbered(600, longLine), "f599.ts": `needle(${"x".repeat(393)}\n` }
-    const answer = grep(snapshotOf(contents), { pattern: "needle(" })
-    expect(answer).toContain("f599.ts:1: needle(")
-    expect(answer).not.toContain("Stopped early")
-  })
-
-  it("stops in the middle of a file once 500 long lines have been tested", () => {
-    const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(600) })
-    expect(grep(files, { pattern: "needle?" })).toContain("Stopped early after 1 file: too many long lines.")
-  })
-
-  it("does not say it stopped early when the long lines ran out at the limit", () => {
-    const files = snapshotOf({ "a.ts": `${"x".repeat(399)}\n`.repeat(500) })
-    expect(grep(files, { pattern: "needle*" })).toBe("No match for /needle*/ in 1 file.")
   })
 
   it("keeps the long-line note inside the 12,000-character budget", () => {
@@ -335,10 +304,6 @@ describe("grep", () => {
     const started = performance.now()
     grep(files, { pattern: String.raw`[\s\S]*foo` })
     expect(performance.now() - started).toBeLessThan(1_000)
-  })
-
-  it("refuses a pattern with two open-ended braced wildcards without searching", () => {
-    expect(grep(snapshotOf({ "a.ts": "eee\n" }), { pattern: ".{1,}e.{1,}zzz" })).toBe(patternProblem(".{1,}e.{1,}zzz"))
   })
 
   it("answers an accepted alternation over 300 lines of 400 characters in under a second", () => {
@@ -358,10 +323,37 @@ describe("grep", () => {
     expect(answer).toBe("No match for /[\\s\\S]*bar/ in 1 file.")
   })
 
-  it("refuses a pattern with a nested quantifier without searching", () => {
-    const answer = grep(snapshotOf({ "a.ts": "aaaa\n" }), { pattern: "(a+)+" })
-    expect(answer).toBe(patternProblem("(a+)+"))
-    expect(answer).toContain("nested quantifier")
+  it.each([
+    "zzzz_no_match",
+    "foo.*bar",
+    String.raw`\bcreateElement\(`,
+    String.raw`[\s\S]*zzz`,
+    String.raw`(.\w?)*zzz`,
+    String.raw`(.|\s)*zzz`,
+    String.raw`[\w ,.]*[\w ,.]*[\w ,.]*;;`,
+    ".{0,400}e.{0,400}t.{0,400}zzz",
+    "(a+)+zzz",
+    ".*a.*b.*zzz",
+    ".{1,}e.{1,}zzz",
+  ])("searches %s over 300 lines of 400 characters in well under a second", (pattern) => {
+    const line = "  .set(getValue(key), setValue(value)) ; ".repeat(10).slice(0, 400)
+    const files = snapshotOf({ "a.ts": `${line}\n`.repeat(300) })
+    const started = performance.now()
+    const answer = grep(files, { pattern })
+    expect(performance.now() - started).toBeLessThan(1_000)
+    expect(answer).toBe(`No match for /${pattern}/ in 1 file.`)
+  })
+
+  it("searches a lookbehind, which the engine does not support, as literal text", () => {
+    const files = snapshotOf({ "a.ts": "ab\nx (?<=a)b\n" })
+    expect(grep(files, { pattern: "(?<=a)b" })).toBe(
+      ["Searched for the literal text `(?<=a)b` (not a pattern this search supports).", "a.ts:2: x (?<=a)b"].join("\n"),
+    )
+  })
+
+  it("reads JavaScript escapes such as \\u0041 the way a JavaScript regular expression does", () => {
+    const files = snapshotOf({ "a.ts": "Apple\nbanana\n" })
+    expect(grep(files, { pattern: String.raw`^A` })).toBe("a.ts:1: Apple")
   })
 })
 
@@ -369,98 +361,6 @@ describe("patternProblem", () => {
   it("refuses a pattern over 500 characters", () => {
     expect(patternProblem("a".repeat(501))).toContain("500")
     expect(patternProblem("a".repeat(500))).toBeUndefined()
-  })
-
-  it.each([
-    "(a+)+",
-    "(a*)*",
-    String.raw`(\w+\s?)+`,
-    "((a+)b)+",
-    "(a+){2,}",
-    "(?:a+)*",
-    "(a{2,})+",
-    String.raw`(\d{1,3}\.?)+`,
-  ])("refuses the nested quantifier in %s", (pattern) => {
-    expect(patternProblem(pattern)).toContain("nested quantifier")
-  })
-
-  it.each(["foo(bar)+", "a+b+", String.raw`(\++)`, String.raw`(a\+)+`, "([+*])+", "(a)(b+)", String.raw`\(a+\)+`])(
-    "accepts %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toBeUndefined()
-    },
-  )
-
-  it.each(
-    [".*foo.*bar", "foo.+bar.*baz", '[^"]*x[^"]*', String.raw`\S+\s\S+`, String.raw`\W*a\D+`, "(.*)x(.*)"].concat([
-      String.raw`[\s\S]*foo[\s\S]*bar`,
-      String.raw`[\w\W]+x[\w\W]+`,
-      String.raw`[\S\s]*a[\d\D]*`,
-      String.raw`[a\s\-\S]*x[^]*`,
-    ]),
-  )("refuses the two unbounded wildcards in %s", (pattern) => {
-    expect(patternProblem(pattern)).toContain("more than one unbounded wildcard (such as .* twice)")
-  })
-
-  it.each([
-    "foo.*bar",
-    "a.?b.?c",
-    String.raw`\w+\(`,
-    '"[^"]*"',
-    String.raw`\d+\.\d+`,
-    String.raw`\.*x\.*`,
-    "[a-z]*x[a-z]*",
-    String.raw`[\s\S]*foo`,
-    String.raw`[\s\w]*x[\S\W]*`,
-    String.raw`[\\s\\S]*x[\\s\\S]*`,
-  ])("accepts the single wildcard in %s", (pattern) => {
-    expect(patternProblem(pattern)).toBeUndefined()
-  })
-
-  it.each([".{1,}e.{1,}zzz", ".{2,}a.*b", String.raw`\S{3,}x.+`])(
-    "counts an open-ended brace as unbounded and refuses the two wildcards in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toContain("more than one unbounded wildcard")
-    },
-  )
-
-  it.each([".{1,5}a.{0,3}b", String.raw`\d{2,}`, ".{2,}x", ".{3}a.*b"])(
-    "accepts the bounded or single wildcard in %s",
-    (pattern) => {
-      expect(patternProblem(pattern)).toBeUndefined()
-    },
-  )
-
-  it.each([
-    String.raw`(.|\s)*`,
-    String.raw`foo(.|\s)*bar`,
-    String.raw`(\w|\d)+`,
-    "(a|b){2,}",
-    "(?:x|y)*",
-    "(a|b)+",
-    String.raw`((.|\s)c)*x`,
-    "(a(b|c))+",
-  ])("refuses the repeated alternation in %s", (pattern) => {
-    expect(patternProblem(pattern)).toBe(
-      String.raw`it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
-    )
-  })
-
-  it.each([
-    "(foo|bar)",
-    "(get|set)Value",
-    "x(a|b)?y",
-    String.raw`[\s\S]*`,
-    "a|b*",
-    String.raw`\(a|b\)*`,
-    "[(|)]*",
-    "((a|b)c)?",
-  ])("accepts the unrepeated alternation or class in %s", (pattern) => {
-    expect(patternProblem(pattern)).toBeUndefined()
-  })
-
-  it("states every refusal as a bare reason that reads after the words Pattern refused", () => {
-    expect(patternProblem(".*a.*b")).toMatch(/^it has more than one unbounded wildcard/)
   })
 
   it("refuses an empty pattern", () => {

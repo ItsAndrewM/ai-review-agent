@@ -76,7 +76,8 @@ export function createReviewExtension(host: ReviewHost): Extension {
       "Search the files at the pull request's head by regular expression, line by line. Use it to find the callers of a changed function, an export's users, or where a name is defined.",
     parameters: Type.Object({
       pattern: Type.String({
-        description: "Regular expression, matched against the first 500 characters of each line.",
+        description:
+          "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works; lookaround and backreferences aren't supported, and a pattern using them is searched as literal text.",
       }),
       glob: Type.Optional(
         Type.String({

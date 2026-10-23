@@ -198,19 +198,10 @@ describe("grepText", () => {
     expect(searched).toEqual([])
   })
 
-  it("refuses two wildcards with the prefix said once", async () => {
+  it("searches a pattern with two wildcards and a repeated alternation instead of refusing it", async () => {
     const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
-    expect(await grepText(wired, { pattern: ".*a.*b" })).toMatch(
-      /^Pattern refused: it has more than one unbounded wildcard \(such as \.\* twice\)/,
-    )
-    expect(searched).toEqual([])
-  })
-
-  it("refuses a repeated alternation", async () => {
-    const { host: wired } = hostWith({ search: { kind: "ready", files: snapshot } })
-    expect(await grepText(wired, { pattern: String.raw`foo(.|\s)*bar` })).toBe(
-      String.raw`Pattern refused: it repeats an alternation such as (.|\s)*, which can run for minutes; use a character class such as [\s\S]* instead`,
-    )
+    expect(await grepText(wired, { pattern: String.raw`.*a.*b(.|\s)*zzz` })).toMatch(/^No match for /)
+    expect(searched).toEqual(["grep"])
   })
 })
 
