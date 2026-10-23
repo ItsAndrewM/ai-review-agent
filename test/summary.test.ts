@@ -270,6 +270,12 @@ describe("renderSummaryRun", () => {
     expect(text).not.toContain("dropped")
   })
 
+  it("ends with the config note when .andabot.yaml was ignored, so a summary says what the review would", () => {
+    const text = renderSummaryRun({ ...run, configError: "invalid YAML: bad indent" })
+    expect(text.endsWith("_.andabot.yaml was ignored: `invalid YAML: bad indent`; the defaults applied._")).toBe(true)
+    expect(renderSummaryRun(run)).not.toContain("was ignored")
+  })
+
   it("says none when no issue is linked, and names the bot by its login", () => {
     const text = renderSummaryRun({ ...run, botLogin: "reviewer-bot", linkedIssues: [] })
     expect(text).toContain("## reviewer-bot review\n")
@@ -359,6 +365,12 @@ describe("summaryReply", () => {
   it("says a closed pull request has nothing to summarize", () => {
     expect(summaryReply({ kind: "closed" }, "andabot")).toBe(
       "The pull request is closed, so there's nothing to summarize.",
+    )
+  })
+
+  it("says the filters leave nothing to summarize", () => {
+    expect(summaryReply({ kind: "filtered" }, "andabot")).toBe(
+      "`path_filters` in `.andabot.yaml` leave out every changed file, so there's nothing to summarize.",
     )
   })
 })

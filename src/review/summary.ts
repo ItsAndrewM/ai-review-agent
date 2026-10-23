@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import type { ChangedFile } from "../github/diff.ts"
+import { CONFIG_FILE } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
 import type { LastReview } from "./approval.ts"
 import {
@@ -33,6 +34,7 @@ export type SummaryOutcome =
   | { kind: "unusable"; reason: string }
   | { kind: "busy" }
   | { kind: "closed" }
+  | { kind: "filtered" }
 
 export function parseWrittenSummary(text: string): WrittenSummary {
   const json = jsonIn(text)
@@ -123,6 +125,8 @@ export function summaryReply(outcome: SummaryOutcome, botLogin: string): string 
       return "A summary is already being written; it will update the comment when it's done."
     case "closed":
       return "The pull request is closed, so there's nothing to summarize."
+    case "filtered":
+      return `\`path_filters\` in \`${CONFIG_FILE}\` leave out every changed file, so there's nothing to summarize.`
   }
 }
 

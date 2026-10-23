@@ -25,7 +25,13 @@ import {
   type ReviewThread,
   type UpdateCheckRun,
 } from "./github/client.ts"
-import { indexCommentableLines, reviewableFiles, type ChangedFile, type MarkedLines } from "./github/diff.ts"
+import {
+  everyFileFiltered,
+  indexCommentableLines,
+  reviewableFiles,
+  type ChangedFile,
+  type MarkedLines,
+} from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -287,6 +293,12 @@ interface ReviewRun {
   skillsFingerprint: string
   config: AndabotConfig
   configStatus: ConfigStatus
+}
+
+interface SummaryFiles {
+  read: ConfigRead
+  changed: readonly ChangedFile[]
+  reviewable: readonly ChangedFile[]
 }
 
 type ReviewSource = "tool" | "text" | "retry" | "retry_text"
@@ -1542,10 +1554,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async runSummary(pr: PullRequestInfo, run: Summarizing): Promise<SummaryOutcome> {
-    const key = await this.key()
-    const files = await (await this.github()).listPullRequestFiles(key, key.number)
+    const selection = await this.summaryFiles(pr)
+    const { read, changed, reviewable } = selection
+    if (everyFileFiltered(changed, read.config.reviews.path_filters)) {
+      log("summary.skip", {
+        reason: "path_filters",
+        head: shortSha(pr.head.sha),
+        number: pr.number,
+        config: configStatus(read),
+      })
+      return { kind: "filtered" }
+    }
     const issues = await this.linkedIssues(pr)
-    const written = await this.askForSummary(pr, files, issues, run.operationId)
+    const written = await this.askForSummary(pr, reviewable, issues, run.operationId)
     await this.restartSummaryGrace(run.deliveryId)
     if (written.kind === "unusable") {
       logError("summary.failed", { number: pr.number, head: shortSha(pr.head.sha), reason: written.reason })
@@ -1556,7 +1577,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("summary.superseded", { number: pr.number, was: shortSha(pr.head.sha), now: shortSha(now.head.sha) })
       return { kind: "moved", from: pr.head.sha, to: now.head.sha }
     }
-    return this.postSummary(pr, files, issues, written.summary, run.started)
+    return this.postSummary(pr, selection, issues, written.summary, run.started)
+  }
+
+  private async summaryFiles(pr: PullRequestInfo): Promise<SummaryFiles> {
+    const read = await this.repositoryConfig(pr)
+    const key = await this.key()
+    const changed = await (await this.github()).listPullRequestFiles(key, key.number)
+    return { read, changed, reviewable: reviewableFiles(changed, read.config.reviews.path_filters) }
   }
 
   private async askForSummary(
@@ -1605,13 +1633,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async postSummary(
     pr: PullRequestInfo,
-    files: readonly ChangedFile[],
+    { read, changed, reviewable }: SummaryFiles,
     issues: readonly LinkedIssue[],
     answer: SummarySubmissionInput,
     started: number,
   ): Promise<SummaryOutcome> {
     const reviewed = await this.readReviewed()
-    const summary = await this.storeSummary(reviewed, answer, files)
+    const summary = await this.storeSummary(reviewed, answer, reviewable)
     await this.upsertSummary(
       renderSummaryRun({
         botLogin: this.botLogin(),
@@ -1621,11 +1649,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         model: this.env.REVIEW_MODEL,
         skillsFingerprint: (await bundledSkills()).fingerprint,
         linkedIssues: issues.map(({ number }) => number),
+        configError: read.error,
       }),
     )
     log("summary.posted", {
       number: pr.number,
       head: shortSha(pr.head.sha),
+      files: changed.length,
+      filesFiltered: changed.length - reviewable.length,
+      config: configStatus(read),
       model: this.env.REVIEW_MODEL,
       ms: Date.now() - started,
     })
