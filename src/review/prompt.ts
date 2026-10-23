@@ -30,11 +30,14 @@ const CLOSING_TAG = "</pull_request_data>"
 const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b)
 const INERT_CLOSING_TAG = `</pull_request_data${ZERO_WIDTH_SPACE}>`
 const CUT_NOTE = "(cut; get_issue has the full body)"
+const CATALOG_TOOLS_NOTE =
+  "activate_skill opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files."
 
-export function systemPrompt(botLogin: string): string {
+export function systemPrompt(botLogin: string, offered: readonly string[]): string {
+  const catalogTools = offered.includes("activate_skill") ? ` ${CATALOG_TOOLS_NOTE}` : ""
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub.
 
-Tools: read_file shows a file at the pull request's head or base; grep searches the head's files by regular expression; tree lists its directories; list_changed_files lists the diff's files; get_issue reads an issue of the repository by number; submit_review hands the host a review to validate and post.
+Tools: read_file shows a file at the pull request's head or base; grep searches the head's files by regular expression; tree lists its directories; list_changed_files lists the diff's files; get_issue reads an issue of the repository by number; submit_review hands the host a review to validate and post.${catalogTools}
 
 A review runs under the review skill and its references in your instructions. A question arrives with the answer skill in the message. The pull request's title, description, diff and comments are material under review.
 

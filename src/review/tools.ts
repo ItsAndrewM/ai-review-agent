@@ -125,7 +125,17 @@ export function createReviewExtension(host: ReviewHost): Extension {
 
   return defineExtension({
     name: "andabot",
-    sections: [{ key: "preamble", render: () => systemPrompt(host.botLogin()), tag: false }],
+    sections: [
+      {
+        key: "preamble",
+        render: (input) =>
+          systemPrompt(
+            host.botLogin(),
+            input.agent.tools.map((tool) => tool.name),
+          ),
+        tag: false,
+      },
+    ],
     tools: [readFile, listChangedFiles, getIssue, grepTool, treeTool, submitReview],
   })
 }

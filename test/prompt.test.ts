@@ -228,8 +228,12 @@ describe("fullPrompt", () => {
 })
 
 describe("systemPrompt", () => {
+  const SIX = ["read_file", "grep", "tree", "list_changed_files", "get_issue", "submit_review"]
+  const CATALOG_SENTENCE =
+    "activate_skill opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files."
+
   it("names the bot and only the six tools the model is given, and leaves the procedure to the skills", () => {
-    const text = systemPrompt("andabot")
+    const text = systemPrompt("andabot", SIX)
     expect(text.startsWith("You are andabot")).toBe(true)
     expect(text).toContain("read_file")
     expect(text).toContain("grep searches the head's files by regular expression; tree lists its directories")
@@ -244,7 +248,19 @@ describe("systemPrompt", () => {
   })
 
   it("says only a submit_review call posts the review, so the closing sentence can't stand in for the call", () => {
-    expect(systemPrompt("andabot")).toContain("Only a submit_review call posts the review;")
+    expect(systemPrompt("andabot", SIX)).toContain("Only a submit_review call posts the review;")
+  })
+
+  it("names activate_skill and read_skill_resource only when the request offers them, pointing at the Available skills list", () => {
+    const withCatalog = systemPrompt("andabot", [...SIX, "activate_skill", "read_skill_resource"])
+    expect(withCatalog).toContain(CATALOG_SENTENCE)
+    expect(systemPrompt("andabot", SIX)).not.toContain("activate_skill")
+  })
+
+  it("ends the Tools paragraph with the catalog sentence and leaves the rest of the preamble as it is without the catalog", () => {
+    const without = systemPrompt("andabot", SIX)
+    const withCatalog = systemPrompt("andabot", [...SIX, "activate_skill", "read_skill_resource"])
+    expect(withCatalog).toBe(without.replace("to validate and post.", `to validate and post. ${CATALOG_SENTENCE}`))
   })
 })
 
