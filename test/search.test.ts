@@ -1,6 +1,6 @@
 import { RE2JS } from "re2js"
 import { describe, expect, it } from "vitest"
-import { engineFor, worstWork, type Engine } from "../src/repository/regex-work.ts"
+import { engineFor, LINE_UNITS, worstWork, type Engine } from "../src/repository/regex-work.ts"
 import {
   DEFAULT_TREE_DEPTH,
   grep,
@@ -42,9 +42,12 @@ const SPRAWLING = `${Array.from(LETTERS, (letter) => `.{0,999}${letter}`).join("
 const engineOf = (pattern: string): Engine => engineFor(RE2JS.compile(pattern))
 
 function fillerLines(units: number, length: number): string[] {
+  const widest = length + 1 + LINE_UNITS
   const lines: string[] = []
-  for (let left = units; left > 0; left -= Math.min(length + 1, left)) {
-    lines.push("x".repeat(Math.min(length + 1, left) - 1))
+  for (let left = units; left > 0;) {
+    const size = left <= widest ? left : Math.min(widest, left - 1 - LINE_UNITS)
+    lines.push("x".repeat(size - 1 - LINE_UNITS))
+    left -= size
   }
   return lines
 }
@@ -386,7 +389,7 @@ describe("grep", () => {
 
   it("leaves an ordinary pattern the budget for a vscode-size repository, at seven times react's characters and lines", () => {
     const pattern = String.raw`\bcreateElement\(`
-    const reactUnits = 36_092_141 + 1_179_032
+    const reactUnits = 36_092_141 + (1 + LINE_UNITS) * 1_179_032
     expect(7 * reactUnits + 100 * engineOf(pattern).stateWork).toBeLessThan(MAX_SEARCH_WORK)
     const files = snapshotOf(numbered(10, `${"  const element = render(props) ;".repeat(15)}\n`.repeat(500)))
     expect(grep(files, { pattern })).toBe(`No match for /${pattern}/ in 10 files.`)
@@ -394,15 +397,32 @@ describe("grep", () => {
 
   it("searches a line whose worst case lands exactly on the budget and stops at one unit over", () => {
     const engine = engineOf(SPRAWLING)
-    const length = Math.floor((MAX_SEARCH_WORK - 3 * engine.stateWork - 1) / (2 * engine.stateWork + 1))
-    expect(length).toBeLessThanOrEqual(MAX_SEARCHED_LINE_CHARS)
-    const filler = fillerLines(MAX_SEARCH_WORK - worstWork(engine, length), length)
+    let length = MAX_SEARCHED_LINE_CHARS
+    while (worstWork(engine, length) > MAX_SEARCH_WORK) length--
+    expect(length).toBeGreaterThan(LETTERS.length + 3)
+    const filler = fillerLines(MAX_SEARCH_WORK - worstWork(engine, length) - 1 - LINE_UNITS, length)
     const last = `${LETTERS}zzz`.padEnd(length, "x")
-    const atBudget = grep(snapshotOf({ "a.ts": [...filler, last].join("\n") }), { pattern: SPRAWLING })
-    expect(atBudget).toBe(`a.ts:${filler.length + 1}: ${last.slice(0, MAX_LINE_CHARS)}`)
-    const overBudget = grep(snapshotOf({ "a.ts": ["", ...filler, last].join("\n") }), { pattern: SPRAWLING })
+    const atBudget = grep(snapshotOf({ "a.ts": ["", ...filler, last].join("\n") }), { pattern: SPRAWLING })
+    expect(atBudget).toBe(`a.ts:${filler.length + 2}: ${last.slice(0, MAX_LINE_CHARS)}`)
+    const overBudget = grep(snapshotOf({ "a.ts": ["x", ...filler, last].join("\n") }), { pattern: SPRAWLING })
     expect(overBudget).toContain("Stopped early after 1 file: this pattern costs too much")
     expect(overBudget).not.toContain("a.ts:")
+  })
+
+  it("stops a one-pass pattern, which re2js runs without its DFA, once its work passes the budget", () => {
+    const pattern = `^(?:${"()".repeat(240)}a)*$`
+    const line = "  const element = render(props.item, index) + offset; return element;"
+    const linesWithinBudget = Math.floor(MAX_SEARCH_WORK / worstWork(engineOf(pattern), line.length))
+    const linesPerFile = Math.ceil((linesWithinBudget + 1) / 5)
+    const lines = Array.from({ length: linesPerFile }, () => line).join("\n")
+    const contents = { ...numbered(10, lines), "f009.ts": `${lines}\naaa` }
+    const charged = Math.ceil(linesWithinBudget / linesPerFile)
+    expect(grep(snapshotOf(contents), { pattern })).toBe(
+      [
+        `No match for /${pattern}/ in ${charged} files.`,
+        `Stopped early after ${charged} files: this pattern costs too much to search everything. Narrow the path or glob, or use a simpler pattern (wide bounded repeats such as .{0,400} are the costly kind).`,
+      ].join("\n"),
+    )
   })
 
   it.each([String.raw`(a)\1`, "(.{0,99}e){0,999}"])(
