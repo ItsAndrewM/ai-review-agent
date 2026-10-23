@@ -60,6 +60,7 @@ import {
   CONTEXT_PREFIX,
   contextInputs,
   contextKey,
+  donorKey,
   loadRepositoryContext,
   readRepositoryContext,
   repositoryRecord,
@@ -957,10 +958,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async donorContext(baseSha: string): Promise<RepositoryContext | undefined> {
     const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
-    const donors = [...listed].flatMap(([key, stored]) =>
-      key !== contextKey(baseSha) && Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
-    )
-    return donors.length === 1 ? donors[0] : undefined
+    const key = donorKey([...listed.keys()], baseSha)
+    const stored = key === undefined ? undefined : listed.get(key)
+    return Value.Check(StoredRepositoryContext, stored) ? stored : undefined
   }
 
   private async cacheContext(context: RepositoryContext): Promise<void> {

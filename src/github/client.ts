@@ -78,6 +78,7 @@ const Tree = Type.Object({
       type: Type.String(),
       sha: Type.String(),
       size: Type.Optional(Type.Integer()),
+      mode: Type.Optional(Type.String()),
     }),
   ),
 })
@@ -209,6 +210,7 @@ export interface TreeEntry {
   type: "blob" | "tree"
   sha: string
   size?: number
+  mode?: string
 }
 
 export interface RepositoryTree {
@@ -578,9 +580,12 @@ function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): Che
   return { name, status, conclusion, app: app?.slug ?? null }
 }
 
-function blobOrTree({ path, type, sha, size }: TreeNode): TreeEntry[] {
+function blobOrTree({ path, type, sha, size, mode }: TreeNode): TreeEntry[] {
   if (type !== "blob" && type !== "tree") return []
-  return size === undefined ? [{ path, type, sha }] : [{ path, type, sha, size }]
+  const entry: TreeEntry = { path, type, sha }
+  if (size !== undefined) entry.size = size
+  if (mode !== undefined) entry.mode = mode
+  return [entry]
 }
 
 function listedEntry({ path, mode, type, size }: ListedNode): ListedEntry[] {

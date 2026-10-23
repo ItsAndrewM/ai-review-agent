@@ -7,6 +7,7 @@ import {
   CONTEXT_PREFIX,
   contextInputs,
   contextKey,
+  donorKey,
   entriesThatMatter,
   loadRepositoryContext,
   MAX_INSTRUCTION_LOADS,
@@ -35,6 +36,8 @@ const WEB = ["apps/web/src/a.ts"]
 const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1", size: 10 })
 
 const blobWithSha = (path: string, sha: string): TreeEntry => ({ ...blob(path), sha })
+
+const withMode = (entry: TreeEntry, mode: string): TreeEntry => ({ ...entry, mode })
 
 const directory = (path: string): TreeEntry => ({ path, type: "tree", sha: "2" })
 
@@ -239,12 +242,51 @@ describe("carriedBodies", () => {
       blobWithSha("CODING_STANDARDS.md", "s1"),
       blobWithSha("apps/web/CLAUDE.md", "w2"),
     ]
-    expect(carriedBodies(entries, donor)).toEqual({ "CLAUDE.md": "Root rules." })
+    expect(carriedBodies(entries, donor)).toStrictEqual({ "CLAUDE.md": "Root rules." })
   })
 
   it("carries nothing without a donor, and nothing when the new listing is empty", () => {
-    expect(carriedBodies([blobWithSha("CLAUDE.md", "c1")], undefined)).toEqual({})
-    expect(carriedBodies([], donor)).toEqual({})
+    expect(carriedBodies([blobWithSha("CLAUDE.md", "c1")], undefined)).toStrictEqual({})
+    expect(carriedBodies([], donor)).toStrictEqual({})
+  })
+
+  it("carries nothing for a symlink, whose blob names its target while the contents API serves the target's content, though the donor's regular file had the same path and blob sha", () => {
+    const regular = donorOf([withMode(blobWithSha("AGENTS.md", "s1"), "100644")], { "AGENTS.md": "Agents rules." })
+    const entries = [withMode(blobWithSha("AGENTS.md", "s1"), "120000")]
+    expect(carriedBodies(entries, regular)).toStrictEqual({})
+  })
+
+  it("carries nothing for a symlink both listings show at the same blob sha, since its target's content may have changed under it", () => {
+    const linked = donorOf([withMode(blobWithSha("AGENTS.md", "s1"), "120000")], { "AGENTS.md": "Target rules." })
+    const entries = [withMode(blobWithSha("AGENTS.md", "s1"), "120000")]
+    expect(carriedBodies(entries, linked)).toStrictEqual({})
+  })
+
+  it("carries nothing for a path the donor listed as a symlink, whose body is its target's content, though the new listing shows a regular file with the same blob sha", () => {
+    const linked = donorOf([withMode(blobWithSha("AGENTS.md", "s1"), "120000")], { "AGENTS.md": "Target rules." })
+    const entries = [withMode(blobWithSha("AGENTS.md", "s1"), "100644")]
+    expect(carriedBodies(entries, linked)).toStrictEqual({})
+  })
+
+  it("carries a regular file's body whatever its mode, an executable and a file a record from before modes were kept lists without one included", () => {
+    const regular = donorOf(
+      [
+        withMode(blobWithSha("CLAUDE.md", "c1"), "100644"),
+        withMode(blobWithSha("AGENTS.md", "a1"), "100755"),
+        blobWithSha("REVIEW.md", "r1"),
+      ],
+      { "CLAUDE.md": "Root rules.", "AGENTS.md": "Agents rules.", "REVIEW.md": "Review rules." },
+    )
+    const entries = [
+      withMode(blobWithSha("CLAUDE.md", "c1"), "100644"),
+      withMode(blobWithSha("AGENTS.md", "a1"), "100644"),
+      withMode(blobWithSha("REVIEW.md", "r1"), "100644"),
+    ]
+    expect(carriedBodies(entries, regular)).toStrictEqual({
+      "CLAUDE.md": "Root rules.",
+      "AGENTS.md": "Agents rules.",
+      "REVIEW.md": "Review rules.",
+    })
   })
 })
 
@@ -324,6 +366,29 @@ describe("loadRepositoryContext", () => {
     expect([...unseeded.calls].sort()).toEqual(everyLoad)
     expect(withDonor.files).toEqual({ "REVIEW.md": "Review rules.", "CONTRIBUTING.md": "Contributing rules." })
     expect(withDonor).toEqual(withoutDonor)
+  })
+
+  it("loads a symlinked file again on a base move though its blob sha is unchanged, even from a donor written before modes were kept, since the contents API serves its target's content, which the new base may have changed, and still carries a regular file beside it", async () => {
+    const donor = donorOf(
+      [blobWithSha("CLAUDE.md", "c1"), blobWithSha("AGENTS.md", "s1"), blobWithSha("REVIEW.md", "r1")],
+      { "CLAUDE.md": "Old rules.", "AGENTS.md": "Old rules.", "REVIEW.md": "Review rules." },
+    )
+    const entries = [
+      withMode(blobWithSha("CLAUDE.md", "c2"), "100644"),
+      withMode(blobWithSha("AGENTS.md", "s1"), "120000"),
+      withMode(blobWithSha("REVIEW.md", "r1"), "100644"),
+    ]
+    const bodies = new Map([
+      ["CLAUDE.md", "New rules."],
+      ["AGENTS.md", "New rules."],
+      ["REVIEW.md", "Review rules."],
+    ])
+    const { github, calls } = fakeGitHub(entries, bodies)
+    const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable, undefined, donor)
+    expect([...calls].sort()).toEqual([TREE_PATH, contentsPath("AGENTS.md"), contentsPath("CLAUDE.md")].sort())
+    expect(context).toEqual(
+      contextOf(entries, { "CLAUDE.md": "New rules.", "AGENTS.md": "New rules.", "REVIEW.md": "Review rules." }),
+    )
   })
 
   it("loads at most 24 bodies a review, the root files, then nested files, then .github/instructions files, each in candidate order, and a later review of the same base loads the rest", async () => {
@@ -582,6 +647,32 @@ describe("the context cache", () => {
     const keys = ["pending", `context:${OTHER_BASE}`, contextKey(BASE), "context:abc", "scope"]
     expect(staleContextKeys(keys, BASE)).toEqual([`context:${OTHER_BASE}`, "context:abc"])
     expect(staleContextKeys([contextKey(BASE)], BASE)).toEqual([])
+  })
+
+  it("picks the one other base's context as the donor", () => {
+    const other = `context:${OTHER_BASE}`
+    expect(donorKey([other], BASE)).toBe(other)
+    expect(donorKey(["pending", other, contextKey(BASE), "scope"], BASE)).toBe(other)
+  })
+
+  it("picks no donor when no other base has a context, or when several do, whatever each holds", () => {
+    expect(donorKey([], BASE)).toBeUndefined()
+    expect(donorKey(["pending", "scope"], BASE)).toBeUndefined()
+    expect(donorKey([contextKey(BASE)], BASE)).toBeUndefined()
+    expect(donorKey([`context:${OTHER_BASE}`, "context:abc"], BASE)).toBeUndefined()
+    expect(donorKey([`context:${OTHER_BASE}`, "context:abc", contextKey(BASE)], BASE)).toBeUndefined()
+  })
+
+  it("keeps each entry's mode in the stored record, still reads a record written before modes were kept, and refuses a mode that is not a string", () => {
+    const linked = contextOf([withMode(blobWithSha("AGENTS.md", "s1"), "120000")], {})
+    expect(Value.Check(StoredRepositoryContext, structuredClone(linked))).toBe(true)
+    expect(Value.Check(StoredRepositoryContext, structuredClone(contextOf([blobWithSha("AGENTS.md", "s1")], {})))).toBe(
+      true,
+    )
+    const numeric = { path: "AGENTS.md", type: "blob", sha: "s1", size: 10, mode: 120000 }
+    expect(Value.Check(StoredRepositoryContext, { ...linked, tree: { ...linked.tree, entries: [numeric] } })).toBe(
+      false,
+    )
   })
 
   it("reads back a loaded context as stored, and refuses a record a load could not have written", async () => {

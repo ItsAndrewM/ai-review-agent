@@ -57,7 +57,13 @@ export const StoredRepositoryContext = Type.Object({
     sha: Type.String(),
     truncated: Type.Boolean(),
     entries: Type.Array(
-      Type.Object({ path: Type.String(), type: Type.Literal("blob"), sha: Type.String(), size: Type.Integer() }),
+      Type.Object({
+        path: Type.String(),
+        type: Type.Literal("blob"),
+        sha: Type.String(),
+        size: Type.Integer(),
+        mode: Type.Optional(Type.String()),
+      }),
     ),
   }),
   files: Type.Record(Type.String(), Type.String()),
@@ -69,6 +75,8 @@ export const CONTEXT_PREFIX = "context:"
 
 const MISSING_AT_BASE = ""
 
+const SYMLINK_MODE = "120000"
+
 const LOAD_ORDER = ["root", "nested", "instructions"] as const satisfies readonly StandardSource[]
 
 export const contextKey = (baseSha: string): string => `${CONTEXT_PREFIX}${baseSha}`
@@ -76,6 +84,11 @@ export const contextKey = (baseSha: string): string => `${CONTEXT_PREFIX}${baseS
 export function staleContextKeys(keys: readonly string[], baseSha: string): string[] {
   const current = contextKey(baseSha)
   return keys.filter((key) => key.startsWith(CONTEXT_PREFIX) && key !== current)
+}
+
+export function donorKey(keys: readonly string[], baseSha: string): string | undefined {
+  const others = staleContextKeys(keys, baseSha)
+  return others.length === 1 ? others[0] : undefined
 }
 
 export function contextInputs(
@@ -102,16 +115,22 @@ export function unloadedPaths(context: RepositoryContext, changed: readonly stri
 const inLoadOrder = (paths: readonly string[]): string[] =>
   LOAD_ORDER.flatMap((source) => paths.filter((path) => sourceOf(path) === source))
 
+const isSymlink = ({ mode }: TreeEntry): boolean => mode === SYMLINK_MODE
+
+const isUnchangedFile = (before: TreeEntry | undefined, now: TreeEntry): boolean =>
+  before !== undefined && before.sha === now.sha && !isSymlink(before) && !isSymlink(now)
+
 export function carriedBodies(
   entries: readonly TreeEntry[],
   donor: RepositoryContext | undefined,
 ): Record<string, string> {
   if (donor === undefined) return {}
-  const donorShas = new Map(donor.tree.entries.map(({ path, sha }): [string, string] => [path, sha]))
+  const donorEntries = new Map(donor.tree.entries.map((entry): [string, TreeEntry] => [entry.path, entry]))
   return Object.fromEntries(
-    entries.flatMap(({ path, sha }): [string, string][] => {
-      const body = cachedBody(donor, path)
-      return donorShas.get(path) === sha && body !== undefined && body !== MISSING_AT_BASE ? [[path, body]] : []
+    entries.flatMap((entry): [string, string][] => {
+      const body = cachedBody(donor, entry.path)
+      const unchanged = isUnchangedFile(donorEntries.get(entry.path), entry)
+      return unchanged && body !== undefined && body !== MISSING_AT_BASE ? [[entry.path, body]] : []
     }),
   )
 }
