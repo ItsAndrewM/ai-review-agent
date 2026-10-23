@@ -16,15 +16,28 @@ export interface SkillFile {
   readonly content: string
 }
 
+const Metadata = Type.Object({ version: Type.Optional(Type.Union([Type.String(), Type.Number()])) })
+
 const Frontmatter = Type.Object({
   name: Type.String({ pattern: "\\S" }),
   description: Type.String({ pattern: "\\S" }),
-  metadata: Type.Optional(Type.Object({ version: Type.Optional(Type.Union([Type.String(), Type.Number()])) })),
+  metadata: Type.Optional(Metadata),
+})
+
+const DescribedFrontmatter = Type.Object({
+  description: Type.String({ pattern: "\\S" }),
+  metadata: Type.Optional(Metadata),
 })
 
 interface ParsedSkillFile {
   readonly frontmatter: Static<typeof Frontmatter>
   readonly body: string
+}
+
+interface SkillHeading {
+  readonly name: string
+  readonly description: string
+  readonly metadata?: Static<typeof Metadata> | undefined
 }
 
 type Attribute = readonly [name: string, value: string | undefined]
@@ -44,11 +57,15 @@ const sortedByPath = (files: readonly SkillFile[]): SkillFile[] => [...files].so
 const toHex = (bytes: ArrayBuffer): string =>
   Array.from(new Uint8Array(bytes), (byte) => byte.toString(16).padStart(2, "0")).join("")
 
+export async function sha256Hex(text: string): Promise<string> {
+  return toHex(await crypto.subtle.digest("SHA-256", utf8.encode(text)))
+}
+
 export async function fingerprintOf(files: readonly SkillFile[]): Promise<string> {
   const material = sortedByPath(files)
     .map(({ path, content }) => `${path}\n${content}\n`)
     .join("")
-  return toHex(await crypto.subtle.digest("SHA-256", utf8.encode(material)))
+  return sha256Hex(material)
 }
 
 const groupByDirectory = (files: readonly SkillFile[]): Map<string, SkillFile[]> => {
@@ -87,18 +104,44 @@ const parseSkillFile = (directory: string, raw: string): ParsedSkillFile => {
   return { frontmatter: data, body }
 }
 
-const entryOf = (directory: string, skillFile: SkillFile, others: readonly SkillFile[]): SkillManifestEntry => {
-  const { frontmatter, body } = parseSkillFile(directory, skillFile.content)
-  const { name, description, metadata } = frontmatter
+const entryFrom = (
+  { name, description, metadata }: SkillHeading,
+  body: string,
+  resources: readonly SkillFile[],
+): SkillManifestEntry => {
   const entry: SkillManifestEntry = {
     name: name.trim(),
     description: description.trim(),
     body,
-    resources: others.map(resourceOf),
+    resources: resources.map(resourceOf),
   }
   if (metadata) entry.metadata = metadata
   if (metadata?.version !== undefined) entry.version = String(metadata.version)
   return entry
+}
+
+const entryOf = (directory: string, skillFile: SkillFile, others: readonly SkillFile[]): SkillManifestEntry => {
+  const { frontmatter, body } = parseSkillFile(directory, skillFile.content)
+  return entryFrom(frontmatter, body, others)
+}
+
+const describedFrontmatter = (yamlText: string): Static<typeof DescribedFrontmatter> | undefined => {
+  try {
+    const data = parse(yamlText)
+    return Value.Check(DescribedFrontmatter, data) ? data : undefined
+  } catch {
+    return undefined
+  }
+}
+
+export function describedSkillEntry(
+  name: string,
+  raw: string,
+  resources: readonly SkillFile[],
+): SkillManifestEntry | undefined {
+  const [, yamlText = "", body = ""] = FRONTMATTER_BLOCK.exec(raw) ?? []
+  const described = describedFrontmatter(yamlText)
+  return described === undefined ? undefined : entryFrom({ ...described, name }, body, resources)
 }
 
 export function buildSkillManifest(files: readonly SkillFile[], fingerprint: string): SkillManifest {

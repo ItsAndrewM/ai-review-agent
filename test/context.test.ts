@@ -10,7 +10,9 @@ import {
   loadRepositoryContext,
   MAX_INSTRUCTION_LOADS,
   readRepositoryContext,
+  repositoryRecord,
   reviewInstructions,
+  reviewRepository,
   reviewStandards,
   staleContextKeys,
   standardsFor,
@@ -29,7 +31,7 @@ const CONTENTS = "/repos/o/r/contents/"
 const TREE_PATH = `/repos/o/r/git/trees/${BASE}?recursive=1`
 const WEB = ["apps/web/src/a.ts"]
 
-const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
+const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1", size: 10 })
 
 const directory = (path: string): TreeEntry => ({ path, type: "tree", sha: "2" })
 
@@ -189,6 +191,15 @@ describe("entriesThatMatter", () => {
     const { github } = fakeGitHub([...sources, ...instructionFiles.map(blob)], BODIES)
     const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable)
     expect(context.tree.entries).toEqual(instructionFiles.map(blob))
+  })
+
+  it("drops a blob the listing gives no size for, so the record never holds an entry its schema refuses and is never refetched for it", async () => {
+    const unsized = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
+    const entries = [blob("CLAUDE.md"), unsized("AGENTS.md"), unsized(".github/skills/lint/SKILL.md")]
+    expect(entriesThatMatter(entries)).toEqual([blob("CLAUDE.md")])
+    const { github } = fakeGitHub(entries, BODIES)
+    const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable)
+    expect(Value.Check(StoredRepositoryContext, structuredClone(context))).toBe(true)
   })
 })
 
@@ -439,15 +450,43 @@ describe("standardsFor", () => {
 describe("reviewInstructions", () => {
   it("follows the skill with a blank line and the standards section", () => {
     const standards = "## Repository standards\n\n### CLAUDE.md\n\nRoot rules."
-    expect(reviewInstructions("<skill_content>Steps.</skill_content>", standards)).toBe(
+    expect(reviewInstructions("<skill_content>Steps.</skill_content>", [standards])).toBe(
       `<skill_content>Steps.</skill_content>\n\n${standards}`,
     )
   })
 
   it("is the skill alone when no standard rendered", () => {
-    expect(reviewInstructions("<skill_content>Steps.</skill_content>", "")).toBe(
+    expect(reviewInstructions("<skill_content>Steps.</skill_content>", [""])).toBe(
       "<skill_content>Steps.</skill_content>",
     )
+  })
+
+  it("renders each non-empty section after a blank line, in order, so a later section needs no parameter of its own", () => {
+    expect(reviewInstructions("Skill.", ["## One", "", "## Two"])).toBe("Skill.\n\n## One\n\n## Two")
+    expect(reviewInstructions("Skill.", [])).toBe("Skill.")
+  })
+})
+
+describe("repositoryRecord", () => {
+  const skillMd = "---\ndescription: Lint.\n---\nCheck it.\n"
+
+  it("records the instruction files the standards used, and the fingerprint of the repository skills the review was offered", async () => {
+    const context = contextOf([blob("CLAUDE.md"), blob(".github/skills/lint/SKILL.md")], {
+      "CLAUDE.md": "Root rules.",
+      ".github/skills/lint/SKILL.md": skillMd,
+    })
+    const repository = await reviewRepository(context, WEB, [])
+    expect(repositoryRecord(repository)).toEqual({
+      instructionFiles: ["CLAUDE.md"],
+      repoSkillsFingerprint: repository.skills.offered?.fingerprint,
+    })
+    expect(repository.skills.offered?.fingerprint).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it("records no fingerprint when the review was offered no repository skill, so the footer claims none", async () => {
+    const repository = await reviewRepository(contextOf(KEPT, { "CLAUDE.md": "Root rules." }), WEB, [])
+    expect(repositoryRecord(repository)).toEqual({ instructionFiles: ["CLAUDE.md"] })
+    expect(repositoryRecord(await reviewRepository(undefined, WEB, []))).toEqual({ instructionFiles: [] })
   })
 })
 
@@ -472,6 +511,15 @@ describe("the context cache", () => {
       false,
     )
     expect(Value.Check(StoredRepositoryContext, { baseSha: BASE, files: {} })).toBe(false)
+  })
+
+  it("refuses a record whose entries lack the listing's sizes, as records did before the skill caps read them, so such a record is deleted and fetched again", async () => {
+    const context = await loaded(WEB)
+    const unsized = context.tree.entries.map(({ path, type, sha }) => ({ path, type, sha }))
+    expect(Value.Check(StoredRepositoryContext, { ...context, tree: { ...context.tree, entries: unsized } })).toBe(
+      false,
+    )
+    expect(context.tree.entries.every(({ size }) => size === 10)).toBe(true)
   })
 
   it("refuses a record whose tree holds a directory, as the first format's whole trees did, so such a record is deleted and fetched again", async () => {

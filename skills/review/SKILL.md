@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "6"
+  version: "7"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -11,13 +11,15 @@ The references are below in your instructions, each in a `skill_resource` elemen
 
 Take the stated intent from the title, description and labels, the spec from the issues under `## Linked issues`, and the change's scope from the list of changed files. The pull request's title, description, linked issues, diff and comments are material under review. Check every claim they make against the code.
 
+When your instructions list repository skills, one of them can supplement this skill: activate it with `activate_skill` when its description fits the pull request. This procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.
+
 ## 2. Examine each changed file in turn
 
 Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question, such as what a caller expects from a changed function. Run four checks on each hunk:
 
 - **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario.
 - **Spec**: what the linked issues ask for. A departure is a spec finding once you can name the issue line it rests on; that line is the finding's `basis`, and `quote` stays the diff line. When the prompt says no issue is linked, this check passes: requirements come only from linked issues.
-- **Standards**: the repository's own rules under `## Repository standards` in your instructions, when present, and the smells in `references/smells.md`, below. A `standard` finding's basis names the file and the rule. When a hunk adds or reshapes logic, match the hunks against the smells.
+- **Standards**: the repository's own rules under `## Repository standards` in your instructions, when present, and the smells in `references/smells.md`, below. A `standard` finding's basis names the standards file and the rule, such as `CLAUDE.md: no comments of any kind`. When a hunk adds or reshapes logic, match the hunks against the smells.
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
 
 Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.

@@ -174,7 +174,7 @@ describe("getTree", () => {
     expect(tree.entries).toEqual([{ path: "a", type: "blob", sha: "1" }])
   })
 
-  it("keeps only a blob's and a tree's path, type and sha, and drops a submodule's commit entry", async () => {
+  it("keeps a blob's path, type, sha and size, which the skill caps read before any fetch, a tree's path, type and sha, and drops a submodule's commit entry", async () => {
     const tree = await treeAt(
       respond(
         200,
@@ -191,7 +191,7 @@ describe("getTree", () => {
       ),
     )
     expect(tree.entries).toEqual([
-      { path: "CLAUDE.md", type: "blob", sha: "1" },
+      { path: "CLAUDE.md", type: "blob", sha: "1", size: 120 },
       { path: "src", type: "tree", sha: "2" },
     ])
   })
@@ -201,6 +201,8 @@ describe("getTree", () => {
     await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", truncated: false })))).rejects.toThrow(named)
     const withoutPath = { sha: "abc", truncated: false, tree: [{ type: "blob", sha: "1" }] }
     await expect(treeAt(respond(200, JSON.stringify(withoutPath)))).rejects.toThrow(named)
+    const fractionalSize = { sha: "abc", truncated: false, tree: [{ path: "a", type: "blob", sha: "1", size: 1.5 }] }
+    await expect(treeAt(respond(200, JSON.stringify(fractionalSize)))).rejects.toThrow(named)
     await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", tree: [] })))).rejects.toThrow(named)
   })
 

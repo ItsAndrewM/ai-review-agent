@@ -72,7 +72,14 @@ const ComparisonResponse = Type.Object({
 const Tree = Type.Object({
   sha: Type.String(),
   truncated: Type.Boolean(),
-  tree: Type.Array(Type.Object({ path: Type.String(), type: Type.String(), sha: Type.String() })),
+  tree: Type.Array(
+    Type.Object({
+      path: Type.String(),
+      type: Type.String(),
+      sha: Type.String(),
+      size: Type.Optional(Type.Integer()),
+    }),
+  ),
 })
 
 const PullRequestComments = Type.Array(
@@ -184,6 +191,7 @@ export interface TreeEntry {
   path: string
   type: "blob" | "tree"
   sha: string
+  size?: number
 }
 
 export interface RepositoryTree {
@@ -502,8 +510,9 @@ function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): Che
   return { name, status, conclusion, app: app?.slug ?? null }
 }
 
-function blobOrTree({ path, type, sha }: TreeNode): TreeEntry[] {
-  return type === "blob" || type === "tree" ? [{ path, type, sha }] : []
+function blobOrTree({ path, type, sha, size }: TreeNode): TreeEntry[] {
+  if (type !== "blob" && type !== "tree") return []
+  return size === undefined ? [{ path, type, sha }] : [{ path, type, sha, size }]
 }
 
 function encodePath(path: string): string {
