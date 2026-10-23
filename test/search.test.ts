@@ -1,3 +1,4 @@
+import { RE2JS } from "re2js"
 import { describe, expect, it } from "vitest"
 import {
   DEFAULT_TREE_DEPTH,
@@ -7,6 +8,7 @@ import {
   MAX_MATCHES,
   MAX_PATTERN_CHARS,
   MAX_SEARCH_CALLS,
+  MAX_SEARCH_WORK,
   MAX_SEARCHED_LINE_CHARS,
   MAX_TREE_ENTRIES,
   patternProblem,
@@ -32,6 +34,11 @@ const CAPPED =
 const TRUNCATED =
   "The snapshot is incomplete (GitHub truncated the tree listing); a missing match may be in a file it didn't load."
 
+const programSize = (pattern: string): number => RE2JS.compile(pattern).programSize()
+
+const fullLines = (count: number): string =>
+  Array.from({ length: count }, () => "x".repeat(MAX_SEARCHED_LINE_CHARS)).join("\n")
+
 function numbered(count: number, text: string): Record<string, string> {
   return Object.fromEntries(
     Array.from({ length: count }, (_, index) => [`f${String(index).padStart(3, "0")}.ts`, text]),
@@ -49,7 +56,8 @@ describe("limits", () => {
       DEFAULT_TREE_DEPTH,
       MAX_SEARCH_CALLS,
       MAX_SEARCHED_LINE_CHARS,
-    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500])
+      MAX_SEARCH_WORK,
+    ]).toEqual([100, 12_000, 300, 500, 500, 2, 40, 500, 1_000_000_000])
   })
 })
 
@@ -351,9 +359,46 @@ describe("grep", () => {
     )
   })
 
+  it("stops a pattern with a big program once its work passes the budget, and says how many files it searched", () => {
+    const pattern = ".{0,400}e.{0,400}t.{0,400}zzz"
+    const lineWork = (MAX_SEARCHED_LINE_CHARS + 1) * programSize(pattern)
+    const linesWithinBudget = Math.floor(MAX_SEARCH_WORK / lineWork)
+    const linesPerFile = Math.ceil((linesWithinBudget + 1) / 5)
+    const contents = { ...numbered(10, fullLines(linesPerFile)), "f009.ts": `${fullLines(linesPerFile)}\netzzz` }
+    expect(grep(snapshotOf(contents), { pattern })).toBe(
+      [
+        `No match for /${pattern}/ in ${Math.ceil(linesWithinBudget / linesPerFile)} files.`,
+        `Stopped early after ${Math.ceil(linesWithinBudget / linesPerFile)} files: this pattern costs too much to search everything. Narrow the path or glob, or use a simpler pattern (wide bounded repeats such as .{0,400} are the costly kind).`,
+      ].join("\n"),
+    )
+  })
+
+  it("leaves an ordinary pattern enough budget for every line of a react-size repository", () => {
+    const linesInReact = 36_000_000 / MAX_SEARCHED_LINE_CHARS
+    const pattern = String.raw`\bcreateElement\(`
+    expect((MAX_SEARCHED_LINE_CHARS + 1) * programSize(pattern) * linesInReact).toBeLessThan(MAX_SEARCH_WORK)
+    const files = snapshotOf(numbered(10, `${"  const element = render(props) ;".repeat(15)}\n`.repeat(500)))
+    expect(grep(files, { pattern })).toBe(`No match for /${pattern}/ in 10 files.`)
+  })
+
+  it("searches a line whose work lands exactly on the budget and stops at one unit over", () => {
+    const pattern = ".{0,311}e.{0,311}zzz"
+    const units = MAX_SEARCH_WORK / programSize(pattern)
+    expect(Number.isInteger(units)).toBe(true)
+    const full = Math.ceil(units / (MAX_SEARCHED_LINE_CHARS + 1)) - 1
+    const lastLength = units - full * (MAX_SEARCHED_LINE_CHARS + 1) - 1
+    expect(lastLength).toBeGreaterThanOrEqual(4)
+    expect(lastLength).toBeLessThan(MAX_SEARCHED_LINE_CHARS)
+    const lastLine = (length: number): string => `${"x".repeat(length - 4)}ezzz`
+    const atBudget = snapshotOf({ "a.ts": `${fullLines(full)}\n${lastLine(lastLength)}` })
+    expect(grep(atBudget, { pattern })).toContain(`a.ts:${full + 1}: `)
+    const overBudget = snapshotOf({ "a.ts": `${fullLines(full)}\n${lastLine(lastLength + 1)}` })
+    expect(grep(overBudget, { pattern })).toContain("Stopped early after 1 file: this pattern costs too much")
+  })
+
   it("reads JavaScript escapes such as \\u0041 the way a JavaScript regular expression does", () => {
     const files = snapshotOf({ "a.ts": "Apple\nbanana\n" })
-    expect(grep(files, { pattern: String.raw`^A` })).toBe("a.ts:1: Apple")
+    expect(grep(files, { pattern: "^\\u0041" })).toBe("a.ts:1: Apple")
   })
 })
 
