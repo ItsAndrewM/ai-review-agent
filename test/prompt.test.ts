@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest"
 import type { PullRequestInfo } from "../src/github/client.ts"
 import type { OpenThread } from "../src/review/incremental.ts"
 import {
-  ACTIVATE_SKILL_TOOL,
   answerPrompt,
   threadAnswerPrompt,
   fullPrompt,
@@ -230,9 +229,10 @@ describe("fullPrompt", () => {
 
 describe("systemPrompt", () => {
   const SIX = ["read_file", "grep", "tree", "list_changed_files", "get_issue", "submit_review"]
-  const WITH_CATALOG = [...SIX, ACTIVATE_SKILL_TOOL, "read_skill_resource"]
+  const WITH_CATALOG = [...SIX, "activate_skill", "read_skill_resource"]
   const MAX_PREAMBLE_LENGTH = 900
-  const CATALOG_SENTENCE = `${ACTIVATE_SKILL_TOOL} opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files.`
+  const CATALOG_SENTENCE =
+    "activate_skill opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files."
 
   it("names the bot and only the six tools the model is given, and leaves the procedure to the skills", () => {
     const text = systemPrompt("andabot", SIX)
@@ -242,7 +242,7 @@ describe("systemPrompt", () => {
     expect(text).toContain("list_changed_files")
     expect(text).toContain("get_issue reads an issue of the repository by number")
     expect(text).toContain("submit_review")
-    expect(text).not.toContain(ACTIVATE_SKILL_TOOL)
+    expect(text).not.toContain("activate_skill")
     expect(text).not.toContain("read_skill_resource")
     expect(text).not.toContain("blocking")
     expect(text).not.toContain("nitpick")
@@ -256,12 +256,12 @@ describe("systemPrompt", () => {
   it("names activate_skill and read_skill_resource only when the request offers them, pointing at the Available skills list", () => {
     const withCatalog = systemPrompt("andabot", WITH_CATALOG)
     expect(withCatalog).toContain(CATALOG_SENTENCE)
-    expect(systemPrompt("andabot", SIX)).not.toContain(ACTIVATE_SKILL_TOOL)
+    expect(systemPrompt("andabot", SIX)).not.toContain("activate_skill")
   })
 
   it("gates the catalog sentence on activate_skill alone, though the SDK installs it together with read_skill_resource today", () => {
     expect(systemPrompt("andabot", [...SIX, "read_skill_resource"])).toBe(systemPrompt("andabot", SIX))
-    expect(systemPrompt("andabot", [...SIX, ACTIVATE_SKILL_TOOL])).toContain(CATALOG_SENTENCE)
+    expect(systemPrompt("andabot", [...SIX, "activate_skill"])).toContain(CATALOG_SENTENCE)
   })
 
   it("keeps the preamble under the same length with the catalog sentence, the variant that grew, so the procedure stays in the skills", () => {
