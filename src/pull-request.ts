@@ -190,6 +190,7 @@ import {
   type ResumeStep,
 } from "./review/pause.ts"
 import {
+  ACTIVATE_SKILL_TOOL,
   answerPrompt,
   fullPrompt,
   incrementalPrompt,
@@ -1051,7 +1052,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         number: pr.number,
         head: shortSha(pr.head.sha),
         tools: offeredTools.join(" "),
-        catalog: offeredTools.includes("activate_skill"),
+        catalog: offeredTools.includes(ACTIVATE_SKILL_TOOL),
       })
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
