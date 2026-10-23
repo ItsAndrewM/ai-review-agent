@@ -37,6 +37,10 @@ describe("commandInThread", () => {
     expect(commandInThread("@andabot full review", "andabot", humanThread)).toEqual({ kind: "review", full: true })
   })
 
+  it("reads a command typed as a reply in andabot's thread", () => {
+    expect(commandInThread("@andabot resolve", "andabot", botThread)).toEqual({ kind: "resolve" })
+  })
+
   it("ignores an unmentioned reply when the thread couldn't be looked up", () => {
     expect(commandInThread("why is this a problem?", "andabot", undefined)).toBeUndefined()
   })

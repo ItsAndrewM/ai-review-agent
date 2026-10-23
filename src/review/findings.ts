@@ -93,10 +93,17 @@ export const ReviewSubmission = Type.Object({
   ),
 })
 
+export const SummarySubmission = Type.Object({
+  summary: ReviewSubmission.properties.summary,
+  walkthrough: ReviewSubmission.properties.walkthrough,
+  merge_danger: MergeDanger,
+})
+
 export type FindingInput = Static<typeof Finding>
 export type WalkthroughInput = Static<typeof Walkthrough>
 export type MergeDangerInput = Static<typeof MergeDanger>
 export type ReviewSubmissionInput = Static<typeof ReviewSubmission>
+export type SummarySubmissionInput = Static<typeof SummarySubmission>
 
 export type WrittenReview =
   | { kind: "submission"; submission: ReviewSubmissionInput }
@@ -120,7 +127,7 @@ export function parseWrittenReview(text: string): WrittenReview {
   return { kind: "unfit", problem: `${first?.instancePath || "/"}: ${first?.message}` }
 }
 
-function jsonIn(text: string): string | undefined {
+export function jsonIn(text: string): string | undefined {
   const fenced = JSON_FENCE.exec(text)?.[1]
   if (fenced !== undefined) return fenced
   const start = text.search(JSON_OBJECT_START)

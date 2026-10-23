@@ -2,8 +2,8 @@ import type { Message, ModelThinkingLevel, Provider, TranscriptContext } from "@
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
-import { ReviewSubmission } from "./review/findings.ts"
-import { isResubmitPrompt } from "./review/prompt.ts"
+import { ReviewSubmission, SummarySubmission } from "./review/findings.ts"
+import { isResubmitPrompt, isSummaryPrompt } from "./review/prompt.ts"
 
 const DEFAULT_OUTPUT_LIMIT = 16_000
 
@@ -23,25 +23,31 @@ export function withOutputLimit(provider: Provider, limit: number): Provider {
   }
 }
 
-export function withForcedResubmission(provider: Provider): Provider {
+export function withForcedJson(provider: Provider): Provider {
   return {
     ...provider,
-    streamSimple: (model, context, options) =>
-      provider.streamSimple(
+    streamSimple: (model, context, options) => {
+      const format = forcedFormatOf(context)
+      return provider.streamSimple(
         model,
         context,
-        awaitsResubmission(context)
-          ? { ...options, samplingParams: { ...options?.samplingParams, response_format: REVIEW_AS_JSON } }
-          : options,
-      ),
+        format === undefined
+          ? options
+          : { ...options, samplingParams: { ...options?.samplingParams, response_format: format } },
+      )
+    },
   }
 }
 
 const REVIEW_AS_JSON = { type: "json_schema", json_schema: { name: "review_submission", schema: ReviewSubmission } }
+const SUMMARY_AS_JSON = { type: "json_schema", json_schema: { name: "summary_submission", schema: SummarySubmission } }
 
-function awaitsResubmission(context: TranscriptContext): boolean {
+function forcedFormatOf(context: TranscriptContext) {
   const latest = context.messages.filter((message) => message.role !== "system").at(-1)
-  return latest?.role === "user" && isResubmitPrompt(userText(latest))
+  if (latest?.role !== "user") return undefined
+  const text = userText(latest)
+  if (isResubmitPrompt(text)) return REVIEW_AS_JSON
+  return isSummaryPrompt(text) ? SUMMARY_AS_JSON : undefined
 }
 
 function userText(message: Extract<Message, { role: "user" }>): string {

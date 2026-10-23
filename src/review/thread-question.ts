@@ -22,6 +22,6 @@ export function threadIgnoreReason(
   return "blank_reply"
 }
 
-function opensWithBot(thread: ReviewThread | undefined, botLogin: string): boolean {
+export function opensWithBot(thread: ReviewThread | undefined, botLogin: string): boolean {
   return thread !== undefined && thread.authorIsBot && thread.authorLogin === botLogin
 }

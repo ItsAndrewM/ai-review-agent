@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import type { CheckRunSummary } from "../src/github/client.ts"
 import { DEFAULT_CONFIG, parseConfig, type ConfigRead } from "../src/repository/config.ts"
 import {
+  approvalRecord,
   awaitsApproval,
   checksState,
   decideApproval,
@@ -201,6 +202,11 @@ describe("openBlockingIn", () => {
     expect(openBlockingIn(undefined)).toBe("unknown")
     expect(openBlockingIn({ open: [thread("T1", true), thread("T2", false)], recheck: [] })).toBe(1)
   })
+
+  it("leaves out the threads a resolve just resolved, whatever the list says", () => {
+    const plan = { open: [thread("T1", true), thread("T2", true), thread("T3", false)], recheck: [] }
+    expect(openBlockingIn(plan, new Set(["id-T1"]))).toBe(1)
+  })
 })
 
 function finding(severity: FindingInput["severity"]): FindingInput {
@@ -220,6 +226,8 @@ describe("lastReviewOf", () => {
         event: "REQUEST_CHANGES",
         headSha: "bbb",
         verdict: "request_changes",
+        shown: "REQUEST_CHANGES",
+        accepted: [finding("blocking"), finding("nitpick")],
         rejected,
         at: 5,
         requestChangesWorkflow: true,
@@ -229,20 +237,114 @@ describe("lastReviewOf", () => {
       event: "REQUEST_CHANGES",
       headSha: "bbb",
       verdict: "request_changes",
+      shown: "REQUEST_CHANGES",
+      counts: { blocking: 1, suggestion: 0, nitpick: 1 },
       heldBack: 1,
       at: 5,
       requestChangesWorkflow: true,
     })
   })
 
+  it("records a wait for the checks as what the summary showed", () => {
+    expect(
+      lastReviewOf({
+        reviewId: 9,
+        event: "COMMENT",
+        headSha: "bbb",
+        verdict: "approve",
+        shown: "AWAITING_CHECKS",
+        accepted: [],
+        rejected: [],
+        at: 5,
+        requestChangesWorkflow: true,
+      }),
+    ).toEqual({
+      reviewId: 9,
+      event: "COMMENT",
+      headSha: "bbb",
+      verdict: "approve",
+      shown: "AWAITING_CHECKS",
+      counts: { blocking: 0, suggestion: 0, nitpick: 0 },
+      heldBack: 0,
+      at: 5,
+      requestChangesWorkflow: true,
+    })
+  })
+
   it("keeps the request-changes workflow the review ran under, for the evaluation that follows it", () => {
-    const facts = { reviewId: 9, event: "COMMENT", headSha: "bbb", verdict: "approve", rejected: [], at: 5 } as const
+    const facts = {
+      reviewId: 9,
+      event: "COMMENT",
+      headSha: "bbb",
+      verdict: "approve",
+      shown: "COMMENT",
+      accepted: [],
+      rejected: [],
+      at: 5,
+    } as const
     expect(lastReviewOf({ ...facts, requestChangesWorkflow: false }).requestChangesWorkflow).toBe(false)
     expect(lastReviewOf({ ...facts, requestChangesWorkflow: true }).requestChangesWorkflow).toBe(true)
   })
 })
 
+describe("approvalRecord", () => {
+  const previous: LastReview = {
+    reviewId: 9,
+    event: "REQUEST_CHANGES",
+    headSha: "aaa",
+    verdict: "request_changes",
+    shown: "REQUEST_CHANGES",
+    counts: { blocking: 1, suggestion: 2, nitpick: 0 },
+    heldBack: 0,
+    at: 5,
+  }
+
+  it("records the evaluation's approval with no model verdict, keeping the last review's counts", () => {
+    expect(approvalRecord(previous, 10, "bbb", 6)).toStrictEqual({
+      reviewId: 10,
+      event: "APPROVE",
+      headSha: "bbb",
+      heldBack: 0,
+      at: 6,
+      requestChangesWorkflow: true,
+      counts: { blocking: 1, suggestion: 2, nitpick: 0 },
+    })
+  })
+
+  it("has no counts to keep when there is no last review, or it kept none", () => {
+    const approved = {
+      reviewId: 10,
+      event: "APPROVE",
+      headSha: "bbb",
+      heldBack: 0,
+      at: 6,
+      requestChangesWorkflow: true,
+    }
+    expect(approvalRecord(undefined, 10, "bbb", 6)).toStrictEqual(approved)
+    expect(approvalRecord(requested, 10, "bbb", 6)).toStrictEqual(approved)
+  })
+
+  it("is the evaluation's own approval record, with the last review's counts added", () => {
+    const record = evaluatedApprovalOf({ reviewId: 10, headSha: "bbb", at: 6 })
+    expect(approvalRecord(undefined, 10, "bbb", 6)).toStrictEqual(record)
+    expect(approvalRecord(previous, 10, "bbb", 6)).toStrictEqual({ ...record, counts: previous.counts })
+  })
+})
+
 describe("LastReview", () => {
+  const stored = { reviewId: 1, event: "COMMENT", headSha: "a", verdict: "approve", heldBack: 0, at: 1 }
+
+  it("still reads a last review stored before it kept what the summary showed", () => {
+    expect(Value.Check(LastReview, stored)).toBe(true)
+  })
+
+  it("reads what the summary showed and its counts, and rejects a verdict a summary can't show", () => {
+    const counts = { blocking: 0, suggestion: 1, nitpick: 2 }
+    expect(Value.Check(LastReview, { ...stored, shown: "AWAITING_CHECKS", counts })).toBe(true)
+    expect(Value.Check(LastReview, { ...stored, shown: "approve" })).toBe(false)
+    expect(Value.Check(LastReview, { ...stored, counts: { ...counts, blocking: "0" } })).toBe(false)
+  })
+
   it("reads a record written before the workflow was kept, and refuses a workflow that isn't a boolean", () => {
     expect(Value.Check(LastReview, requested)).toBe(true)
     expect(Value.Check(LastReview, { ...requested, requestChangesWorkflow: false })).toBe(true)
