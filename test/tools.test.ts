@@ -1,11 +1,17 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
+import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import {
   changedFilesText,
   createReviewExtension,
+  grepText,
+  readFileText,
   readIssue,
   submitResult,
+  treeText,
   type ReviewHost,
+  type SearchAccess,
 } from "../src/review/tools.ts"
 
 const pr = {
@@ -50,7 +56,52 @@ const host = {
   changedFiles: async () => [],
   pathFilters: async () => [],
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
+  repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
+  loadedSnapshot: (): SnapshotFiles | undefined => undefined,
 } satisfies ReviewHost
+
+const headSha = pr.head.sha
+const baseSha = pr.base.sha
+
+function snapshotOf(sha: string, files: Record<string, string>): MemorySnapshotFiles {
+  const snapshot = new MemorySnapshotFiles()
+  snapshot.begin(sha)
+  snapshot.add(Object.entries(files).map(([path, content]) => ({ path, content })))
+  snapshot.finish({
+    sha,
+    files: Object.keys(files).length,
+    bytes: 0,
+    gapFilled: 0,
+    leftOut: {},
+    capped: false,
+    treeTruncated: false,
+  })
+  return snapshot
+}
+
+function hostWith(options: { snapshot?: SnapshotFiles; search?: SearchAccess }) {
+  const requested: string[] = []
+  const contents = new Map([
+    [`https://api.example/repos/o/r/contents/src/a.ts?ref=${headSha}`, "from the head api"],
+    [`https://api.example/repos/o/r/contents/src/a.ts?ref=${baseSha}`, "from the base api"],
+  ])
+  const recordingFetch = async (input: RequestInfo | URL) => {
+    requested.push(String(input))
+    const body = contents.get(String(input))
+    return body === undefined ? new Response("{}", { status: 404 }) : new Response(body, { status: 200 })
+  }
+  const searched: string[] = []
+  const wired = {
+    ...host,
+    github: async () => new GitHubClient("token", "https://api.example", recordingFetch),
+    loadedSnapshot: () => options.snapshot,
+    repositorySearch: async (tool: "grep" | "tree"): Promise<SearchAccess> => {
+      searched.push(tool)
+      return options.search ?? { kind: "unavailable", reason: "no snapshot" }
+    },
+  } satisfies ReviewHost
+  return { host: wired, requested, searched }
+}
 
 describe("changedFilesText", () => {
   const files = [
@@ -74,13 +125,165 @@ describe("changedFilesText", () => {
 })
 
 describe("createReviewExtension", () => {
-  it("offers the model four tools, with submit_review last", () => {
+  it("offers the model six tools, with submit_review last", () => {
     expect(createReviewExtension(host).tools?.map((tool) => tool.name)).toEqual([
       "read_file",
       "list_changed_files",
       "get_issue",
+      "grep",
+      "tree",
       "submit_review",
     ])
+  })
+
+  it("never reruns grep or tree after a reset, so a scan that reset the object cannot loop", () => {
+    const tools = createReviewExtension(host).tools ?? []
+    const replays = tools.filter((tool) => tool.name === "grep" || tool.name === "tree").map((tool) => tool.replay)
+    expect(replays).toEqual(["unsafe", "unsafe"])
+  })
+
+  it("still reruns the API reads after a reset", () => {
+    const tools = createReviewExtension(host).tools ?? []
+    const reads = ["read_file", "list_changed_files", "get_issue"]
+    const replays = tools.filter((tool) => reads.includes(tool.name)).map((tool) => tool.replay)
+    expect(replays).toEqual(["safe", "safe", "safe"])
+  })
+
+  it("declares every argument grepText and treeText read, each with its type, so none is dropped on the way", () => {
+    const tools = createReviewExtension(host).tools ?? []
+    const accepts = (name: string, args: Record<string, string | number>) => {
+      const parameters = tools.find((tool) => tool.name === name)?.parameters
+      return parameters !== undefined && Value.Check(parameters, args)
+    }
+    expect(accepts("grep", { pattern: "total", glob: "*.ts", path: "src" })).toBe(true)
+    expect(
+      [{ pattern: 1 }, { pattern: "total", glob: 1 }, { pattern: "total", path: 1 }].map((args) =>
+        accepts("grep", args),
+      ),
+    ).toEqual([false, false, false])
+    expect(accepts("tree", { path: "src", depth: 3 })).toBe(true)
+    expect([{ path: 1 }, { depth: "3" }].map((args) => accepts("tree", args))).toEqual([false, false])
+  })
+
+  it("tells the model that a grep glob matches the repository-relative path at any depth", () => {
+    const grepTool = createReviewExtension(host).tools?.find((tool) => tool.name === "grep")
+    const glob = JSON.stringify(grepTool?.parameters)
+    expect(glob).toContain("repository root")
+    expect(glob).toContain("*.ts")
+  })
+})
+
+describe("grepText", () => {
+  const snapshot = snapshotOf(headSha, { "src/a.ts": "export const total = 1\n", "src/b.ts": "const x = total + 1\n" })
+
+  it("answers from the snapshot", async () => {
+    const { host: wired } = hostWith({ search: { kind: "ready", files: snapshot } })
+    const answer = await grepText(wired, { pattern: "total", glob: "*.ts" })
+    expect(answer).toContain("src/a.ts")
+    expect(answer).toContain("export const total = 1")
+    expect(answer).toContain("src/b.ts")
+  })
+
+  it("says search is unavailable", async () => {
+    const { host: wired } = hostWith({ search: { kind: "unavailable", reason: "the tarball failed: 502" } })
+    expect(await grepText(wired, { pattern: "total" })).toBe(
+      "Repository search is unavailable for this review: the tarball failed: 502. Use read_file.",
+    )
+  })
+
+  it("says the budget is spent", async () => {
+    const { host: wired } = hostWith({ search: { kind: "spent" } })
+    expect(await grepText(wired, { pattern: "total" })).toBe(
+      "Search budget spent: 40 grep and tree calls this review. Use read_file.",
+    )
+  })
+
+  it("says search again when the snapshot was dropped between the access check and the scan", async () => {
+    const unfinished = new MemorySnapshotFiles()
+    unfinished.begin(headSha)
+    unfinished.add([{ path: "src/a.ts", content: "export const total = 1\n" }])
+    const { host: wired } = hostWith({ search: { kind: "ready", files: unfinished } })
+    const replaced =
+      "Repository search is unavailable for this review: the snapshot was replaced while searching; search again. Use read_file."
+    expect(await grepText(wired, { pattern: "total" })).toBe(replaced)
+    expect(await treeText(wired, {})).toBe(replaced)
+  })
+
+  it("refuses a bad pattern without asking for search access, so the refusal uses no budget", async () => {
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    expect(await grepText(wired, { pattern: "" })).toBe("Pattern refused: The pattern is empty.")
+    expect(searched).toEqual([])
+  })
+
+  it("searches a pattern with two wildcards and a repeated alternation instead of refusing it", async () => {
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    expect(await grepText(wired, { pattern: String.raw`.*a.*b(.|\s)*zzz` })).toMatch(/^No match for /)
+    expect(searched).toEqual(["grep"])
+  })
+})
+
+describe("treeText", () => {
+  const snapshot = snapshotOf(headSha, { "src/a.ts": "a", "src/deep/b.ts": "b", "README.md": "r" })
+
+  it("lists the snapshot under a path", async () => {
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    expect(await treeText(wired, { path: "src", depth: 1 })).toBe("src/a.ts\nsrc/deep/")
+    expect(searched).toEqual(["tree"])
+  })
+
+  it("says search is unavailable", async () => {
+    const { host: wired } = hostWith({ search: { kind: "unavailable", reason: "no snapshot" } })
+    expect(await treeText(wired, {})).toBe(
+      "Repository search is unavailable for this review: no snapshot. Use read_file.",
+    )
+  })
+
+  it("says the budget is spent", async () => {
+    const { host: wired } = hostWith({ search: { kind: "spent" } })
+    expect(await treeText(wired, {})).toBe("Search budget spent: 40 grep and tree calls this review. Use read_file.")
+  })
+})
+
+describe("readFileText", () => {
+  it("reads the head from a loaded snapshot without calling the API", async () => {
+    const snapshot = snapshotOf(headSha, { "src/a.ts": "from the snapshot" })
+    const { host: wired, requested } = hostWith({ snapshot })
+    expect(await readFileText(wired, { path: "src/a.ts" })).toBe("    1 | from the snapshot")
+    expect(requested).toEqual([])
+  })
+
+  it("reads the head from the API when the snapshot is for another sha", async () => {
+    const snapshot = snapshotOf(baseSha, { "src/a.ts": "from the snapshot" })
+    const { host: wired, requested } = hostWith({ snapshot })
+    expect(await readFileText(wired, { path: "src/a.ts" })).toBe("    1 | from the head api")
+    expect(requested).toHaveLength(1)
+  })
+
+  it("reads the head from the API when the snapshot left that path out", async () => {
+    const snapshot = snapshotOf(headSha, { "src/other.ts": "x" })
+    const { host: wired, requested } = hostWith({ snapshot })
+    expect(await readFileText(wired, { path: "src/a.ts" })).toBe("    1 | from the head api")
+    expect(requested).toHaveLength(1)
+  })
+
+  it("reads the head from the API when the snapshot has no record, as when a load was interrupted", async () => {
+    const snapshot = new MemorySnapshotFiles()
+    snapshot.begin(headSha)
+    snapshot.add([{ path: "src/a.ts", content: "partial" }])
+    const { host: wired } = hostWith({ snapshot })
+    expect(await readFileText(wired, { path: "src/a.ts" })).toBe("    1 | from the head api")
+  })
+
+  it("reads the base from the API and ignores the snapshot", async () => {
+    const snapshot = snapshotOf(headSha, { "src/a.ts": "from the snapshot" })
+    const { host: wired, requested } = hostWith({ snapshot })
+    expect(await readFileText(wired, { path: "src/a.ts", ref: "base" })).toBe("    1 | from the base api")
+    expect(requested).toHaveLength(1)
+  })
+
+  it("says so when the file does not exist at the head", async () => {
+    const { host: wired } = hostWith({})
+    expect(await readFileText(wired, { path: "src/none.ts" })).toBe("src/none.ts does not exist at head (fedcba9).")
   })
 })
 

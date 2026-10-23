@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "7"
+  version: "8"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -15,9 +15,9 @@ When your instructions list repository skills, one of them can supplement this s
 
 ## 2. Examine each changed file in turn
 
-Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question, such as what a caller expects from a changed function. Run four checks on each hunk:
+Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question. When a change alters a function's signature, an export or a type that other code uses, `grep` for its callers and read them before judging. Run four checks on each hunk:
 
-- **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario.
+- **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario. Before writing a failure scenario that depends on another function, read that function.
 - **Spec**: what the linked issues ask for. A departure is a spec finding once you can name the issue line it rests on; that line is the finding's `basis`, and `quote` stays the diff line. When the prompt says no issue is linked, this check passes: requirements come only from linked issues.
 - **Standards**: the repository's own rules under `## Repository standards` in your instructions, when present, and the smells in `references/smells.md`, below. A `standard` finding's basis names the standards file and the rule, such as `CLAUDE.md: no comments of any kind`. When a hunk adds or reshapes logic, match the hunks against the smells.
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
