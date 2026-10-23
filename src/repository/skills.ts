@@ -363,12 +363,6 @@ export function skillsStartFields({ offered, loadsSkipped }: RepositorySkills): 
   }
 }
 
-const isModelCallable = ({ callers }: ToolRegistration): boolean => callers === undefined || callers.includes("model")
-
-export function offeredToolNames(installed: readonly Extension[]): string[] {
-  return installed.flatMap(({ tools }) => (tools ?? []).filter(isModelCallable).map(({ name }) => name))
-}
-
 export function unlisted(source: SkillSource): SkillSource {
   return {
     ...source,

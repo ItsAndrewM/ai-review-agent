@@ -75,7 +75,6 @@ import { loadSnapshot } from "./repository/load-snapshot.ts"
 import {
   catalogFor,
   installCatalog,
-  offeredToolNames,
   restoredCatalog,
   skillLogs,
   skillsStartFields,
@@ -1047,12 +1046,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
-      await this.configureReview(repository)
+      const offeredTools = await this.configureReview(repository)
       log("review.tools", {
         number: pr.number,
         head: shortSha(pr.head.sha),
-        tools: offeredToolNames(this.registry.snapshot().installed()).join(" "),
-        catalog: this.#catalog !== undefined,
+        tools: offeredTools.join(" "),
+        catalog: offeredTools.includes("activate_skill"),
       })
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
@@ -1182,7 +1181,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
-  private async configureReview({ standards, skills }: ReviewRepository): Promise<void> {
+  private async configureReview({ standards, skills }: ReviewRepository): Promise<readonly string[]> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "review")
     const references = await loadReferences(source, skill)
@@ -1196,6 +1195,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
     const sources = catalogFor(source, skills.offered)
     this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+    return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }
 
   private async finishReview(

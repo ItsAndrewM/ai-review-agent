@@ -18,7 +18,6 @@ import {
   MAX_DESCRIPTION_CHARS,
   MAX_SKILL_BYTES,
   MAX_SKILL_FILE_BYTES,
-  offeredToolNames,
   outputFromContent,
   repositorySkillFiles,
   repositorySkillFingerprint,
@@ -686,48 +685,6 @@ describe("skillsStartFields", () => {
       repoSkillsFingerprint: undefined,
       skillLoadsSkipped: 0,
     })
-  })
-})
-
-describe("offeredToolNames", () => {
-  const toolInput = (name: string) => ({
-    name,
-    description: `The ${name} tool.`,
-    parameters: Type.Object({}),
-    async execute() {
-      return { output: [] }
-    },
-  })
-  const tool = (name: string) => defineTool(toolInput(name))
-
-  it("lists every installed extension's model-callable tools in registry order, leaving out a tool only tools may call", () => {
-    const review = defineExtension({ name: "andabot", tools: [tool("read_file"), tool("submit_review")] })
-    const catalog = defineExtension({
-      name: "agents.skills",
-      tools: [tool("activate_skill"), tool("read_skill_resource")],
-    })
-    const internal = defineExtension({
-      name: "internal",
-      tools: [defineTool({ ...toolInput("hidden"), callers: ["tools"] })],
-    })
-    expect(offeredToolNames([review, internal, catalog])).toEqual([
-      "read_file",
-      "submit_review",
-      "activate_skill",
-      "read_skill_resource",
-    ])
-    expect(offeredToolNames([])).toEqual([])
-  })
-
-  it("offers a tool whose callers name the model, alone as submit_review's do or beside tools", () => {
-    const extension = defineExtension({
-      name: "andabot",
-      tools: [
-        defineTool({ ...toolInput("submit_review"), callers: ["model"] }),
-        defineTool({ ...toolInput("read_file"), callers: ["model", "tools"] }),
-      ],
-    })
-    expect(offeredToolNames([extension])).toEqual(["submit_review", "read_file"])
   })
 })
 
