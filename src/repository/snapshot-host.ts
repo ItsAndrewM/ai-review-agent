@@ -3,7 +3,7 @@ import { errorText, log, logError, type LogFields } from "../log.ts"
 import type { SearchAccess } from "../review/tools.ts"
 import { shortSha } from "../sha.ts"
 import { SnapshotUnavailable, type SnapshotSource } from "./load-snapshot.ts"
-import { MAX_SEARCH_CALLS } from "./search.ts"
+import { GrepWork, MAX_SEARCH_CALLS } from "./search.ts"
 import type { SnapshotFiles, SnapshotRecord } from "./snapshot.ts"
 
 export interface SnapshotFailure {
@@ -63,6 +63,7 @@ export type LoadInto = (files: SnapshotFiles, sha: string) => Promise<SnapshotRe
 export class SnapshotRuns {
   #active = 0
   #calls = { grep: 0, tree: 0 }
+  #work = new GrepWork()
   #failure: string | undefined
   #loading: { sha: string; access: Promise<SearchAccess> } | undefined
 
@@ -71,8 +72,8 @@ export class SnapshotRuns {
     private readonly loadInto: LoadInto,
   ) {}
 
-  calls() {
-    return { greps: this.#calls.grep, trees: this.#calls.tree }
+  usage() {
+    return { greps: this.#calls.grep, trees: this.#calls.tree, grepWork: this.#work.units() }
   }
 
   start(): void {
@@ -104,7 +105,7 @@ export class SnapshotRuns {
     this.#calls[tool] += 1
     const { number, sha } = await head()
     const files = this.files()
-    if (files.record()?.sha === sha) return { kind: "ready", files }
+    if (files.record()?.sha === sha) return { kind: "ready", files, work: this.#work }
     return this.#sharedLoad(number, sha)
   }
 
@@ -130,7 +131,7 @@ export class SnapshotRuns {
       if (replaced !== undefined && replaced !== sha) log("snapshot.dropped", { number, reason: "new_head" })
       const record = await this.loadInto(files, sha)
       log("snapshot.loaded", loadedFields(number, record, Date.now() - started))
-      return { kind: "ready", files }
+      return { kind: "ready", files, work: this.#work }
     } catch (cause) {
       const failure = snapshotFailure(cause)
       this.#failure = failure.reason
@@ -147,5 +148,6 @@ export class SnapshotRuns {
     }
     this.#failure = undefined
     this.#calls = { grep: 0, tree: 0 }
+    this.#work = new GrepWork()
   }
 }

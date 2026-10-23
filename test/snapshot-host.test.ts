@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
 import { GitHubClient } from "../src/github/client.ts"
 import { SnapshotUnavailable } from "../src/repository/load-snapshot.ts"
+import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
 import {
   leftOutText,
   loadedFields,
@@ -10,6 +11,7 @@ import {
   type LoadInto,
 } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles, type SnapshotRecord } from "../src/repository/snapshot.ts"
+import type { SearchAccess } from "../src/review/tools.ts"
 
 const record = {
   sha: "0123456789abcdef",
@@ -125,6 +127,11 @@ class RecordingFiles extends MemorySnapshotFiles {
 
 const OTHER_SHA = "fedcba9876543210"
 
+function workOf(access: SearchAccess): GrepWork {
+  if (access.kind !== "ready") throw new Error(`expected a ready access, got ${access.kind}`)
+  return access.work
+}
+
 const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
 
 function gatedLoader() {
@@ -166,10 +173,10 @@ describe("SnapshotRuns", () => {
     expect((await runs.access("grep", headAt(SHA))).kind).toBe("ready")
     await runs.end(NUMBER, "answer_end")
     expect(files.record()?.sha).toBe(SHA)
-    expect(runs.calls()).toEqual({ greps: 1, trees: 0 })
+    expect(runs.usage()).toEqual({ greps: 1, trees: 0, grepWork: 0 })
     await runs.end(NUMBER, "review_end")
     expect(files.record()).toBeUndefined()
-    expect(runs.calls()).toEqual({ greps: 0, trees: 0 })
+    expect(runs.usage()).toEqual({ greps: 0, trees: 0, grepWork: 0 })
     expect(logged).toHaveBeenCalledWith(dropped("review_end"))
     expect(logged).not.toHaveBeenCalledWith(dropped("answer_end"))
   })
@@ -183,7 +190,21 @@ describe("SnapshotRuns", () => {
     }
     expect(kinds.slice(0, 40).every((kind) => kind === "ready")).toBe(true)
     expect(kinds[40]).toBe("spent")
-    expect(runs.calls()).toEqual({ greps: 20, trees: 20 })
+    expect(runs.usage()).toEqual({ greps: 20, trees: 20, grepWork: 0 })
+  })
+
+  it("hands every call of a run one grep work total, reports it, and starts a new total when the snapshot is dropped", async () => {
+    const { runs } = runsWith()
+    runs.start()
+    const grepWork = workOf(await runs.access("grep", headAt(SHA)))
+    const treeWork = workOf(await runs.access("tree", headAt(SHA)))
+    grepWork.charge(MAX_RUN_SEARCH_WORK)
+    expect(treeWork.spent()).toBe(true)
+    expect(runs.usage()).toEqual({ greps: 1, trees: 1, grepWork: MAX_RUN_SEARCH_WORK })
+    await runs.end(NUMBER, "review_end")
+    expect(runs.usage()).toEqual({ greps: 0, trees: 0, grepWork: 0 })
+    runs.start()
+    expect(workOf(await runs.access("grep", headAt(SHA))).spent()).toBe(false)
   })
 
   it("shares one load between parallel calls for the same head", async () => {
@@ -242,7 +263,7 @@ describe("SnapshotRuns", () => {
     runs.start()
     await runs.access("grep", headAt(SHA))
     for (let call = 0; call < 5; call++) await runs.access(call % 2 === 0 ? "grep" : "tree", headAt(SHA))
-    expect(runs.calls()).toEqual({ greps: 1, trees: 0 })
+    expect(runs.usage()).toEqual({ greps: 1, trees: 0, grepWork: 0 })
   })
 
   it("remembers a failed load until the last run ends, so a review does not retry it on every call", async () => {
