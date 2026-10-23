@@ -933,11 +933,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const key = await this.key()
     const cached = await this.cachedContext(baseSha)
+    const donor = cached === undefined ? await this.donorContext(baseSha) : undefined
     const fields = { number, base: shortSha(baseSha) }
     const unreadableFile = (path: string, error: string): void =>
       logError("context.unreadable", { ...fields, path, error })
     const context = await readRepositoryContext(
-      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
+      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached, donor),
       (error) => logError("context.unreadable", { ...fields, error }),
     )
     if (context !== undefined && context !== cached && (await this.ownsPending(deliveryId))) {
@@ -952,6 +953,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (Value.Check(StoredRepositoryContext, stored)) return stored
     if (stored !== undefined) await this.ctx.storage.delete(key)
     return undefined
+  }
+
+  private async donorContext(baseSha: string): Promise<RepositoryContext | undefined> {
+    const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
+    const donors = [...listed].flatMap(([key, stored]) =>
+      key !== contextKey(baseSha) && Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
+    )
+    return donors.length === 1 ? donors[0] : undefined
   }
 
   private async cacheContext(context: RepositoryContext): Promise<void> {

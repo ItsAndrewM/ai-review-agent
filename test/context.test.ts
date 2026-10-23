@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import { GitHubClient, type TreeEntry } from "../src/github/client.ts"
 import { isGenerated } from "../src/github/diff.ts"
 import {
+  carriedBodies,
   CONTEXT_PREFIX,
   contextInputs,
   contextKey,
@@ -32,6 +33,8 @@ const TREE_PATH = `/repos/o/r/git/trees/${BASE}?recursive=1`
 const WEB = ["apps/web/src/a.ts"]
 
 const blob = (path: string): TreeEntry => ({ path, type: "blob", sha: "1", size: 10 })
+
+const blobWithSha = (path: string, sha: string): TreeEntry => ({ ...blob(path), sha })
 
 const directory = (path: string): TreeEntry => ({ path, type: "tree", sha: "2" })
 
@@ -101,6 +104,11 @@ const contextOf = (entries: readonly TreeEntry[], files: Readonly<Record<string,
   baseSha: BASE,
   tree: { sha: TREE_SHA, truncated: false, entries },
   files,
+})
+
+const donorOf = (entries: readonly TreeEntry[], files: Readonly<Record<string, string>>): RepositoryContext => ({
+  ...contextOf(entries, files),
+  baseSha: OTHER_BASE,
 })
 
 describe("contextInputs", () => {
@@ -203,6 +211,43 @@ describe("entriesThatMatter", () => {
   })
 })
 
+describe("carriedBodies", () => {
+  const donor = donorOf(
+    [
+      blobWithSha("CLAUDE.md", "c1"),
+      blobWithSha("AGENTS.md", "a1"),
+      blobWithSha("REVIEW.md", "r1"),
+      blobWithSha("CONTRIBUTING.md", "n1"),
+      blobWithSha("apps/web/CLAUDE.md", "w1"),
+      blobWithSha("apps/api/CLAUDE.md", "x1"),
+    ],
+    {
+      "CLAUDE.md": "Root rules.",
+      "AGENTS.md": "Agents rules.",
+      "REVIEW.md": "",
+      "apps/web/CLAUDE.md": "Web rules.",
+      "apps/api/CLAUDE.md": "Api rules.",
+    },
+  )
+
+  it("keeps a body only for the same path with the same blob sha", () => {
+    const entries = [
+      blobWithSha("CLAUDE.md", "c1"),
+      blobWithSha("AGENTS.md", "c1"),
+      blobWithSha("REVIEW.md", "r1"),
+      blobWithSha("CONTRIBUTING.md", "n1"),
+      blobWithSha("CODING_STANDARDS.md", "s1"),
+      blobWithSha("apps/web/CLAUDE.md", "w2"),
+    ]
+    expect(carriedBodies(entries, donor)).toEqual({ "CLAUDE.md": "Root rules." })
+  })
+
+  it("carries nothing without a donor, and nothing when the new listing is empty", () => {
+    expect(carriedBodies([blobWithSha("CLAUDE.md", "c1")], undefined)).toEqual({})
+    expect(carriedBodies([], donor)).toEqual({})
+  })
+})
+
 describe("loadRepositoryContext", () => {
   it("reads the tree and each candidate's body at the base commit, keeps only the entries that matter, and remembers a file the contents API does not find as empty", async () => {
     const { github, calls } = fakeGitHub(ENTRIES, BODIES)
@@ -242,6 +287,43 @@ describe("loadRepositoryContext", () => {
     const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable, other)
     expect(calls).toContain(TREE_PATH)
     expect(context).toEqual(await loaded(WEB))
+  })
+
+  it("seeds a new base's context with the donor's bodies for the blobs it still lists unchanged, so a base move loads only what changed", async () => {
+    const donor = donorOf([blobWithSha("CLAUDE.md", "c1"), blobWithSha("AGENTS.md", "a1")], {
+      "CLAUDE.md": "Root rules.",
+      "AGENTS.md": "Old agents rules.",
+    })
+    const entries = [blobWithSha("CLAUDE.md", "c1"), blobWithSha("AGENTS.md", "a2")]
+    const bodies = new Map([
+      ["CLAUDE.md", "Root rules."],
+      ["AGENTS.md", "New agents rules."],
+    ])
+    const { github, calls } = fakeGitHub(entries, bodies)
+    const context = await loadRepositoryContext(github, ref, BASE, WEB, failOnUnreadable, undefined, donor)
+    expect(calls).toEqual([TREE_PATH, contentsPath("AGENTS.md")])
+    expect(context).toEqual(contextOf(entries, { "CLAUDE.md": "Root rules.", "AGENTS.md": "New agents rules." }))
+  })
+
+  it("carries nothing for a file the donor remembered as missing or no longer lists, and nothing without a donor", async () => {
+    const donor = donorOf([blobWithSha("REVIEW.md", "r1"), blobWithSha("CODING_STANDARDS.md", "s1")], {
+      "REVIEW.md": "",
+      "CODING_STANDARDS.md": "Old standards.",
+    })
+    const entries = [blobWithSha("REVIEW.md", "r1"), blobWithSha("CONTRIBUTING.md", "n1")]
+    const bodies = new Map([
+      ["REVIEW.md", "Review rules."],
+      ["CONTRIBUTING.md", "Contributing rules."],
+    ])
+    const everyLoad = [TREE_PATH, contentsPath("REVIEW.md"), contentsPath("CONTRIBUTING.md")].sort()
+    const seeded = fakeGitHub(entries, bodies)
+    const withDonor = await loadRepositoryContext(seeded.github, ref, BASE, WEB, failOnUnreadable, undefined, donor)
+    const unseeded = fakeGitHub(entries, bodies)
+    const withoutDonor = await loadRepositoryContext(unseeded.github, ref, BASE, WEB, failOnUnreadable)
+    expect([...seeded.calls].sort()).toEqual(everyLoad)
+    expect([...unseeded.calls].sort()).toEqual(everyLoad)
+    expect(withDonor.files).toEqual({ "REVIEW.md": "Review rules.", "CONTRIBUTING.md": "Contributing rules." })
+    expect(withDonor).toEqual(withoutDonor)
   })
 
   it("loads at most 24 bodies a review, the root files, then nested files, then .github/instructions files, each in candidate order, and a later review of the same base loads the rest", async () => {

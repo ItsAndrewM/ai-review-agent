@@ -102,15 +102,31 @@ export function unloadedPaths(context: RepositoryContext, changed: readonly stri
 const inLoadOrder = (paths: readonly string[]): string[] =>
   LOAD_ORDER.flatMap((source) => paths.filter((path) => sourceOf(path) === source))
 
+export function carriedBodies(
+  entries: readonly TreeEntry[],
+  donor: RepositoryContext | undefined,
+): Record<string, string> {
+  if (donor === undefined) return {}
+  const donorShas = new Map(donor.tree.entries.map(({ path, sha }): [string, string] => [path, sha]))
+  return Object.fromEntries(
+    entries.flatMap(({ path, sha }): [string, string][] => {
+      const body = cachedBody(donor, path)
+      return donorShas.get(path) === sha && body !== undefined && body !== MISSING_AT_BASE ? [[path, body]] : []
+    }),
+  )
+}
+
 const contextAt = async (
   github: GitHubClient,
   ref: RepoRef,
   baseSha: string,
   cached: RepositoryContext | undefined,
+  donor: RepositoryContext | undefined,
 ): Promise<RepositoryContext> => {
   if (cached?.baseSha === baseSha) return cached
   const tree = await github.getTree(ref, baseSha)
-  return { baseSha, tree: { ...tree, entries: entriesThatMatter(tree.entries) }, files: {} }
+  const entries = entriesThatMatter(tree.entries)
+  return { baseSha, tree: { ...tree, entries }, files: carriedBodies(entries, donor) }
 }
 
 const loadedFile = async (
@@ -144,8 +160,9 @@ export async function loadRepositoryContext(
   changed: readonly string[],
   unreadable: ReportUnreadableFile,
   cached?: RepositoryContext,
+  donor?: RepositoryContext,
 ): Promise<RepositoryContext> {
-  const context = await contextAt(github, ref, baseSha, cached)
+  const context = await contextAt(github, ref, baseSha, cached, donor)
   const read: ReadFile = (path) => github.getFileContent(ref, path, baseSha)
   const ahead = new Set([...inLoadOrder(unloadedPaths(context, changed)), ...unloadedSkillBodies(context)])
   const first = [...ahead].slice(0, MAX_INSTRUCTION_LOADS)
