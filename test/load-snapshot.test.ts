@@ -272,6 +272,19 @@ describe("loadSnapshot", () => {
     expect(files.has("only-first.ts")).toBe(false)
   })
 
+  it("retries an archive cut off at a block boundary before its zero blocks, then reports the tarball unavailable", async () => {
+    const archive = tarOf([file("a.ts", "a\n"), file("b.ts", "b\n")])
+    const cut = await gzip(archive.slice(0, archive.length - 1_024))
+    const fake = fakeSource({ tarballs: [async () => streamOf(cut, 700)] })
+
+    await expect(loadSnapshot(fake.source, new MemorySnapshotFiles(), SHA)).rejects.toMatchObject({
+      name: "SnapshotUnavailable",
+      step: "tarball",
+      message: expect.stringContaining("truncated"),
+    })
+    expect(fake.tarballCalls).toBe(2)
+  })
+
   it("throws SnapshotUnavailable for the tarball after two failures", async () => {
     const fake = fakeSource({
       tarballs: [
