@@ -70,14 +70,19 @@ describe("meteredTest", () => {
     expect(meteredTest(engine, line).work).toBeGreaterThanOrEqual(LINE_UNITS + 32 * (line.length + 1))
   })
 
-  it("charges 32 plain-substring prefilter scans two units per character more than one", () => {
-    const pattern = Array.from({ length: 32 }, (_, index) => `Z${index}a`).join(".*")
-    const line = Array.from({ length: 32 }, (_, index) => `Z${index}a`)
-      .join(" ")
-      .padStart(500, "x")
-    const engine = engineFor(RE2JS.compile(pattern))
+  it("charges each of 31 short substring scans past the third one unit per character, on a line built against indexOf", () => {
+    const needles = Array.from({ length: 31 }, (_, index) => `aaaaa${"bcdefghijklmnopqrstuvwxyz01234".charAt(index)}`)
+    const line = needles.join("").padStart(500, "a")
+    const engine = engineFor(RE2JS.compile(needles.join(".*")))
     meteredTest(engine, line)
-    expect(meteredTest(engine, line).work).toBeGreaterThanOrEqual(LINE_UNITS + 3 * (line.length + 1))
+    expect(meteredTest(engine, line).work).toBeGreaterThanOrEqual(LINE_UNITS + 29 * (line.length + 1))
+  })
+
+  it("leaves a pattern with three substrings at one unit per character", () => {
+    const line = "foo bar baz".padStart(500, "x")
+    const engine = engineFor(RE2JS.compile("foo.*bar.*baz"))
+    meteredTest(engine, line)
+    expect(meteredTest(engine, line).work).toBe(LINE_UNITS + line.length + 1)
   })
 })
 

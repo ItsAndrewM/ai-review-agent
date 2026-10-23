@@ -26,7 +26,7 @@ export interface Scans {
 
 export const LINE_UNITS = 16
 
-export const SUBSTRING_SCANS_PER_UNIT = 16
+export const FREE_SUBSTRING_SCANS = 3
 
 const CLEAR_MARK = -1
 
@@ -51,7 +51,7 @@ export function prefilterScans(regex: RE2JS): Scans {
 }
 
 function scanWorkOf({ cost, automata }: Scans): number {
-  return Math.max(0, automata - 1) + Math.floor((cost - automata) / SUBSTRING_SCANS_PER_UNIT)
+  return Math.max(0, automata - 1) + Math.max(0, cost - automata - FREE_SUBSTRING_SCANS)
 }
 
 export function engineFor(regex: RE2JS): Engine {

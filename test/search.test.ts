@@ -35,9 +35,9 @@ const CAPPED =
 const TRUNCATED =
   "The snapshot is incomplete (GitHub truncated the tree listing); a missing match may be in a file it didn't load."
 
-const LETTERS = "acegikmoqsuwyA"
+const LETTERS = "acegikmoqsu"
 
-const SPRAWLING = `${Array.from(LETTERS, (letter) => `.{0,999}${letter}`).join("")}zzz`
+const SPRAWLING = `${Array.from(LETTERS, (letter) => `.{0,999}[${letter}${letter.toUpperCase()}]`).join("")}zzz`
 
 const engineOf = (pattern: string): Engine => engineFor(RE2JS.compile(pattern))
 
