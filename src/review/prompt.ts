@@ -221,8 +221,13 @@ export function isResubmitPrompt(text: string): boolean {
 const NOT_POSTED = "No review was posted, because only a submit_review call posts one."
 const RESUBMIT_REQUEST = "Call submit_review now with the review, and don't write it out as a message."
 
-export function answerPrompt(author: string, text: string, skill: string): string {
-  return `${skill}\n\n${author} asks, in a comment on the pull request:\n\n${text}\n\nAnswer them directly, in text.`
+export interface Question {
+  author: string
+  text: string
+}
+
+export function answerPrompt(question: Question, skill: string): string {
+  return `${skill}\n\n${question.author} asks, in a comment on the pull request:\n\n${question.text}\n\nAnswer them directly, in text.`
 }
 
 export interface ThreadQuestion {
