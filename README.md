@@ -13,4 +13,4 @@ pnpm check     # lint, typecheck and unit tests
 pnpm run deploy
 ```
 
-Status: phase 1, the walking skeleton. Full review on open and on push, the commands `@andabot review`, `full review`, `summary`, `resolve`, `pause`, `resume` and `help`, and questions in PR comments.
+Status: phase 1, the walking skeleton, is done, and phase 2 is under way: the review procedure as skills, the spec axis and repository context (instruction files, `.andabot.yaml` and repository skills) have shipped. Full review on open and on push, the commands `@andabot review`, `full review`, `summary`, `resolve`, `pause`, `resume` and `help`, and questions in PR comments.

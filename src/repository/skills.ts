@@ -99,6 +99,15 @@ export const SKILL_ROOTS = [".github/skills/", ".agents/skills/", ".claude/skill
 
 export const MAX_SKILL_FILE_BYTES = 51_200
 
+const CATALOG_OUTPUT_MAX_BYTES = 2 * MAX_SKILL_FILE_BYTES
+
+const mostLinesIn = (bytes: number): number => bytes
+
+export const CATALOG_OUTPUT_LIMITS = {
+  maxBytes: CATALOG_OUTPUT_MAX_BYTES,
+  maxLines: mostLinesIn(CATALOG_OUTPUT_MAX_BYTES),
+} as const
+
 export const MAX_SKILL_BYTES = 524_288
 
 export const MAX_DESCRIPTION_CHARS = 1_024
@@ -391,13 +400,16 @@ export function outputFromContent(result: ToolExecutionResult | ContentOnlyResul
   return { ...rest, output: content }
 }
 
+type ExecuteArgs = Partial<Parameters<ToolRegistration["execute"]>>
+
 export const withOutputFromContent =
-  <Args extends unknown[]>(execute: (...args: Args) => Promise<ToolExecutionResult | ContentOnlyResult>) =>
+  <Args extends ExecuteArgs>(execute: (...args: Args) => Promise<ToolExecutionResult | ContentOnlyResult>) =>
   async (...args: Args): Promise<ToolExecutionResult> =>
     outputFromContent(await execute(...args))
 
 const toolWithOutput = (tool: ToolRegistration): ToolRegistration => ({
   ...tool,
+  outputLimits: CATALOG_OUTPUT_LIMITS,
   execute: withOutputFromContent(tool.execute.bind(tool)),
 })
 
