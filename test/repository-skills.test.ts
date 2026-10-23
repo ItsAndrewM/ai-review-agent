@@ -31,6 +31,7 @@ import {
   unloadedSkillPaths,
   withContentAsOutput,
   withOutputFromContent,
+  type ReportSkippedRestore,
   type SkillState,
 } from "../src/repository/skills.ts"
 import { BUNDLED_SKILL_NAMES, bundledSkills } from "../src/review/bundled-skills.ts"
@@ -743,9 +744,9 @@ describe("the catalog", () => {
   })
 
   function skipRecorder() {
-    const skipped: number[] = []
-    const report = (records: number): void => {
-      skipped.push(records)
+    const skipped: Parameters<ReportSkippedRestore>[] = []
+    const report: ReportSkippedRestore = (records, reason) => {
+      skipped.push([records, reason])
     }
     return { report, skipped }
   }
@@ -753,7 +754,7 @@ describe("the catalog", () => {
   it("rebuilds the catalog from the one context the object holds, so a review resumed after a restart keeps it", async () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
-    const sources = await restoredCatalog(source, [LINT], 1, report)
+    const sources = await restoredCatalog(source, [LINT], 1, { pending: false }, report)
     expect(sources?.map(({ id }) => id)).toEqual(["builtin", "repo"])
     expect((await sources?.[1]?.list())?.map(({ name }) => name)).toEqual(["lint"])
     expect(skipped).toEqual([])
@@ -762,19 +763,48 @@ describe("the catalog", () => {
   it("restores nothing and reports nothing for an object that holds no context, or one without skills", async () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
-    expect(await restoredCatalog(source, [], 0, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [], 0, { pending: false }, report)).toBeUndefined()
     const bare = contextOf([blob("CLAUDE.md")], { "CLAUDE.md": "Rules." })
-    expect(await restoredCatalog(source, [bare], 1, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [bare], 1, { pending: false }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [bare], 1, { pending: true, fingerprint: undefined }, report)).toBeUndefined()
     expect(skipped).toEqual([])
   })
 
   it("declines, reporting how many records it found, when the object holds several contexts or one its schema refuses", async () => {
     const { source } = await bundledSkills()
     const { report, skipped } = skipRecorder()
-    expect(await restoredCatalog(source, [LINT, LINT], 2, report)).toBeUndefined()
-    expect(await restoredCatalog(source, [], 1, report)).toBeUndefined()
-    expect(await restoredCatalog(source, [LINT], 2, report)).toBeUndefined()
-    expect(skipped).toEqual([2, 1, 2])
+    expect(await restoredCatalog(source, [LINT, LINT], 2, { pending: false }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [], 1, { pending: false }, report)).toBeUndefined()
+    expect(await restoredCatalog(source, [LINT], 2, { pending: false }, report)).toBeUndefined()
+    expect(skipped).toEqual([
+      [2, "records"],
+      [1, "records"],
+      [2, "records"],
+    ])
+  })
+
+  it("rebuilds the catalog while a review is pending only from the record whose fingerprint is the review's, so a resumed review never gets another base's skills", async () => {
+    const { source } = await bundledSkills()
+    const { report, skipped } = skipRecorder()
+    const lint = await repositorySkills(LINT)
+    const fingerprint = lint.offered?.fingerprint
+    expect(fingerprint).toBeDefined()
+    expect(await restoredCatalog(source, [LINT], 1, { pending: true, fingerprint }, report)).toHaveLength(2)
+    expect(
+      await restoredCatalog(source, [LINT], 1, { pending: true, fingerprint: "0".repeat(64) }, report),
+    ).toBeUndefined()
+    expect(await restoredCatalog(source, [LINT], 1, { pending: true, fingerprint: undefined }, report)).toBeUndefined()
+    expect(skipped).toEqual([
+      [1, "fingerprint"],
+      [1, "fingerprint"],
+    ])
+  })
+
+  it("rebuilds from the one record it holds when no review is pending, whatever its fingerprint", async () => {
+    const { source } = await bundledSkills()
+    const { report, skipped } = skipRecorder()
+    expect(await restoredCatalog(source, [LINT], 1, { pending: false }, report)).toHaveLength(2)
+    expect(skipped).toEqual([])
   })
 
   describe("the output channel", () => {

@@ -71,7 +71,14 @@ import {
   type ReviewRepository,
 } from "./repository/context.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
-import { catalogFor, installCatalog, restoredCatalog, skillLogs, skillsStartFields } from "./repository/skills.ts"
+import {
+  catalogFor,
+  installCatalog,
+  restoredCatalog,
+  skillLogs,
+  skillsStartFields,
+  type ReportSkippedRestore,
+} from "./repository/skills.ts"
 import {
   approvalRecord,
   checksState,
@@ -839,9 +846,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pr: PullRequestInfo,
     files: readonly ChangedFile[],
     pathInstructions: readonly PathInstruction[],
+    deliveryId: string,
   ): Promise<ReviewRepository> {
     const { baseSha, changed } = contextInputs(pr, files)
-    const context = await this.loadedContext(pr.number, baseSha, changed)
+    const context = await this.loadedContext(pr.number, baseSha, changed, deliveryId)
     const repository = await reviewRepository(context, changed, pathInstructions)
     for (const { event, fields } of skillLogs(pr.number, repository.skills)) log(event, fields)
     return repository
@@ -882,6 +890,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     number: number,
     baseSha: string,
     changed: readonly string[],
+    deliveryId: string,
   ): Promise<RepositoryContext | undefined> {
     const github = await this.github()
     const key = await this.key()
@@ -893,7 +902,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
       (error) => logError("context.unreadable", { ...fields, error }),
     )
-    if (context !== undefined && context !== cached) await this.cacheContext(context)
+    if (context !== undefined && context !== cached && (await this.ownsPending(deliveryId))) {
+      await this.cacheContext(context)
+    }
     return context
   }
 
@@ -923,8 +934,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const contexts = [...listed.values()].flatMap((stored) =>
         Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
       )
-      const skipped = (records: number): void => log("skills.restore_skipped", { number, records })
-      const sources = await restoredCatalog((await bundledSkills()).source, contexts, listed.size, skipped)
+      const pending = await this.readPending()
+      const skipped: ReportSkippedRestore = (records, reason) =>
+        log("skills.restore_skipped", { number, records, reason })
+      const sources = await restoredCatalog(
+        (await bundledSkills()).source,
+        contexts,
+        listed.size,
+        pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
+        skipped,
+      )
       this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
@@ -950,7 +969,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
       await this.recordLinkedIssues(run.deliveryId, issues)
-      const repository = await this.repositoryContext(pr, files, run.config.reviews.path_instructions)
+      const repository = await this.repositoryContext(pr, files, run.config.reviews.path_instructions, run.deliveryId)
       await this.recordRepository(run.deliveryId, repository)
       const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
