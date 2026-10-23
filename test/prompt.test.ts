@@ -228,10 +228,11 @@ describe("fullPrompt", () => {
 })
 
 describe("systemPrompt", () => {
-  it("names the bot and only the four tools the model is given, and leaves the procedure to the skills", () => {
+  it("names the bot and only the six tools the model is given, and leaves the procedure to the skills", () => {
     const text = systemPrompt("andabot")
     expect(text.startsWith("You are andabot")).toBe(true)
     expect(text).toContain("read_file")
+    expect(text).toContain("grep searches the head's files by regular expression; tree lists its directories")
     expect(text).toContain("list_changed_files")
     expect(text).toContain("get_issue reads an issue of the repository by number")
     expect(text).toContain("submit_review")

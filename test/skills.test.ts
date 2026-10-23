@@ -30,7 +30,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("7")
+    expect(review?.version).toBe("8")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",

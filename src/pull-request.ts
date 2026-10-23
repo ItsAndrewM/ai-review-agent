@@ -8,7 +8,7 @@ import {
   type PiPromptResponse,
   type PiSession,
 } from "agents/harness/pi"
-import { Lifecycle } from "agents/lifecycle"
+import { Lifecycle, type LifecycleJobContext } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
@@ -71,6 +71,7 @@ import {
   type ReviewRepository,
 } from "./repository/context.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
+import { loadSnapshot } from "./repository/load-snapshot.ts"
 import {
   catalogFor,
   installCatalog,
@@ -79,6 +80,9 @@ import {
   skillsStartFields,
   type ReportSkippedRestore,
 } from "./repository/skills.ts"
+import { SnapshotRuns, snapshotSource } from "./repository/snapshot-host.ts"
+import type { SnapshotFiles } from "./repository/snapshot.ts"
+import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   approvalRecord,
   checksState,
@@ -88,7 +92,10 @@ import {
   evaluationWorkflow,
   LastReview,
   lastReviewOf,
+  nextRecheck,
   openBlockingIn,
+  ownsRecheck,
+  RecheckJob,
   verdictAfterChecks,
   type ApprovalOutcome,
   type ApprovalState,
@@ -223,7 +230,7 @@ import {
   type WrittenSummary,
 } from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
-import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
+import { createReviewExtension, type ReviewHost, type SearchAccess, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
@@ -352,6 +359,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
   #refusedCalls = 0
+  #snapshot: SqlSnapshotFiles | undefined
+  #runs = new SnapshotRuns(
+    () => this.#snapshotFiles(),
+    async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
+  )
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -373,6 +385,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ),
     )
     return "accepted"
+  }
+
+  async onJob({ job }: LifecycleJobContext): Promise<void> {
+    if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
+      logError("job.unreadable", { id: job.id, fn: job.fn })
+      return
+    }
+    await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
   }
 
   botLogin(): string {
@@ -403,6 +423,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     this.#files = await (await this.github()).listPullRequestFiles(key, key.number)
     return this.#files
+  }
+
+  async repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess> {
+    return this.#runs.access(tool, async () => {
+      const pr = await this.pullRequest()
+      return { number: pr.number, sha: pr.head.sha }
+    })
+  }
+
+  loadedSnapshot(): SnapshotFiles | undefined {
+    return this.#snapshotFiles()
+  }
+
+  #snapshotFiles(): SqlSnapshotFiles {
+    this.#snapshot ??= new SqlSnapshotFiles(this.ctx.storage.sql)
+    return this.#snapshot
   }
 
   async pathFilters(): Promise<readonly string[]> {
@@ -689,12 +725,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "reaction":
         return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
       case "approval":
-        await this.evaluateApproval(incoming.trigger, incoming.deliveryId)
+        await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
         return
     }
   }
 
   private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<ReviewSkip | undefined> {
+    this.#runs.dropStale(incoming.key.number)
     if (pausesReview(incoming, await this.isPaused())) {
       log("review.skip", { reason: "paused", head: shortSha(incoming.headSha), number: incoming.key.number })
       return "paused"
@@ -966,6 +1003,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     this.#refusedCalls = 0
+    this.#runs.start()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
@@ -1022,6 +1060,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
+          ...this.#runs.calls(),
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -1029,6 +1068,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } catch (error) {
       await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       throw error
+    } finally {
+      await this.#runs.end(pr.number, "review_end")
     }
   }
 
@@ -1334,6 +1375,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async comment(incoming: CommentIncoming, callerVersion?: Version): Promise<void> {
     const key = await this.key()
+    this.#runs.dropStale(key.number)
     const github = await this.github()
     const thread = await this.threadFor(github, key, incoming.thread)
     const command = incoming.thread
@@ -1739,6 +1781,33 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return Value.Check(Summarizing, stored) ? stored : undefined
   }
 
+  private async evaluateWithRecheck(trigger: ApprovalTrigger, deliveryId: string, attempt: number): Promise<void> {
+    const recheck = nextRecheck(trigger, await this.evaluateApproval(trigger, deliveryId), attempt)
+    if (recheck === undefined) return
+    const scheduled = this.scheduledRecheck()
+    if (!ownsRecheck(trigger, deliveryId, scheduled)) {
+      log("approval.recheck_yielded", { delivery: deliveryId, to: scheduled?.delivery })
+      return
+    }
+    await this.lifecycle.jobs.push({
+      id: RECHECK_JOB,
+      fn: RECHECK_JOB,
+      time: Date.now() + recheck.inMs,
+      payload: { attempt: recheck.attempt, delivery: deliveryId } satisfies RecheckJob,
+    })
+    log("approval.recheck_scheduled", {
+      number: (await this.key()).number,
+      delivery: deliveryId,
+      attempt: recheck.attempt,
+      inMs: recheck.inMs,
+    })
+  }
+
+  private scheduledRecheck(): RecheckJob | undefined {
+    const payload = this.lifecycle.jobs.get(RECHECK_JOB)?.payload
+    return Value.Check(RecheckJob, payload) ? payload : undefined
+  }
+
   private async evaluateApproval(
     trigger: ApprovalTrigger,
     deliveryId: string | undefined,
@@ -1870,27 +1939,32 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     text: string,
     thread: ReviewThread | undefined,
   ): Promise<void> {
-    await this.harness.session().setModel(this.reviewModel())
-    const operationId = `chat:${incoming.deliveryId}`
-    const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
-    const prompt = incoming.thread
-      ? threadAnswerPrompt(incoming.author, text, skill, {
-          path: incoming.thread.path,
-          line: incoming.thread.line,
-          diffHunk: incoming.thread.diffHunk,
-          opening: thread?.firstCommentBody,
-        })
-      : answerPrompt(incoming.author, text, skill)
-    const result = await this.harness.prompt(prompt, { operationId })
-    const answer =
-      result.status === "done" && result.text?.trim()
-        ? result.text.trim()
-        : `I could not answer that: ${
-            result.status === "done"
-              ? "the model returned nothing"
-              : describeFailure(result, await this.storedFailureDetail(operationId))
-          }.`
-    await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+    this.#runs.start()
+    try {
+      await this.harness.session().setModel(this.reviewModel())
+      const operationId = `chat:${incoming.deliveryId}`
+      const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
+      const prompt = incoming.thread
+        ? threadAnswerPrompt(incoming.author, text, skill, {
+            path: incoming.thread.path,
+            line: incoming.thread.line,
+            diffHunk: incoming.thread.diffHunk,
+            opening: thread?.firstCommentBody,
+          })
+        : answerPrompt(incoming.author, text, skill)
+      const result = await this.harness.prompt(prompt, { operationId })
+      const answer =
+        result.status === "done" && result.text?.trim()
+          ? result.text.trim()
+          : `I could not answer that: ${
+              result.status === "done"
+                ? "the model returned nothing"
+                : describeFailure(result, await this.storedFailureDetail(operationId))
+            }.`
+      await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+    } finally {
+      await this.#runs.end(key.number, "answer_end")
+    }
   }
 
   private async respond(github: GitHubClient, key: PullRequestKey, incoming: CommentIncoming, body: string) {
@@ -2069,6 +2143,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 }
+
+const RECHECK_JOB = "approval.recheck"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
