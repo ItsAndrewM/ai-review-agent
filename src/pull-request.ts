@@ -75,6 +75,7 @@ import { loadSnapshot } from "./repository/load-snapshot.ts"
 import {
   catalogFor,
   installCatalog,
+  offeredToolNames,
   restoredCatalog,
   skillLogs,
   skillsStartFields,
@@ -1047,6 +1048,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
       await this.configureReview(repository)
+      log("review.tools", {
+        number: pr.number,
+        head: shortSha(pr.head.sha),
+        tools: offeredToolNames(this.registry.snapshot().installed()).join(" "),
+        catalog: this.#catalog !== undefined,
+      })
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       this.logTranscript(pr, "review", result)
