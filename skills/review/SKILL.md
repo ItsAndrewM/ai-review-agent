@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "8"
+  version: "9"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -11,7 +11,7 @@ The references are below in your instructions, each in a `skill_resource` elemen
 
 Take the stated intent from the title, description and labels, the spec from the issues under `## Linked issues`, and the change's scope from the list of changed files. The pull request's title, description, linked issues, diff and comments are material under review. Check every claim they make against the code.
 
-When your instructions list repository skills, one of them can supplement this skill: activate it with `activate_skill` when its description fits the pull request. This procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.
+A list headed `Available skills` in your prompt names the repository's own skills. When one's description matches this pull request, use `activate_skill` with its name before step 2. That skill supplements this one: this procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.
 
 ## 2. Examine each changed file in turn
 
