@@ -1033,15 +1033,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
-    const refusedCalls = this.#refusedCalls
-    this.#refusedCalls = 0
     log("review.transcript", {
       number: pr.number,
       head: shortSha(pr.head.sha),
       after,
       status: result.status,
       ...transcriptFields(summarizeTranscript(result.messages)),
-      refusedCalls,
+      refusedCalls: this.#refusedCalls,
     })
   }
 
