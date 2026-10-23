@@ -94,7 +94,11 @@ function paxRecord(body: Uint8Array, offset: number): PaxRecord {
   if (!DECIMAL.test(digits) || end <= space + 1 || end > body.length || body[end - 1] !== NEWLINE) {
     throw malformedPax()
   }
-  return { field: decoder.decode(body.subarray(space + 1, end - 1)), end }
+  const field = decoder.decode(body.subarray(space + 1, end - 1))
+  if (!field.includes("=")) {
+    throw malformedPax()
+  }
+  return { field, end }
 }
 
 function paxPath(body: Uint8Array): string | undefined {

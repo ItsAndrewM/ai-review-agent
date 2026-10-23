@@ -186,13 +186,14 @@ describe("readTar", () => {
     ["no space after the length", "11path=abc\n"],
     ["no newline at the record's end", "10 path=abc"],
     ["a length too short for its key", "3 path=x\n"],
+    ["no key=value", "8 pathX\n"],
   ])("rejects a pax record with %s", async (_label, rawPax) => {
     const archive = tarOf([{ rawPax }, { name: `${ROOT}/a.ts`, body: "abc" }])
 
     await expect(readAll(archive)).rejects.toThrow("pax record is malformed")
   })
 
-  it("lets each chunk of a skipped entry go before reading the next, so a large one is never held in memory", async () => {
+  it("lets the chunks of a skipped entry go as they stream past, keeping at most the latest, so a large one is never held in memory", async () => {
     const chunkSize = 65_536
     const chunkCount = 32
     const header = tarOf([{ name: `${ROOT}/big.bin`, bytes: new Uint8Array(chunkSize * chunkCount) }]).slice(0, BLOCK)
@@ -231,6 +232,6 @@ describe("readTar", () => {
       { path: "after.ts", size: 5, body: "after" },
     ])
     expect(skipped).toHaveLength(chunkCount)
-    expect(alive.most).toBe(0)
+    expect(alive.most).toBeLessThanOrEqual(1)
   })
 })
