@@ -8,7 +8,7 @@ import {
 } from "@earendil-works/pi-durable"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
-import { grep, MAX_SEARCH_CALLS, patternProblem, tree } from "../repository/search.ts"
+import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../repository/search.ts"
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
@@ -20,7 +20,7 @@ export interface SubmitOutcome {
 }
 
 export type SearchAccess =
-  | { kind: "ready"; files: SnapshotFiles }
+  | { kind: "ready"; files: SnapshotFiles; work: GrepWork }
   | { kind: "unavailable"; reason: string }
   | { kind: "spent" }
 
@@ -175,7 +175,7 @@ export async function grepText(
   if (problem !== undefined) return `Pattern refused: ${problem}`
   const access = await host.repositorySearch("grep")
   if (access.kind !== "ready") return searchRefusal(access)
-  return access.files.record() === undefined ? searchRefusal(SNAPSHOT_REPLACED) : grep(access.files, query)
+  return access.files.record() === undefined ? searchRefusal(SNAPSHOT_REPLACED) : grep(access.files, query, access.work)
 }
 
 export async function treeText(host: ReviewHost, args: { path?: string; depth?: number }): Promise<string> {
