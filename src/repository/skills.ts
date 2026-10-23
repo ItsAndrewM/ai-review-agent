@@ -66,7 +66,9 @@ export interface SkillStartFields {
 
 export type BuildCatalog = (sources: readonly SkillSource[]) => Promise<Extension>
 
-export type ReportSkippedRestore = (records: number) => void
+export type RestoreGuard = { pending: false } | { pending: true; fingerprint: string | undefined }
+
+export type ReportSkippedRestore = (records: number, reason: "records" | "fingerprint") => void
 
 type SkillContext = Pick<RepositoryContext, "tree" | "files">
 
@@ -383,15 +385,21 @@ export async function restoredCatalog(
   builtin: SkillSource,
   contexts: readonly SkillContext[],
   records: number,
+  guard: RestoreGuard,
   skipped: ReportSkippedRestore,
 ): Promise<readonly SkillSource[] | undefined> {
   const [context] = contexts
   if (records === 0) return undefined
   if (records !== 1 || context === undefined) {
-    skipped(records)
+    skipped(records, "records")
     return undefined
   }
-  return catalogFor(builtin, (await repositorySkills(context)).offered)
+  const { offered } = await repositorySkills(context)
+  if (guard.pending && offered?.fingerprint !== guard.fingerprint) {
+    skipped(records, "fingerprint")
+    return undefined
+  }
+  return catalogFor(builtin, offered)
 }
 
 export function outputFromContent(result: ToolExecutionResult | ContentOnlyResult): ToolExecutionResult {

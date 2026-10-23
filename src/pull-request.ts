@@ -25,7 +25,13 @@ import {
   type ReviewThread,
   type UpdateCheckRun,
 } from "./github/client.ts"
-import { indexCommentableLines, reviewableFiles, type ChangedFile, type MarkedLines } from "./github/diff.ts"
+import {
+  everyFileFiltered,
+  indexCommentableLines,
+  reviewableFiles,
+  type ChangedFile,
+  type MarkedLines,
+} from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -66,7 +72,14 @@ import {
 } from "./repository/context.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
 import { loadSnapshot } from "./repository/load-snapshot.ts"
-import { catalogFor, installCatalog, restoredCatalog, skillLogs, skillsStartFields } from "./repository/skills.ts"
+import {
+  catalogFor,
+  installCatalog,
+  restoredCatalog,
+  skillLogs,
+  skillsStartFields,
+  type ReportSkippedRestore,
+} from "./repository/skills.ts"
 import { SnapshotRuns, snapshotSource } from "./repository/snapshot-host.ts"
 import type { SnapshotFiles } from "./repository/snapshot.ts"
 import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
@@ -126,6 +139,7 @@ import {
   submitStanding,
   type FlightDecision,
   type PendingReview,
+  type SubmitStanding,
 } from "./review/flight.ts"
 import {
   addressedThreads,
@@ -266,6 +280,8 @@ type Replacement = Extract<FlightDecision, { kind: "replace" }>
 type RunOwner = Pick<PendingReview, "headSha" | "deliveryId">
 type HeadSkip = "not_open" | "superseded" | "already_reviewed"
 type SettingsSkip = SkipReason | "path_filters"
+type SubmitRefusal = Exclude<SubmitStanding["kind"], "post"> | "head_moved" | "posted_already"
+type RefusalDetail = { was: string; now: string } | { callerIsRoot: boolean; running: string | undefined }
 
 interface CommandCall {
   github: GitHubClient
@@ -294,6 +310,12 @@ interface ReviewRun {
   skillsFingerprint: string
   config: AndabotConfig
   configStatus: ConfigStatus
+}
+
+interface SummaryFiles {
+  read: ConfigRead
+  changed: readonly ChangedFile[]
+  reviewable: readonly ChangedFile[]
 }
 
 type ReviewSource = "tool" | "text" | "retry" | "retry_text"
@@ -336,6 +358,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #files: ChangedFile[] | undefined
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
+  #refusedCalls = 0
   #snapshot: SqlSnapshotFiles | undefined
   #runs = new SnapshotRuns(
     () => this.#snapshotFiles(),
@@ -429,12 +452,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
-    const standing = submitStanding({
-      caller: conversationId,
-      root: (await this.harness.conversation(ROOT_SESSION)).id,
-      pending: await this.readPending(),
-      running: await this.runningRootOperation(),
-    })
+    const root = (await this.harness.conversation(ROOT_SESSION)).id
+    const pending = await this.readPending()
+    const running = await this.runningRootOperation()
+    const callerIsRoot = conversationId === root
+    const standing = submitStanding({ caller: conversationId, root, pending, running })
+    if (standing.kind !== "post") await this.logRefusal(standing.kind, pending, { callerIsRoot, running })
     if (standing.kind === "no_review") {
       return { text: "Nothing to post: no review is pending. Answer in text instead.", done: false }
     }
@@ -442,19 +465,39 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.postReview(submission, standing.deliveryId)
   }
 
+  private async logRefusal(
+    reason: SubmitRefusal,
+    pending: PendingReview | undefined,
+    detail?: RefusalDetail,
+  ): Promise<void> {
+    this.#refusedCalls += 1
+    log("review.refused", {
+      number: await this.storedNumber(),
+      reason,
+      head: pending === undefined ? undefined : shortSha(pending.headSha),
+      delivery: pending?.deliveryId,
+      ...detail,
+    })
+  }
+
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
     const pending = await this.pendingFor(deliveryId)
-    if (!pending) return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    if (!pending) {
+      await this.logRefusal("not_in_flight", await this.readPending())
+      return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    }
     const posted = await this.ctx.storage.get(`posted:${pending.headSha}`)
     if (Value.Check(PostedReview, posted)) {
+      await this.logRefusal("posted_already", pending)
       await this.completeAsPostedEarlier(deliveryId, posted)
       return { text: `Posted already: review ${posted.reviewId} for this head. Nothing more to do.`, done: true }
     }
 
     const pr = await this.freshPullRequest()
     if (pr.head.sha !== pending.headSha) {
+      await this.logRefusal("head_moved", pending, { was: shortSha(pending.headSha), now: shortSha(pr.head.sha) })
       return {
-        text: `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`,
+        text: `Not posted: the pull request moved from ${shortSha(pending.headSha)} to ${shortSha(pr.head.sha)} while you reviewed. A new review will run for the new head; stop here.`,
         done: false,
       }
     }
@@ -840,9 +883,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     pr: PullRequestInfo,
     files: readonly ChangedFile[],
     pathInstructions: readonly PathInstruction[],
+    deliveryId: string,
   ): Promise<ReviewRepository> {
     const { baseSha, changed } = contextInputs(pr, files)
-    const context = await this.loadedContext(pr.number, baseSha, changed)
+    const context = await this.loadedContext(pr.number, baseSha, changed, deliveryId)
     const repository = await reviewRepository(context, changed, pathInstructions)
     for (const { event, fields } of skillLogs(pr.number, repository.skills)) log(event, fields)
     return repository
@@ -883,6 +927,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     number: number,
     baseSha: string,
     changed: readonly string[],
+    deliveryId: string,
   ): Promise<RepositoryContext | undefined> {
     const github = await this.github()
     const key = await this.key()
@@ -894,7 +939,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
       (error) => logError("context.unreadable", { ...fields, error }),
     )
-    if (context !== undefined && context !== cached) await this.cacheContext(context)
+    if (context !== undefined && context !== cached && (await this.ownsPending(deliveryId))) {
+      await this.cacheContext(context)
+    }
     return context
   }
 
@@ -924,8 +971,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const contexts = [...listed.values()].flatMap((stored) =>
         Value.Check(StoredRepositoryContext, stored) ? [stored] : [],
       )
-      const skipped = (records: number): void => log("skills.restore_skipped", { number, records })
-      const sources = await restoredCatalog((await bundledSkills()).source, contexts, listed.size, skipped)
+      const pending = await this.readPending()
+      const skipped: ReportSkippedRestore = (records, reason) =>
+        log("skills.restore_skipped", { number, records, reason })
+      const sources = await restoredCatalog(
+        (await bundledSkills()).source,
+        contexts,
+        listed.size,
+        pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
+        skipped,
+      )
       this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
@@ -947,12 +1002,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
+    this.#refusedCalls = 0
     this.#runs.start()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
       await this.recordLinkedIssues(run.deliveryId, issues)
-      const repository = await this.repositoryContext(pr, files, run.config.reviews.path_instructions)
+      const repository = await this.repositoryContext(pr, files, run.config.reviews.path_instructions, run.deliveryId)
       await this.recordRepository(run.deliveryId, repository)
       const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
@@ -993,7 +1049,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.configureReview(repository)
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
-      logTranscript(pr, "review", result)
+      this.logTranscript(pr, "review", result)
       await this.restartGrace(run.deliveryId)
       const source = await this.finishReview(pr, result, run)
       if (source) {
@@ -1015,6 +1071,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } finally {
       await this.#runs.end(pr.number, "review_end")
     }
+  }
+
+  private logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
+    log("review.transcript", {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      after,
+      status: result.status,
+      ...transcriptFields(summarizeTranscript(result.messages)),
+      refusedCalls: this.#refusedCalls,
+    })
   }
 
   private async planReview(
@@ -1171,7 +1238,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const retry = await this.harness.prompt(resubmitPrompt(refusal, rowsNeeded), {
       operationId: `${run.operationId}:retry`,
     })
-    logTranscript(pr, "retry", retry)
+    this.logTranscript(pr, "retry", retry)
     await this.restartGrace(run.deliveryId)
     if (await this.isPosted(pr)) return "retry"
     const retryRefusal = await this.postRetryText(retry, run)
@@ -1584,10 +1651,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async runSummary(pr: PullRequestInfo, run: Summarizing): Promise<SummaryOutcome> {
-    const key = await this.key()
-    const files = await (await this.github()).listPullRequestFiles(key, key.number)
+    const selection = await this.summaryFiles(pr)
+    const { read, changed, reviewable } = selection
+    if (everyFileFiltered(changed, read.config.reviews.path_filters)) {
+      log("summary.skip", {
+        reason: "path_filters",
+        head: shortSha(pr.head.sha),
+        number: pr.number,
+        config: configStatus(read),
+      })
+      return { kind: "filtered" }
+    }
     const issues = await this.linkedIssues(pr)
-    const written = await this.askForSummary(pr, files, issues, run.operationId)
+    const written = await this.askForSummary(pr, reviewable, issues, run.operationId)
     await this.restartSummaryGrace(run.deliveryId)
     if (written.kind === "unusable") {
       logError("summary.failed", { number: pr.number, head: shortSha(pr.head.sha), reason: written.reason })
@@ -1598,7 +1674,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("summary.superseded", { number: pr.number, was: shortSha(pr.head.sha), now: shortSha(now.head.sha) })
       return { kind: "moved", from: pr.head.sha, to: now.head.sha }
     }
-    return this.postSummary(pr, files, issues, written.summary, run.started)
+    return this.postSummary(pr, selection, issues, written.summary, run.started)
+  }
+
+  private async summaryFiles(pr: PullRequestInfo): Promise<SummaryFiles> {
+    const read = await this.repositoryConfig(pr)
+    const key = await this.key()
+    const changed = await (await this.github()).listPullRequestFiles(key, key.number)
+    return { read, changed, reviewable: reviewableFiles(changed, read.config.reviews.path_filters) }
   }
 
   private async askForSummary(
@@ -1647,13 +1730,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async postSummary(
     pr: PullRequestInfo,
-    files: readonly ChangedFile[],
+    { read, changed, reviewable }: SummaryFiles,
     issues: readonly LinkedIssue[],
     answer: SummarySubmissionInput,
     started: number,
   ): Promise<SummaryOutcome> {
     const reviewed = await this.readReviewed()
-    const summary = await this.storeSummary(reviewed, answer, files)
+    const summary = await this.storeSummary(reviewed, answer, reviewable)
     await this.upsertSummary(
       renderSummaryRun({
         botLogin: this.botLogin(),
@@ -1663,11 +1746,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         model: this.env.REVIEW_MODEL,
         skillsFingerprint: (await bundledSkills()).fingerprint,
         linkedIssues: issues.map(({ number }) => number),
+        configError: read.error,
       }),
     )
     log("summary.posted", {
       number: pr.number,
       head: shortSha(pr.head.sha),
+      files: changed.length,
+      filesFiltered: changed.length - reviewable.length,
+      config: configStatus(read),
       model: this.env.REVIEW_MODEL,
       ms: Date.now() - started,
     })
@@ -2095,16 +2182,6 @@ function requestedReview(call: CommandCall, headSha: string, full: boolean): Rev
 function coverageOf(scope: ReviewScope, headSha: string, resolved: number): Coverage {
   const coverage = { mode: scope.mode, to: headSha, files: scope.covered.length, resolved }
   return scope.from === undefined ? coverage : { ...coverage, from: scope.from }
-}
-
-function logTranscript(pr: PullRequestInfo, after: "review" | "retry", result: PiPromptResponse): void {
-  log("review.transcript", {
-    number: pr.number,
-    head: shortSha(pr.head.sha),
-    after,
-    status: result.status,
-    ...transcriptFields(summarizeTranscript(result.messages)),
-  })
 }
 
 function waited(context: ApprovalContext, reason: WaitReason): ApprovalOutcome {

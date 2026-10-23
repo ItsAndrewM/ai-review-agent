@@ -100,6 +100,7 @@ export interface SummaryRunInput {
   model: string
   skillsFingerprint: string
   linkedIssues: readonly number[]
+  configError?: string | undefined
 }
 
 export function renderSummaryRun(input: SummaryRunInput): string {
@@ -112,6 +113,7 @@ export function renderSummaryRun(input: SummaryRunInput): string {
       summarizedBy(input.model, input.skillsFingerprint),
       linkedIssuesLine(input.linkedIssues),
       commandsLine(input.botLogin),
+      ...configNoteLines(input.configError),
     ],
   })
 }
