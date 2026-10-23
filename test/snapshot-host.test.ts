@@ -235,6 +235,16 @@ describe("SnapshotRuns", () => {
     expect(files.record()).toBeUndefined()
   })
 
+  it("doesn't count calls answered by a remembered failure against the 40-call budget", async () => {
+    const { runs } = runsWith(async () => {
+      throw new SnapshotUnavailable("tarball", "502")
+    })
+    runs.start()
+    await runs.access("grep", headAt(SHA))
+    for (let call = 0; call < 5; call++) await runs.access(call % 2 === 0 ? "grep" : "tree", headAt(SHA))
+    expect(runs.calls()).toEqual({ greps: 1, trees: 0 })
+  })
+
   it("remembers a failed load until the last run ends, so a review does not retry it on every call", async () => {
     let attempts = 0
     const { loads, runs } = runsWith(async (store, sha) => {

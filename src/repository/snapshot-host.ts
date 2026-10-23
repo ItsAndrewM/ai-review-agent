@@ -99,9 +99,9 @@ export class SnapshotRuns {
   }
 
   async access(tool: "grep" | "tree", head: () => Promise<SearchHead>): Promise<SearchAccess> {
+    if (this.#failure !== undefined) return { kind: "unavailable", reason: this.#failure }
     if (this.#calls.grep + this.#calls.tree >= MAX_SEARCH_CALLS) return { kind: "spent" }
     this.#calls[tool] += 1
-    if (this.#failure !== undefined) return { kind: "unavailable", reason: this.#failure }
     const { number, sha } = await head()
     const files = this.files()
     if (files.record()?.sha === sha) return { kind: "ready", files }

@@ -1,3 +1,4 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
@@ -146,6 +147,22 @@ describe("createReviewExtension", () => {
     const reads = ["read_file", "list_changed_files", "get_issue"]
     const replays = tools.filter((tool) => reads.includes(tool.name)).map((tool) => tool.replay)
     expect(replays).toEqual(["safe", "safe", "safe"])
+  })
+
+  it("declares every argument grepText and treeText read, each with its type, so none is dropped on the way", () => {
+    const tools = createReviewExtension(host).tools ?? []
+    const accepts = (name: string, args: Record<string, string | number>) => {
+      const parameters = tools.find((tool) => tool.name === name)?.parameters
+      return parameters !== undefined && Value.Check(parameters, args)
+    }
+    expect(accepts("grep", { pattern: "total", glob: "*.ts", path: "src" })).toBe(true)
+    expect(
+      [{ pattern: 1 }, { pattern: "total", glob: 1 }, { pattern: "total", path: 1 }].map((args) =>
+        accepts("grep", args),
+      ),
+    ).toEqual([false, false, false])
+    expect(accepts("tree", { path: "src", depth: 3 })).toBe(true)
+    expect([{ path: 1 }, { depth: "3" }].map((args) => accepts("tree", args))).toEqual([false, false])
   })
 
   it("tells the model that a grep glob matches the repository-relative path at any depth", () => {
