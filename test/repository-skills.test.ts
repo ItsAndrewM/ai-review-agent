@@ -11,6 +11,7 @@ import {
   type RepositoryContext,
 } from "../src/repository/context.ts"
 import {
+  CATALOG_OUTPUT_LIMITS,
   catalogFor,
   installCatalog,
   MAX_CATALOG_CHARS,
@@ -852,6 +853,32 @@ describe("the catalog", () => {
         activate.replay,
       ])
       expect(tool?.execute).not.toBe(activate.execute)
+    })
+
+    it("sets output limits above the file cap in bytes and in lines on every wrapped tool, since pi-durable cuts a tool result at 50 KiB and 2,000 lines by default", () => {
+      const activate = defineTool({
+        name: "activate_skill",
+        description: "Activate a skill by name.",
+        parameters: Type.Object({ name: Type.String() }),
+        async execute() {
+          return { output: [] }
+        },
+      })
+      const read = defineTool({
+        name: "read_skill_resource",
+        description: "Read a resource of a skill.",
+        parameters: Type.Object({ name: Type.String(), path: Type.String() }),
+        async execute() {
+          return { output: [] }
+        },
+      })
+      const wrapped = withContentAsOutput(defineExtension({ name: "agents.skills", tools: [activate, read] }))
+      expect((wrapped.tools ?? []).map((tool) => tool.outputLimits)).toEqual([
+        CATALOG_OUTPUT_LIMITS,
+        CATALOG_OUTPUT_LIMITS,
+      ])
+      expect(CATALOG_OUTPUT_LIMITS.maxBytes).toBeGreaterThan(MAX_SKILL_FILE_BYTES)
+      expect(CATALOG_OUTPUT_LIMITS.maxLines).toBeGreaterThanOrEqual(CATALOG_OUTPUT_LIMITS.maxBytes)
     })
   })
 
