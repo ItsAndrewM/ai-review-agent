@@ -190,6 +190,7 @@ import {
   type ResumeStep,
 } from "./review/pause.ts"
 import {
+  ACTIVATE_SKILL_TOOL,
   answerPrompt,
   fullPrompt,
   incrementalPrompt,
@@ -1046,7 +1047,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
       await this.harness.session().setModel(this.reviewModel())
-      await this.configureReview(repository)
+      const offeredTools = await this.configureReview(repository)
+      log("review.tools", {
+        number: pr.number,
+        head: shortSha(pr.head.sha),
+        tools: offeredTools.join(" "),
+        catalog: offeredTools.includes(ACTIVATE_SKILL_TOOL),
+      })
       if (await this.replaced(pr, run)) return
       const result = await this.harness.prompt(prompt, { operationId: run.operationId })
       this.logTranscript(pr, "review", result)
@@ -1175,7 +1182,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
-  private async configureReview({ standards, skills }: ReviewRepository): Promise<void> {
+  private async configureReview({ standards, skills }: ReviewRepository): Promise<readonly string[]> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "review")
     const references = await loadReferences(source, skill)
@@ -1189,6 +1196,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
     const sources = catalogFor(source, skills.offered)
     this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+    return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }
 
   private async finishReview(

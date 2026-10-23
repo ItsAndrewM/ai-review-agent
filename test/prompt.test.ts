@@ -228,8 +228,14 @@ describe("fullPrompt", () => {
 })
 
 describe("systemPrompt", () => {
+  const SIX = ["read_file", "grep", "tree", "list_changed_files", "get_issue", "submit_review"]
+  const WITH_CATALOG = [...SIX, "activate_skill", "read_skill_resource"]
+  const MAX_PREAMBLE_LENGTH = 900
+  const CATALOG_SENTENCE =
+    "activate_skill opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files."
+
   it("names the bot and only the six tools the model is given, and leaves the procedure to the skills", () => {
-    const text = systemPrompt("andabot")
+    const text = systemPrompt("andabot", SIX)
     expect(text.startsWith("You are andabot")).toBe(true)
     expect(text).toContain("read_file")
     expect(text).toContain("grep searches the head's files by regular expression; tree lists its directories")
@@ -240,11 +246,32 @@ describe("systemPrompt", () => {
     expect(text).not.toContain("read_skill_resource")
     expect(text).not.toContain("blocking")
     expect(text).not.toContain("nitpick")
-    expect(text.length).toBeLessThan(900)
+    expect(text.length).toBeLessThan(MAX_PREAMBLE_LENGTH)
   })
 
   it("says only a submit_review call posts the review, so the closing sentence can't stand in for the call", () => {
-    expect(systemPrompt("andabot")).toContain("Only a submit_review call posts the review;")
+    expect(systemPrompt("andabot", SIX)).toContain("Only a submit_review call posts the review;")
+  })
+
+  it("names activate_skill and read_skill_resource only when the request offers them, pointing at the Available skills list", () => {
+    const withCatalog = systemPrompt("andabot", WITH_CATALOG)
+    expect(withCatalog).toContain(CATALOG_SENTENCE)
+    expect(systemPrompt("andabot", SIX)).not.toContain("activate_skill")
+  })
+
+  it("gates the catalog sentence on activate_skill alone, though the SDK installs it together with read_skill_resource today", () => {
+    expect(systemPrompt("andabot", [...SIX, "read_skill_resource"])).toBe(systemPrompt("andabot", SIX))
+    expect(systemPrompt("andabot", [...SIX, "activate_skill"])).toContain(CATALOG_SENTENCE)
+  })
+
+  it("keeps the preamble under the same length with the catalog sentence, the variant that grew, so the procedure stays in the skills", () => {
+    expect(systemPrompt("andabot", WITH_CATALOG).length).toBeLessThan(MAX_PREAMBLE_LENGTH)
+  })
+
+  it("ends the Tools paragraph with the catalog sentence and leaves the rest of the preamble as it is without the catalog", () => {
+    const without = systemPrompt("andabot", SIX)
+    const withCatalog = systemPrompt("andabot", WITH_CATALOG)
+    expect(withCatalog).toBe(without.replace("to validate and post.", `to validate and post. ${CATALOG_SENTENCE}`))
   })
 })
 

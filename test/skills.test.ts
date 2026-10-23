@@ -30,7 +30,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("8")
+    expect(review?.version).toBe("9")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -242,10 +242,10 @@ describe("bundledSkills", () => {
     )
   })
 
-  it("tells the review to activate a repository's skill only when its instructions list repository skills, since a repository without skills gets no catalog, and to grade the finding the skill asks for as a standard finding", async () => {
+  it("tells the review to use activate_skill with a matching skill's name before step 2, in the words of the catalog's list headed Available skills, and to grade the finding the skill asks for as a standard finding", async () => {
     const review = await (await bundledSkills()).source.load("review")
     expect(review?.body).toContain(
-      "When your instructions list repository skills, one of them can supplement this skill: activate it with `activate_skill` when its description fits the pull request. This procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.",
+      "A list headed `Available skills` in your prompt names the repository's own skills. When one's description matches this pull request, use `activate_skill` with its name before step 2. That skill supplements this one: this procedure and `submit_review` stay in force, the repository's skill supplies checks and vocabulary, and a tool it names that you do not have is skipped. A finding a repository skill asks for is a `standard` finding, graded suggestion or nitpick, whose basis names the skill's `SKILL.md` and the rule.",
     )
   })
 
