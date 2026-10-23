@@ -447,7 +447,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async postReview(submission: ReviewSubmissionInput, deliveryId: string): Promise<SubmitOutcome> {
     const pending = await this.pendingFor(deliveryId)
     if (!pending) {
-      await this.logRefusal("not_in_flight", undefined)
+      await this.logRefusal("not_in_flight", await this.readPending())
       return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
     }
     const posted = await this.ctx.storage.get(`posted:${pending.headSha}`)
@@ -461,7 +461,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pr.head.sha !== pending.headSha) {
       await this.logRefusal("head_moved", pending, { was: shortSha(pending.headSha), now: shortSha(pr.head.sha) })
       return {
-        text: `Not posted: the pull request moved from ${pending.headSha.slice(0, 7)} to ${pr.head.sha.slice(0, 7)} while you reviewed. A new review will run for the new head; stop here.`,
+        text: `Not posted: the pull request moved from ${shortSha(pending.headSha)} to ${shortSha(pr.head.sha)} while you reviewed. A new review will run for the new head; stop here.`,
         done: false,
       }
     }
