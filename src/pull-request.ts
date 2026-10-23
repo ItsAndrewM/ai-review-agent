@@ -203,7 +203,7 @@ import {
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import { createReviewExtension, type ReviewHost, type SubmitOutcome } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
-import { shortSha } from "./sha.ts"
+import { shortSha, shortShas } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
 export type Incoming =
@@ -689,10 +689,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return "not_open"
     }
     if (pr.head.sha !== incoming.headSha) {
+      const [was, now] = shortShas([incoming.headSha, pr.head.sha])
       log("review.skip", {
         reason: "superseded",
-        was: shortSha(incoming.headSha),
-        now: shortSha(pr.head.sha),
+        was,
+        now,
         number: pr.number,
       })
       return "superseded"
