@@ -1,6 +1,8 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
+import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
+import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import {
   changedFilesText,
@@ -177,7 +179,7 @@ describe("grepText", () => {
   const snapshot = snapshotOf(headSha, { "src/a.ts": "export const total = 1\n", "src/b.ts": "const x = total + 1\n" })
 
   it("answers from the snapshot", async () => {
-    const { host: wired } = hostWith({ search: { kind: "ready", files: snapshot } })
+    const { host: wired } = hostWith({ search: { kind: "ready", files: snapshot, work: new GrepWork() } })
     const answer = await grepText(wired, { pattern: "total", glob: "*.ts" })
     expect(answer).toContain("src/a.ts")
     expect(answer).toContain("export const total = 1")
@@ -202,21 +204,42 @@ describe("grepText", () => {
     const unfinished = new MemorySnapshotFiles()
     unfinished.begin(headSha)
     unfinished.add([{ path: "src/a.ts", content: "export const total = 1\n" }])
-    const { host: wired } = hostWith({ search: { kind: "ready", files: unfinished } })
+    const { host: wired } = hostWith({ search: { kind: "ready", files: unfinished, work: new GrepWork() } })
     const replaced =
       "Repository search is unavailable for this review: the snapshot was replaced while searching; search again. Use read_file."
     expect(await grepText(wired, { pattern: "total" })).toBe(replaced)
     expect(await treeText(wired, {})).toBe(replaced)
   })
 
+  it("lets one grep of a parallel round past a run budget a unit short of spent, and answers the other that it is spent", async () => {
+    const runs = new SnapshotRuns(
+      () => snapshot,
+      async () => {
+        throw new Error("the snapshot is already loaded")
+      },
+    )
+    const head = async () => ({ number: pr.number, sha: headSha })
+    runs.start()
+    const opened = await runs.access("tree", head)
+    if (opened.kind !== "ready") throw new Error(`expected a ready access, got ${opened.kind}`)
+    opened.work.charge(MAX_RUN_SEARCH_WORK - 1)
+    const wired = { ...host, repositorySearch: async (tool: "grep" | "tree") => runs.access(tool, head) }
+    const answers = await Promise.all([grepText(wired, { pattern: "total" }), grepText(wired, { pattern: "total" })])
+    expect(answers[0]).toContain("src/a.ts:1: export const total = 1")
+    expect(answers[1]).toBe(
+      "Grep budget spent: this review's grep calls have searched as much as one review allows. Use tree or read_file.",
+    )
+    expect(await treeText(wired, { path: "src" })).toBe("src/a.ts\nsrc/b.ts")
+  })
+
   it("refuses a bad pattern without asking for search access, so the refusal uses no budget", async () => {
-    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot, work: new GrepWork() } })
     expect(await grepText(wired, { pattern: "" })).toBe("Pattern refused: The pattern is empty.")
     expect(searched).toEqual([])
   })
 
   it("searches a pattern with two wildcards and a repeated alternation instead of refusing it", async () => {
-    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot, work: new GrepWork() } })
     expect(await grepText(wired, { pattern: String.raw`.*a.*b(.|\s)*zzz` })).toMatch(/^No match for /)
     expect(searched).toEqual(["grep"])
   })
@@ -226,7 +249,7 @@ describe("treeText", () => {
   const snapshot = snapshotOf(headSha, { "src/a.ts": "a", "src/deep/b.ts": "b", "README.md": "r" })
 
   it("lists the snapshot under a path", async () => {
-    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot } })
+    const { host: wired, searched } = hostWith({ search: { kind: "ready", files: snapshot, work: new GrepWork() } })
     expect(await treeText(wired, { path: "src", depth: 1 })).toBe("src/a.ts\nsrc/deep/")
     expect(searched).toEqual(["tree"])
   })

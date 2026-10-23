@@ -27,6 +27,24 @@ export const MAX_SEARCHED_LINE_CHARS = 500
 
 export const MAX_SEARCH_WORK = 750_000_000
 
+export const MAX_RUN_SEARCH_WORK = 4 * MAX_SEARCH_WORK
+
+export class GrepWork {
+  #units = 0
+
+  units(): number {
+    return this.#units
+  }
+
+  spent(): boolean {
+    return this.#units >= MAX_RUN_SEARCH_WORK
+  }
+
+  charge(units: number): void {
+    this.#units += units
+  }
+}
+
 export interface GrepQuery {
   pattern: string
   glob?: string
@@ -63,6 +81,8 @@ const LEADING_SLASHES = /^\/+/
 const TRAILING_SLASHES = /\/+$/
 const COSTLY_REASON =
   "this pattern costs too much to search everything. Narrow the path or glob, or use a simpler pattern (wide bounded repeats such as .{0,400} are the costly kind)."
+const WORK_SPENT =
+  "Grep budget spent: this review's grep calls have searched as much as one review allows. Use tree or read_file."
 const CAPPED_REASON = "cap of 50,000 files or 400 MB reached"
 const TRUNCATED_REASON = "GitHub truncated the tree listing"
 
@@ -221,15 +241,17 @@ const present = (part: string): boolean => part !== ""
 
 const joined = (parts: readonly string[]): string => parts.filter(present).join("\n")
 
-export function grep(files: SnapshotFiles, query: GrepQuery): string {
+export function grep(files: SnapshotFiles, query: GrepQuery, work: GrepWork): string {
   const problem = patternProblem(query.pattern)
   if (problem !== undefined) return problem
+  if (work.spent()) return WORK_SPENT
   const compiled = compile(query.pattern)
   const selected = selectorFor(query)
   const opening = compiled.literal ? literalNote(query.pattern) : ""
   const closing = joined([leftOutNote(files.leftOut(), selected), incompleteNote(files.record())])
   const room = MAX_GREP_CHARS - opening.length - closing.length - NOTE_RESERVE
   const found = search(files, selected, engineFor(compiled.regex))
+  work.charge(found.work)
   const body = resultText(found, query.pattern, room)
   return joined([opening, body, stoppedNote(found), longLineNote(found.longLines), closing])
 }

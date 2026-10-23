@@ -1060,7 +1060,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
-          ...this.#runs.calls(),
+          ...this.#runs.usage(),
           ...spendFields(await this.postedSpend(pr)),
         })
       }
