@@ -173,6 +173,10 @@ The replay harness is a script outside the Worker, not part of `pnpm check`:
   - #54's spec findings;
   - at least 10 true findings from real pull requests. _My call:_ prefer ones a later commit fixed, which is evidence they were real.
 
+**Measurement amendment, agreed with Andrew on 24 Oct 2026:** Four of the eight named false findings are nitpicks (4330057723, 4318356095, 4331431933 and 4341994189). Q3 excludes nitpicks from verify, so the eligible false set is the other four and the half-dropping bar is **two of four**. The old comments predate `basis_kind`; 13 findings have an inferred kind with the source and reason recorded per finding in `tools/verify-replay/set.json`. The model prompt receives the reconstructed finding, not its label or inference metadata.
+
+[The measurement on #31](https://github.com/ItsAndrewM/ai-review-agent/issues/31#issuecomment-6389469628) found that GLM failed the hard rule and severity targets in three runs. Kimi missed all three `await` demotions in both complete runs; its third run stopped at the agreed $2 combined cap after upstream errors, but one remaining run could not bring any of the three to a two-of-three majority. Neither model clears Q1, so Q4 and Q8 leave `VERIFY_MODEL` empty. Q10's production live check remains outstanding and needs an agreed window.
+
 ### Done when (Q10)
 
 1. **Unit tests cover:**
