@@ -3,6 +3,7 @@ import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import {
   callsByModel,
+  neuronsSince,
   ReviewSpend,
   reviewSpend,
   usageBaseline,
@@ -108,6 +109,40 @@ describe("spendSince", () => {
 
   it("is a list the posted record can store", () => {
     expect(Value.Check(ReviewSpend, spendSince({}, before, new Map([[GLM, 1]])))).toBe(true)
+  })
+})
+
+describe("neuronsSince", () => {
+  const before = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.001 } }
+  const glmAfter = { input: 21_304, output: 4_821, cacheRead: 40_050, cacheWrite: 0, usd: 0.0065 }
+
+  it("turns the dollars a model grew by since the baseline into neurons", () => {
+    expect(neuronsSince(before, { [GLM]: glmAfter })).toBeCloseTo(500, 6)
+  })
+
+  it("adds up every model that grew, one the baseline never saw included", () => {
+    const kimiAfter = { input: 9_000, output: 1_200, cacheRead: 0, cacheWrite: 0, usd: 0.011 }
+    expect(neuronsSince(before, { [GLM]: glmAfter, [KIMI]: kimiAfter })).toBeCloseTo(1_500, 6)
+  })
+
+  it("is unknown when a model whose tokens grew has no price, rather than calling the spend small", () => {
+    const unpriced = { input: 900, output: 120, cacheRead: 0, cacheWrite: 0, usd: 0 }
+    expect(neuronsSince(before, { [GLM]: glmAfter, [KIMI]: unpriced })).toBeUndefined()
+  })
+
+  it("is nothing when nothing grew", () => {
+    expect(neuronsSince(before, before)).toBe(0)
+  })
+
+  it("doesn't call a model unpriced when none of its tokens grew", () => {
+    const idle = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, usd: 0 }
+    expect(neuronsSince(before, { ...before, [KIMI]: idle })).toBe(0)
+  })
+
+  it("keeps a model priced when its ledger has dollars, even if the review's share rounds to nothing", () => {
+    const summed = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.1 + 0.2 } }
+    const after = { [GLM]: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0, usd: 0.3 } }
+    expect(neuronsSince(summed, after)).toBe(0)
   })
 })
 
