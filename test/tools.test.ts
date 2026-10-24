@@ -152,6 +152,11 @@ describe("createReviewExtension", () => {
     ])
   })
 
+  it("runs submit_review's round one call at a time, so two calls in one round can't post or verify at once", () => {
+    const submit = createReviewExtension(host).tools?.find((tool) => tool.name === SUBMIT_REVIEW_TOOL)
+    expect(submit?.executionMode).toBe("sequential")
+  })
+
   it("never reruns grep or tree after a reset, so a scan that reset the object cannot loop", () => {
     const tools = createReviewExtension(host).tools ?? []
     const replays = tools.filter((tool) => tool.name === "grep" || tool.name === "tree").map((tool) => tool.replay)

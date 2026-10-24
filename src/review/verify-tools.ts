@@ -87,6 +87,7 @@ export function verifyHostOf(review: ReviewHost, passes: Pick<VerifyHost, "passO
 
 interface OpenPass<Conversation> {
   readonly conversation: Conversation
+  readonly run: string
   readonly operationId: string
   verdicts: VerdictInput[] | undefined
 }
@@ -94,10 +95,18 @@ interface OpenPass<Conversation> {
 export class VerifyPasses<Conversation> {
   #open: OpenPass<Conversation> | undefined
 
-  open(conversation: Conversation, operationId: string): () => VerdictInput[] | undefined {
-    const pass: OpenPass<Conversation> = { conversation, operationId, verdicts: undefined }
+  open(conversation: Conversation, run: string, operationId: string): () => VerdictInput[] | undefined {
+    const open = this.#open
+    if (open !== undefined && open.run !== run) {
+      throw new Error(`verify run ${open.run} is still open, so run ${run} can't open a pass`)
+    }
+    const pass: OpenPass<Conversation> = { conversation, run, operationId, verdicts: undefined }
     this.#open = pass
     return () => pass.verdicts
+  }
+
+  close(run: string): void {
+    if (this.#open?.run === run) this.#open = undefined
   }
 
   passOf(conversation: Conversation): string | undefined {

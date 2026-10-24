@@ -238,25 +238,28 @@ describe("verifyHostOf", () => {
   it("asks the passes it is given which pass a conversation runs, and hands them the verdicts", async () => {
     const passes = new VerifyPasses<ConversationId>()
     const host = verifyHostOf(reviewHost, passes)
-    const submittedOf = passes.open(ROOT_CONVERSATION_ID, "review:d-1:verify:1")
-    expect(host.passOf(ROOT_CONVERSATION_ID)).toBe("review:d-1:verify:1")
+    const submittedOf = passes.open(ROOT_CONVERSATION_ID, "a1b2c3d4", "review:d-1:verify:a1b2c3d4:1")
+    expect(host.passOf(ROOT_CONVERSATION_ID)).toBe("review:d-1:verify:a1b2c3d4:1")
     await host.submitVerdicts(verdicts, ROOT_CONVERSATION_ID)
     expect(submittedOf()).toEqual(verdicts)
   })
 })
 
 describe("VerifyPasses", () => {
+  const firstAttempt = "review:d-1:verify:a1b2c3d4:1"
+  const retry = "review:d-1:verify:a1b2c3d4:2"
+
   it("names the pass open in a conversation, and none in another", () => {
     const passes = new VerifyPasses<string>()
     expect(passes.passOf("verify")).toBeUndefined()
-    passes.open("verify", "review:d-1:verify:1")
-    expect(passes.passOf("verify")).toBe("review:d-1:verify:1")
+    passes.open("verify", "a1b2c3d4", firstAttempt)
+    expect(passes.passOf("verify")).toBe(firstAttempt)
     expect(passes.passOf("root")).toBeUndefined()
   })
 
   it("hands a pass the verdicts its conversation submits, and ends that run", async () => {
     const passes = new VerifyPasses<string>()
-    const submittedOf = passes.open("verify", "review:d-1:verify:1")
+    const submittedOf = passes.open("verify", "a1b2c3d4", firstAttempt)
     expect(submittedOf()).toBeUndefined()
     expect(await passes.submitVerdicts(verdicts, "verify")).toEqual({ text: "Recorded 2 verdicts.", done: true })
     expect(submittedOf()).toEqual(verdicts)
@@ -264,10 +267,10 @@ describe("VerifyPasses", () => {
 
   it("counts one verdict in the singular, and records an empty submission for the runner to judge", async () => {
     const passes = new VerifyPasses<string>()
-    const submittedOf = passes.open("verify", "review:d-1:verify:1")
+    const submittedOf = passes.open("verify", "a1b2c3d4", firstAttempt)
     expect(await passes.submitVerdicts([], "verify")).toEqual({ text: "Recorded 0 verdicts.", done: true })
     expect(submittedOf()).toEqual([])
-    const single = passes.open("verify", "review:d-1:verify:2")
+    const single = passes.open("verify", "a1b2c3d4", retry)
     expect(await passes.submitVerdicts(verdicts.slice(0, 1), "verify")).toEqual({
       text: "Recorded 1 verdict.",
       done: true,
@@ -277,7 +280,7 @@ describe("VerifyPasses", () => {
 
   it("keeps a pass's first submission", async () => {
     const passes = new VerifyPasses<string>()
-    const submittedOf = passes.open("verify", "review:d-1:verify:1")
+    const submittedOf = passes.open("verify", "a1b2c3d4", firstAttempt)
     await passes.submitVerdicts(verdicts, "verify")
     await passes.submitVerdicts(verdicts.slice(1), "verify")
     expect(submittedOf()).toEqual(verdicts)
@@ -286,19 +289,42 @@ describe("VerifyPasses", () => {
   it("refuses verdicts from a conversation with no pass open, ends that run and records nothing", async () => {
     const passes = new VerifyPasses<string>()
     expect(await passes.submitVerdicts(verdicts, "verify")).toEqual({ text: NO_PASS, done: true })
-    const submittedOf = passes.open("verify", "review:d-1:verify:1")
+    const submittedOf = passes.open("verify", "a1b2c3d4", firstAttempt)
     expect(await passes.submitVerdicts(verdicts, "root")).toEqual({ text: NO_PASS, done: true })
     expect(submittedOf()).toBeUndefined()
   })
 
-  it("gives the retry's pass none of the first pass's verdicts", async () => {
+  it("lets a run open its retry's pass over its first attempt's, which gets none of the retry's verdicts", async () => {
     const passes = new VerifyPasses<string>()
-    const first = passes.open("verify", "review:d-1:verify:1")
+    const first = passes.open("verify", "a1b2c3d4", firstAttempt)
     await passes.submitVerdicts(verdicts, "verify")
-    const second = passes.open("verify", "review:d-1:verify:2")
-    expect(passes.passOf("verify")).toBe("review:d-1:verify:2")
+    const second = passes.open("verify", "a1b2c3d4", retry)
+    expect(passes.passOf("verify")).toBe(retry)
     expect(second()).toBeUndefined()
     expect(first()).toEqual(verdicts)
+  })
+
+  it("refuses a pass for another verify run while one is open, so two runs can't cross their verdicts", async () => {
+    const passes = new VerifyPasses<string>()
+    const open = passes.open("verify", "a1b2c3d4", firstAttempt)
+    expect(() => passes.open("verify", "e5f6a7b8", "review:d-1:verify:e5f6a7b8:1")).toThrow(
+      "verify run a1b2c3d4 is still open, so run e5f6a7b8 can't open a pass",
+    )
+    expect(passes.passOf("verify")).toBe(firstAttempt)
+    await passes.submitVerdicts(verdicts, "verify")
+    expect(open()).toEqual(verdicts)
+  })
+
+  it("opens a pass for another run once the open run has closed, and a close for another run changes nothing", async () => {
+    const passes = new VerifyPasses<string>()
+    passes.open("verify", "a1b2c3d4", firstAttempt)
+    passes.close("e5f6a7b8")
+    expect(passes.passOf("verify")).toBe(firstAttempt)
+    passes.close("a1b2c3d4")
+    expect(passes.passOf("verify")).toBeUndefined()
+    expect(await passes.submitVerdicts(verdicts, "verify")).toEqual({ text: NO_PASS, done: true })
+    passes.open("verify", "e5f6a7b8", "review:d-1:verify:e5f6a7b8:1")
+    expect(passes.passOf("verify")).toBe("review:d-1:verify:e5f6a7b8:1")
   })
 })
 

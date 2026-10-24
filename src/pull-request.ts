@@ -763,7 +763,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       prompt: verifyPrompt(await this.verifyContexts(run)),
       aborting: Promise.resolve(),
     }
-    return verifyWithRetry((n, signal) => this.verifyAttempt(attempts, n, signal), VERIFY_BACKSTOP_MS, backstopTimer)
+    try {
+      return await verifyWithRetry(
+        (n, signal) => this.verifyAttempt(attempts, n, signal),
+        VERIFY_BACKSTOP_MS,
+        backstopTimer,
+      )
+    } finally {
+      this.#verifyPasses.close(attempts.runId)
+    }
   }
 
   private async verifyAttempt(attempts: VerifyAttempts, n: 1 | 2, signal: AbortSignal): Promise<VerifyAttempt> {
@@ -790,21 +798,21 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       })
       attempts.aborting = this.abortOperation({ session: session.id, operationId })
     }
-    return whileUnsettled(signal, onBackstop, () => this.promptVerify(session, run.model, attempts.prompt, operationId))
+    return whileUnsettled(signal, onBackstop, () => this.promptVerify(session, attempts, operationId))
   }
 
   private async promptVerify(
     session: PiSession,
-    model: string,
-    prompt: string,
+    attempts: VerifyAttempts,
     operationId: string,
   ): Promise<VerifyAttempt> {
-    const conversationId = await this.configureVerify(session, model)
-    const submitted = this.#verifyPasses.open(conversationId, operationId)
-    return attemptOf(submitted(), await session.prompt(prompt, { operationId }))
+    const { id } = await this.harness.conversation(session.id)
+    const submitted = this.#verifyPasses.open(id, attempts.runId, operationId)
+    await this.configureVerify(session, attempts.run.model)
+    return attemptOf(submitted(), await session.prompt(attempts.prompt, { operationId }))
   }
 
-  private async configureVerify(session: PiSession, model: string): Promise<ConversationId> {
+  private async configureVerify(session: PiSession, model: string): Promise<void> {
     const { source } = await bundledSkills()
     const skill = await loadSkill(source, "verify")
     const severity = await loadReference(source, "review", SEVERITY_REFERENCE)
@@ -819,7 +827,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       BACKGROUND_CONTEXT,
     )
     await session.setModel(this.ai(model))
-    return conversation.id
   }
 
   private async verifyContexts({ pr, pending, candidates }: VerifyRun): Promise<FindingContext[]> {

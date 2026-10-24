@@ -152,6 +152,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
       "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; rejected findings and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
     callers: ["model"],
+    executionMode: "sequential",
     async execute(submission, api) {
       return submitResult(await host.submitReview(submission, api.conversationId))
     },
