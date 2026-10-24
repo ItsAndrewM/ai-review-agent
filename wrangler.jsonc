@@ -32,6 +32,11 @@
     // submit_review call grows with its findings, so raise it for large pull
     // requests whose reviews get cut off.
     "MAX_OUTPUT_TOKENS": "16000",
+    // Most neurons one review may spend on the model: one day of Workers AI's
+    // free allowance. Once spent, every tool but submit_review is blocked, and
+    // the fourth model request past it is refused, so a model that ignores the
+    // block can't run on. A model without a price counts for nothing.
+    "MAX_REVIEW_NEURONS": "10000",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",

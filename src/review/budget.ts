@@ -4,6 +4,9 @@ export const DEFAULT_REVIEW_NEURONS = 10_000
 
 export const REQUESTS_PAST_BUDGET = 3
 
+export const BUDGET_REFUSAL =
+  "the review's budget was spent and the model kept calling tools after it was told to submit"
+
 export type BudgetStanding =
   | { readonly kind: "within" }
   | { readonly kind: "spent"; readonly neurons: number; readonly budget: number }
@@ -25,10 +28,6 @@ export function budgetBlock(standing: BudgetStanding, toolName: string): string 
 
 export function refusesRequest(standing: BudgetStanding, requestsPastBudget: number): boolean {
   return standing.kind === "spent" && requestsPastBudget >= REQUESTS_PAST_BUDGET
-}
-
-export function budgetRefusal(standing: Extract<BudgetStanding, { kind: "spent" }>): string {
-  return `the review spent ${spentCount(standing.neurons)} neurons, past its budget of ${neuronCount(standing.budget)}, and kept calling tools after it was told to submit`
 }
 
 export function budgetNote(budget: number): string {

@@ -1,7 +1,10 @@
-import { Type } from "@earendil-works/pi-ai"
+import { Type, type Message } from "@earendil-works/pi-ai"
 import {
   defineExtension,
   defineTool,
+  GenerationTask,
+  hook,
+  ToolTask,
   type ConversationId,
   type Extension,
   type ToolExecutionResult,
@@ -12,7 +15,7 @@ import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { systemPrompt } from "./prompt.ts"
+import { BUDGET_REFUSAL_MARKER, systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -24,6 +27,8 @@ export type SearchAccess =
   | { kind: "unavailable"; reason: string }
   | { kind: "spent" }
 
+export type RequestBudget = "allow" | "refuse"
+
 export interface ReviewHost {
   botLogin(): string
   github(): Promise<GitHubClient>
@@ -33,6 +38,8 @@ export interface ReviewHost {
   submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
   loadedSnapshot(): SnapshotFiles | undefined
+  budgetBlock(toolName: string, conversationId: ConversationId): Promise<string | undefined>
+  requestBudget(conversationId: ConversationId): Promise<RequestBudget>
 }
 
 const MAX_FILE_CHARS = 60_000
@@ -141,7 +148,26 @@ export function createReviewExtension(host: ReviewHost): Extension {
       },
     ],
     tools: [readFile, listChangedFiles, getIssue, grepTool, treeTool, submitReview],
+    hooks: [
+      hook(ToolTask, {
+        beforeTool: async (call, api) => blockOrNothing(await host.budgetBlock(call.name, api.conversationId)),
+      }),
+      hook(GenerationTask, {
+        beforeRequest: async (request, api) =>
+          markedOrNothing(request.messages, await host.requestBudget(api.conversationId)),
+      }),
+    ],
   })
+}
+
+function blockOrNothing(message: string | undefined) {
+  return message === undefined ? undefined : { block: message }
+}
+
+function markedOrNothing(messages: readonly Message[], decision: RequestBudget) {
+  if (decision === "allow") return undefined
+  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 } satisfies Message
+  return { messages: [...messages, marker] }
 }
 
 export async function readFileText(host: ReviewHost, args: { path: string; ref?: "head" | "base" }): Promise<string> {

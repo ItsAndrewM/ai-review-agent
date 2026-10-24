@@ -66,6 +66,7 @@ export function renderSummaryComment(input: {
   skillsFingerprint?: string | undefined
   repoSkillsFingerprint?: string | undefined
   spend?: ReviewSpend | undefined
+  budgetNote?: string | undefined
   linkedIssues: readonly number[]
   instructionFiles: readonly string[]
   since?: SinceSection | undefined
@@ -79,6 +80,7 @@ export function renderSummaryComment(input: {
     footer: [
       ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint),
       ...spendLines(input.spend),
+      ...budgetNoteLines(input.budgetNote),
       linkedIssuesLine(input.linkedIssues),
       standardsLine(input.instructionFiles),
       commandsLine(input.botLogin),
@@ -231,6 +233,10 @@ function summarizedBy(model: string, skillsFingerprint: string): string {
 function spendLines(spend: ReviewSpend | undefined): string[] {
   const line = spend === undefined ? undefined : spendLine(spend)
   return line === undefined ? [] : [`<sub>${line}</sub>`]
+}
+
+function budgetNoteLines(note: string | undefined): string[] {
+  return note === undefined ? [] : [note]
 }
 
 function linkedIssuesLine(numbers: readonly number[]): string {

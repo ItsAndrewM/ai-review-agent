@@ -9,9 +9,16 @@ import {
 } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
 import type { PullRequestInfo } from "../src/github/client.ts"
-import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "../src/models.ts"
+import {
+  outputLimitOf,
+  reviewThinkingLevel,
+  withBudgetRefusal,
+  withForcedJson,
+  withOutputLimit,
+} from "../src/models.ts"
+import { BUDGET_REFUSAL } from "../src/review/budget.ts"
 import { ReviewSubmission, SummarySubmission } from "../src/review/findings.ts"
-import { answerPrompt, resubmitPrompt, summaryPrompt } from "../src/review/prompt.ts"
+import { answerPrompt, BUDGET_REFUSAL_MARKER, resubmitPrompt, summaryPrompt } from "../src/review/prompt.ts"
 
 const LIMIT = 16_000
 const GPT_OSS = { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000, maxTokens: 16_384 }
@@ -152,6 +159,51 @@ describe("withForcedJson", () => {
       posted,
     ])
     expect(options?.samplingParams).toBeUndefined()
+  })
+})
+
+describe("withBudgetRefusal", () => {
+  async function answerTo(messages: Message[], options?: SimpleStreamOptions) {
+    const { faux, seen } = recordingProvider(GPT_OSS)
+    const message = await withBudgetRefusal(faux.provider)
+      .streamSimple(faux.getModel(), normalizeContext({ messages }), options)
+      .result()
+    return { faux, message, seen }
+  }
+
+  it("answers a request whose latest message is the marker with an error, and never calls the model", async () => {
+    const { faux, message } = await answerTo([reviewRequest, user(BUDGET_REFUSAL_MARKER)])
+    expect(message).toMatchObject({ role: "assistant", content: [], stopReason: "error", errorMessage: BUDGET_REFUSAL })
+    expect(faux.state.callCount).toBe(0)
+  })
+
+  it("names the model it refused for and charges it nothing", async () => {
+    const { faux, message } = await answerTo([user(BUDGET_REFUSAL_MARKER)])
+    const { api, provider, id } = faux.getModel()
+    expect(message).toMatchObject({ api, provider, model: id, usage: { totalTokens: 0, cost: { total: 0 } } })
+  })
+
+  it("passes any other request to the model, its options untouched", async () => {
+    const options = { maxTokens: 500 }
+    const { faux, message, seen } = await answerTo([reviewRequest], options)
+    expect(message.stopReason).toBe("stop")
+    expect(faux.state.callCount).toBe(1)
+    expect(seen).toEqual([options])
+  })
+
+  it.each([
+    { label: "a marker that isn't the latest message", messages: [user(BUDGET_REFUSAL_MARKER), reviewRequest] },
+    { label: "a prompt that only quotes the marker", messages: [user(`Say ${BUDGET_REFUSAL_MARKER}.`)] },
+  ])("passes $label to the model", async ({ messages }) => {
+    const { faux } = await answerTo(messages)
+    expect(faux.state.callCount).toBe(1)
+  })
+
+  it("leaves the provider's other members in place", () => {
+    const { faux } = recordingProvider(GPT_OSS)
+    const wrapped = withBudgetRefusal(faux.provider)
+    expect(wrapped.id).toBe(faux.provider.id)
+    expect(wrapped.getModels()).toEqual(faux.provider.getModels())
   })
 })
 

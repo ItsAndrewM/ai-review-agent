@@ -1,8 +1,9 @@
+import { fauxAssistantMessage, isRetryableAssistantError } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
 import {
+  BUDGET_REFUSAL,
   budgetBlock,
   budgetNote,
-  budgetRefusal,
   budgetStanding,
   DEFAULT_REVIEW_NEURONS,
   refusesRequest,
@@ -87,11 +88,18 @@ describe("refusesRequest", () => {
   })
 })
 
-describe("budgetRefusal", () => {
-  it("says what the review spent and what it was held to, the neurons rounded down", () => {
-    expect(budgetRefusal(SPENT)).toBe(
-      "the review spent 12,345 neurons, past its budget of 10,000, and kept calling tools after it was told to submit",
+describe("BUDGET_REFUSAL", () => {
+  it("says the budget was spent and the model kept calling tools after it was told to submit", () => {
+    expect(BUDGET_REFUSAL).toBe(
+      "the review's budget was spent and the model kept calling tools after it was told to submit",
     )
+  })
+
+  it("holds no number, since pi-ai retries a failure that mentions one such as 500", () => {
+    const failed = (errorMessage: string) => fauxAssistantMessage("", { stopReason: "error", errorMessage })
+    expect(isRetryableAssistantError(failed("the review spent 10,500 neurons"))).toBe(true)
+    expect(isRetryableAssistantError(failed(BUDGET_REFUSAL))).toBe(false)
+    expect(BUDGET_REFUSAL).not.toMatch(/\d/)
   })
 })
 

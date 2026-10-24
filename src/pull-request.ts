@@ -33,7 +33,7 @@ import {
   type MarkedLines,
 } from "./github/diff.ts"
 import { log, logError, errorText } from "./log.ts"
-import { outputLimitOf, reviewThinkingLevel, withForcedJson, withOutputLimit } from "./models.ts"
+import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
 import {
@@ -106,6 +106,14 @@ import {
   type WebhookTrigger,
   type WorkflowState,
 } from "./review/approval.ts"
+import {
+  budgetBlock,
+  budgetNote,
+  budgetStanding,
+  refusesRequest,
+  reviewBudgetOf,
+  type BudgetStanding,
+} from "./review/budget.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
@@ -117,7 +125,15 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
-import { reviewSpend, spendFields, usageBaseline, type ReviewSpend, type UsageLedger } from "./review/cost.ts"
+import {
+  neuronsSince,
+  reviewSpend,
+  spendFields,
+  usageBaseline,
+  usageTotals,
+  type ReviewSpend,
+  type UsageLedger,
+} from "./review/cost.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -232,7 +248,13 @@ import {
   type WrittenSummary,
 } from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
-import { createReviewExtension, type ReviewHost, type SearchAccess, type SubmitOutcome } from "./review/tools.ts"
+import {
+  createReviewExtension,
+  type RequestBudget,
+  type ReviewHost,
+  type SearchAccess,
+  type SubmitOutcome,
+} from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
@@ -334,6 +356,11 @@ interface ApprovalContext {
   delivery: string | undefined
 }
 
+interface SpentReview {
+  pending: PendingReview
+  standing: Extract<BudgetStanding, { kind: "spent" }>
+}
+
 const StoredDetailText = Type.String()
 
 export class PullRequest extends DurableObject<Env> implements ReviewHost {
@@ -345,7 +372,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       this.registry.install(createReviewExtension(this))
       await this.restoreCatalog()
       const models = createModels()
-      models.setProvider(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit())))
+      models.setProvider(withBudgetRefusal(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit()))))
       return Harness.open(
         storage,
         {
@@ -366,6 +393,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
   #refusedCalls = 0
+  #budgetBlocked = 0
+  #requestsPastBudget = 0
   #activated: string[] = []
   #snapshot: SqlSnapshotFiles | undefined
   #runs = new SnapshotRuns(
@@ -457,6 +486,29 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const { config } = await this.repositoryConfig(await this.pullRequest())
       return config.reviews.path_filters
     })
+  }
+
+  async budgetBlock(toolName: string, conversationId: ConversationId): Promise<string | undefined> {
+    const spent = await this.spentReview(conversationId)
+    if (spent === undefined) return undefined
+    const message = budgetBlock(spent.standing, toolName)
+    if (message === undefined) return undefined
+    const first = this.#budgetBlocked === 0
+    this.#budgetBlocked += 1
+    if (first) log("review.budget_spent", { ...(await this.budgetFields(spent)), tool: toolName })
+    return message
+  }
+
+  async requestBudget(conversationId: ConversationId): Promise<RequestBudget> {
+    const spent = await this.spentReview(conversationId)
+    if (spent === undefined) return "allow"
+    const requestsPastBudget = this.#requestsPastBudget
+    if (!refusesRequest(spent.standing, requestsPastBudget)) {
+      this.#requestsPastBudget += 1
+      return "allow"
+    }
+    log("review.budget_refused", { ...(await this.budgetFields(spent)), requestsPastBudget })
+    return "refuse"
   }
 
   async submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome> {
@@ -603,6 +655,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       skillsFingerprint: attribution?.fingerprint,
       repoSkillsFingerprint: pending.repoSkillsFingerprint,
       spend,
+      budgetNote: this.budgetNoteOf(),
       linkedIssues: pending.linkedIssues ?? [],
       instructionFiles: pending.instructionFiles ?? [],
       since: reviewed.since,
@@ -1042,6 +1095,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     this.#refusedCalls = 0
+    this.#budgetBlocked = 0
+    this.#requestsPastBudget = 0
     this.#activated = []
     this.#runs.start()
     try {
@@ -1127,6 +1182,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       status: result.status,
       ...transcriptFields(summarizeTranscript(result.messages)),
       refusedCalls: this.#refusedCalls,
+      budgetBlocked: this.#budgetBlocked,
       activated: this.#activated.join(" "),
     })
   }
@@ -1370,6 +1426,39 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async runSpend(deliveryId: string): Promise<ReviewSpend> {
     const pending = await this.pendingFor(deliveryId)
     return pending === undefined ? [] : this.spendOf(pending)
+  }
+
+  private async spentReview(conversationId: ConversationId): Promise<SpentReview | undefined> {
+    const root = (await this.harness.conversation(ROOT_SESSION)).id
+    const pending = conversationId === root ? await this.readPending() : undefined
+    if (pending === undefined) return undefined
+    const standing = await this.budgetStandingOf(pending)
+    return standing.kind === "spent" ? { pending, standing } : undefined
+  }
+
+  private async budgetStandingOf(pending: PendingReview): Promise<BudgetStanding> {
+    const budget = reviewBudgetOf(this.env.MAX_REVIEW_NEURONS)
+    if (pending.usageBefore === undefined) return budgetStanding(undefined, budget)
+    try {
+      const now = usageTotals(await this.usageLedger().usage())
+      return budgetStanding(neuronsSince(pending.usageBefore, now), budget)
+    } catch (error) {
+      logError("review.usage_unreadable", { when: "budget", error: errorText(error) })
+      return budgetStanding(undefined, budget)
+    }
+  }
+
+  private async budgetFields({ pending, standing }: SpentReview) {
+    return {
+      number: await this.storedNumber(),
+      head: shortSha(pending.headSha),
+      neurons: Math.round(standing.neurons * 10) / 10,
+      budget: standing.budget,
+    }
+  }
+
+  private budgetNoteOf(): string | undefined {
+    return this.#budgetBlocked > 0 ? budgetNote(reviewBudgetOf(this.env.MAX_REVIEW_NEURONS)) : undefined
   }
 
   private async postedSpend(pr: PullRequestInfo): Promise<ReviewSpend | undefined> {
