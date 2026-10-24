@@ -174,7 +174,7 @@ export const VERIFY_RADIUS = 40
 const VERIFY_REQUEST = `Judge these draft findings by the verify skill in your instructions, and submit your verdicts with submit_verdicts. ${MATERIAL_NOTE}`
 
 const HELD_NOTE =
-  "held back: it couldn't be placed inline because its anchor didn't match the diff, so its claim must be judged on the code, not on whether the quote appears."
+  "held back: it couldn't be placed inline; judge its claim on the code, not on whether its quote appears in the window."
 
 export function citedWindow(content: string, line: number, startLine: number | undefined, radius: number): string {
   const first = Math.max(1, Math.min(startLine ?? line, line) - radius)

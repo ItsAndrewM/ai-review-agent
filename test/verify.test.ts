@@ -778,7 +778,7 @@ describe("verifyPrompt", () => {
   })
 
   const HELD_NOTE =
-    "held back: it couldn't be placed inline because its anchor didn't match the diff, so its claim must be judged on the code, not on whether the quote appears."
+    "held back: it couldn't be placed inline; judge its claim on the code, not on whether its quote appears in the window."
 
   it("tells the model a held-back candidate couldn't be placed inline, so its claim is judged on the code and not on its quote", () => {
     const text = verifyPrompt([
@@ -788,6 +788,13 @@ describe("verifyPrompt", () => {
     expect(text.match(/held back/g)).toHaveLength(1)
     expect(text.slice(0, text.indexOf("## F2"))).not.toContain("held back")
     expect(text.slice(text.indexOf("## F2"), text.indexOf("basis:", text.indexOf("## F2")))).toContain(HELD_NOTE)
+  })
+
+  it("names no cause for a candidate being held back, since findings are held back for more than a failed anchor", () => {
+    const text = verifyPrompt([contextOf({ line: 40 }, {}, { held: true })])
+    const heldLine = text.split("\n").find((row) => row.startsWith("held back:"))
+    expect(heldLine).toBe(HELD_NOTE)
+    expect(heldLine).not.toMatch(/because|anchor|didn't match/i)
   })
 
   it("carries no such line for a candidate that was posted inline", () => {
