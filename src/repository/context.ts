@@ -1,5 +1,5 @@
 import { Type } from "typebox"
-import { SYMLINK_MODE, type GitHubClient, type RepoRef, type RepositoryTree, type TreeEntry } from "../github/client.ts"
+import { isSymlink, type GitHubClient, type RepoRef, type RepositoryTree, type TreeEntry } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { StoredPending } from "../review/flight.ts"
@@ -112,8 +112,6 @@ export function unloadedPaths(context: RepositoryContext, changed: readonly stri
 
 const inLoadOrder = (paths: readonly string[]): string[] =>
   LOAD_ORDER.flatMap((source) => paths.filter((path) => sourceOf(path) === source))
-
-const isSymlink = ({ mode }: TreeEntry): boolean => mode === SYMLINK_MODE
 
 const isUnchangedFile = (before: TreeEntry | undefined, now: TreeEntry): boolean =>
   before !== undefined && before.sha === now.sha && !isSymlink(before) && !isSymlink(now)

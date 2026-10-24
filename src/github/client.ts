@@ -207,6 +207,8 @@ export interface CheckRunSummary {
 
 export const SYMLINK_MODE = "120000"
 
+export const isSymlink = ({ mode }: Pick<TreeEntry, "mode">): boolean => mode === SYMLINK_MODE
+
 export interface TreeEntry {
   path: string
   type: "blob" | "tree"
