@@ -60,6 +60,7 @@ import {
   CONTEXT_PREFIX,
   contextInputs,
   contextKey,
+  donorKey,
   loadRepositoryContext,
   readRepositoryContext,
   repositoryRecord,
@@ -360,6 +361,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #incompleteDelivery: string | undefined
   #approving = new Set<string>()
   #refusedCalls = 0
+  #activated: string[] = []
   #snapshot: SqlSnapshotFiles | undefined
   #runs = new SnapshotRuns(
     () => this.#snapshotFiles(),
@@ -933,11 +935,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const key = await this.key()
     const cached = await this.cachedContext(baseSha)
+    const donor = cached === undefined ? await this.donorContext(baseSha) : undefined
     const fields = { number, base: shortSha(baseSha) }
     const unreadableFile = (path: string, error: string): void =>
       logError("context.unreadable", { ...fields, path, error })
     const context = await readRepositoryContext(
-      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached),
+      () => loadRepositoryContext(github, key, baseSha, changed, unreadableFile, cached, donor),
       (error) => logError("context.unreadable", { ...fields, error }),
     )
     if (context !== undefined && context !== cached && (await this.ownsPending(deliveryId))) {
@@ -952,6 +955,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (Value.Check(StoredRepositoryContext, stored)) return stored
     if (stored !== undefined) await this.ctx.storage.delete(key)
     return undefined
+  }
+
+  private async donorContext(baseSha: string): Promise<RepositoryContext | undefined> {
+    const listed = await this.ctx.storage.list({ prefix: CONTEXT_PREFIX })
+    const key = donorKey([...listed.keys()], baseSha)
+    const stored = key === undefined ? undefined : listed.get(key)
+    return Value.Check(StoredRepositoryContext, stored) ? stored : undefined
   }
 
   private async cacheContext(context: RepositoryContext): Promise<void> {
@@ -982,16 +992,36 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
         skipped,
       )
-      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
+        this.reportActivation(name),
+      )
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
     }
+  }
+
+  private async reportActivation(name: string): Promise<void> {
+    this.#activated.push(name)
+    log("skills.activated", {
+      number: await this.storedNumber(),
+      head: await this.pendingHead(),
+      name,
+    })
   }
 
   private async storedNumber(): Promise<number | undefined> {
     try {
       const key = await this.ctx.storage.get("key")
       return Value.Check(PullRequestKey, key) ? key.number : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async pendingHead(): Promise<string | undefined> {
+    try {
+      const pending = await this.readPending()
+      return pending === undefined ? undefined : shortSha(pending.headSha)
     } catch {
       return undefined
     }
@@ -1004,6 +1034,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async runReview(pr: PullRequestInfo, incoming: ReviewIncoming, run: ReviewRun): Promise<void> {
     this.#refusedCalls = 0
+    this.#activated = []
     this.#runs.start()
     try {
       const files = await this.openRun(pr, run)
@@ -1088,6 +1119,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       status: result.status,
       ...transcriptFields(summarizeTranscript(result.messages)),
       refusedCalls: this.#refusedCalls,
+      activated: this.#activated.join(" "),
     })
   }
 
@@ -1195,7 +1227,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       BACKGROUND_CONTEXT,
     )
     const sources = catalogFor(source, skills.offered)
-    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension)
+    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
+      this.reportActivation(name),
+    )
     return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }
 

@@ -4,6 +4,7 @@ import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import type { TreeEntry } from "../github/client.ts"
 import { BUNDLED_SKILL_NAMES } from "../review/bundled-skills.ts"
+import { ACTIVATE_SKILL_TOOL } from "../review/prompt.ts"
 import { describedSkillEntry, manifestSource, sha256Hex, type SkillFile } from "../review/skills.ts"
 import type { RepositoryContext } from "./context.ts"
 
@@ -69,6 +70,8 @@ export type BuildCatalog = (sources: readonly SkillSource[]) => Promise<Extensio
 export type RestoreGuard = { pending: false } | { pending: true; fingerprint: string | undefined }
 
 export type ReportSkippedRestore = (records: number, reason: "records" | "fingerprint") => void
+
+export type ReportActivation = (name: string) => void | Promise<void>
 
 type SkillContext = Pick<RepositoryContext, "tree" | "files">
 
@@ -415,14 +418,29 @@ export const withOutputFromContent =
   async (...args: Args): Promise<ToolExecutionResult> =>
     outputFromContent(await execute(...args))
 
-const toolWithOutput = (tool: ToolRegistration): ToolRegistration => ({
-  ...tool,
-  outputLimits: CATALOG_OUTPUT_LIMITS,
-  execute: withOutputFromContent(tool.execute.bind(tool)),
-})
+export const ACTIVATION_ARGS = Type.Object({ name: Type.String() })
 
-export function withContentAsOutput(extension: Extension): Extension {
-  return { ...extension, tools: (extension.tools ?? []).map(toolWithOutput) }
+export const withActivationReport =
+  <Args extends ExecuteArgs>(
+    execute: (...args: Args) => Promise<ToolExecutionResult | ContentOnlyResult>,
+    report: ReportActivation,
+  ) =>
+  async (...args: Args): Promise<ToolExecutionResult | ContentOnlyResult> => {
+    if (Value.Check(ACTIVATION_ARGS, args[0])) await report(args[0].name)
+    return execute(...args)
+  }
+
+const toolWithOutput = (tool: ToolRegistration, report: ReportActivation): ToolRegistration => {
+  const execute = tool.execute.bind(tool)
+  return {
+    ...tool,
+    outputLimits: CATALOG_OUTPUT_LIMITS,
+    execute: withOutputFromContent(tool.name === ACTIVATE_SKILL_TOOL ? withActivationReport(execute, report) : execute),
+  }
+}
+
+export function withContentAsOutput(extension: Extension, report: ReportActivation): Extension {
+  return { ...extension, tools: (extension.tools ?? []).map((tool) => toolWithOutput(tool, report)) }
 }
 
 export async function installCatalog(
@@ -430,12 +448,13 @@ export async function installCatalog(
   installed: Extension | undefined,
   sources: readonly SkillSource[] | undefined,
   build: BuildCatalog,
+  report: ReportActivation,
 ): Promise<Extension | undefined> {
   if (sources === undefined) {
     if (installed !== undefined) registry.uninstall(installed)
     return undefined
   }
-  const extension = withContentAsOutput(await build(sources))
+  const extension = withContentAsOutput(await build(sources), report)
   registry.install(extension)
   return extension
 }

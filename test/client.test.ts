@@ -174,7 +174,7 @@ describe("getTree", () => {
     expect(tree.entries).toEqual([{ path: "a", type: "blob", sha: "1" }])
   })
 
-  it("keeps a blob's path, type, sha and size, which the skill caps read before any fetch, a tree's path, type and sha, and drops a submodule's commit entry", async () => {
+  it("keeps a blob's path, type, sha, size and mode, which the skill caps and the context cache read before any fetch, a tree's path, type, sha and mode, and drops a submodule's commit entry", async () => {
     const tree = await treeAt(
       respond(
         200,
@@ -191,8 +191,28 @@ describe("getTree", () => {
       ),
     )
     expect(tree.entries).toEqual([
-      { path: "CLAUDE.md", type: "blob", sha: "1", size: 120 },
-      { path: "src", type: "tree", sha: "2" },
+      { path: "CLAUDE.md", type: "blob", sha: "1", size: 120, mode: "100644" },
+      { path: "src", type: "tree", sha: "2", mode: "040000" },
+    ])
+  })
+
+  it("keeps a symlink's mode, which tells it from a regular file, and gives an entry with no mode none rather than an undefined one", async () => {
+    const tree = await treeAt(
+      respond(
+        200,
+        JSON.stringify({
+          sha: "abc",
+          truncated: false,
+          tree: [
+            { path: "AGENTS.md", mode: "120000", type: "blob", sha: "1", size: 9 },
+            { path: "CLAUDE.md", type: "blob", sha: "2", size: 5 },
+          ],
+        }),
+      ),
+    )
+    expect(tree.entries).toStrictEqual([
+      { path: "AGENTS.md", type: "blob", sha: "1", size: 9, mode: "120000" },
+      { path: "CLAUDE.md", type: "blob", sha: "2", size: 5 },
     ])
   })
 
@@ -203,6 +223,8 @@ describe("getTree", () => {
     await expect(treeAt(respond(200, JSON.stringify(withoutPath)))).rejects.toThrow(named)
     const fractionalSize = { sha: "abc", truncated: false, tree: [{ path: "a", type: "blob", sha: "1", size: 1.5 }] }
     await expect(treeAt(respond(200, JSON.stringify(fractionalSize)))).rejects.toThrow(named)
+    const numericMode = { sha: "abc", truncated: false, tree: [{ path: "a", type: "blob", sha: "1", mode: 100644 }] }
+    await expect(treeAt(respond(200, JSON.stringify(numericMode)))).rejects.toThrow(named)
     await expect(treeAt(respond(200, JSON.stringify({ sha: "abc", tree: [] })))).rejects.toThrow(named)
   })
 

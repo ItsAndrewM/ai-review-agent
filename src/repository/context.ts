@@ -1,5 +1,5 @@
 import { Type } from "typebox"
-import type { GitHubClient, RepoRef, RepositoryTree, TreeEntry } from "../github/client.ts"
+import { SYMLINK_MODE, type GitHubClient, type RepoRef, type RepositoryTree, type TreeEntry } from "../github/client.ts"
 import type { ChangedFile } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { StoredPending } from "../review/flight.ts"
@@ -57,7 +57,13 @@ export const StoredRepositoryContext = Type.Object({
     sha: Type.String(),
     truncated: Type.Boolean(),
     entries: Type.Array(
-      Type.Object({ path: Type.String(), type: Type.Literal("blob"), sha: Type.String(), size: Type.Integer() }),
+      Type.Object({
+        path: Type.String(),
+        type: Type.Literal("blob"),
+        sha: Type.String(),
+        size: Type.Integer(),
+        mode: Type.Optional(Type.String()),
+      }),
     ),
   }),
   files: Type.Record(Type.String(), Type.String()),
@@ -76,6 +82,11 @@ export const contextKey = (baseSha: string): string => `${CONTEXT_PREFIX}${baseS
 export function staleContextKeys(keys: readonly string[], baseSha: string): string[] {
   const current = contextKey(baseSha)
   return keys.filter((key) => key.startsWith(CONTEXT_PREFIX) && key !== current)
+}
+
+export function donorKey(keys: readonly string[], baseSha: string): string | undefined {
+  const others = staleContextKeys(keys, baseSha)
+  return others.length === 1 ? others[0] : undefined
 }
 
 export function contextInputs(
@@ -102,15 +113,37 @@ export function unloadedPaths(context: RepositoryContext, changed: readonly stri
 const inLoadOrder = (paths: readonly string[]): string[] =>
   LOAD_ORDER.flatMap((source) => paths.filter((path) => sourceOf(path) === source))
 
+const isSymlink = ({ mode }: TreeEntry): boolean => mode === SYMLINK_MODE
+
+const isUnchangedFile = (before: TreeEntry | undefined, now: TreeEntry): boolean =>
+  before !== undefined && before.sha === now.sha && !isSymlink(before) && !isSymlink(now)
+
+export function carriedBodies(
+  entries: readonly TreeEntry[],
+  donor: RepositoryContext | undefined,
+): Record<string, string> {
+  if (donor === undefined) return {}
+  const donorEntries = new Map(donor.tree.entries.map((entry): [string, TreeEntry] => [entry.path, entry]))
+  return Object.fromEntries(
+    entries.flatMap((entry): [string, string][] => {
+      const body = cachedBody(donor, entry.path)
+      const unchanged = isUnchangedFile(donorEntries.get(entry.path), entry)
+      return unchanged && body !== undefined && body !== MISSING_AT_BASE ? [[entry.path, body]] : []
+    }),
+  )
+}
+
 const contextAt = async (
   github: GitHubClient,
   ref: RepoRef,
   baseSha: string,
   cached: RepositoryContext | undefined,
+  donor: RepositoryContext | undefined,
 ): Promise<RepositoryContext> => {
   if (cached?.baseSha === baseSha) return cached
   const tree = await github.getTree(ref, baseSha)
-  return { baseSha, tree: { ...tree, entries: entriesThatMatter(tree.entries) }, files: {} }
+  const entries = entriesThatMatter(tree.entries)
+  return { baseSha, tree: { ...tree, entries }, files: carriedBodies(entries, donor) }
 }
 
 const loadedFile = async (
@@ -144,8 +177,9 @@ export async function loadRepositoryContext(
   changed: readonly string[],
   unreadable: ReportUnreadableFile,
   cached?: RepositoryContext,
+  donor?: RepositoryContext,
 ): Promise<RepositoryContext> {
-  const context = await contextAt(github, ref, baseSha, cached)
+  const context = await contextAt(github, ref, baseSha, cached, donor)
   const read: ReadFile = (path) => github.getFileContent(ref, path, baseSha)
   const ahead = new Set([...inLoadOrder(unloadedPaths(context, changed)), ...unloadedSkillBodies(context)])
   const first = [...ahead].slice(0, MAX_INSTRUCTION_LOADS)
