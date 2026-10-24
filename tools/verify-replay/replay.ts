@@ -1,11 +1,11 @@
-import { appendFile, open, readFile, unlink, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { createModels } from "@earendil-works/pi-ai/models"
 import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/cloudflare-workers-ai"
 import { outputLimitOf, reviewThinkingLevel } from "../../src/models.ts"
 import { renderSkillWithResources, buildSkillManifest, manifestSource } from "../../src/review/skills.ts"
 import { verifyPrompt, type VerdictInput } from "../../src/review/verify.ts"
-import { SpendBudget } from "./budget.ts"
+import { SpendBudget, requirePricedModel } from "./budget.ts"
 import { GitFiles, replayContexts, replaySource } from "./checkout.ts"
 import { attemptReplay, type ReplayAnswer } from "./conversation.ts"
 import { corpusProblems } from "./coverage.ts"
@@ -123,6 +123,7 @@ async function measure(
   models.setProvider(cloudflareWorkersAIProvider())
   const model = models.getModel("cloudflare-workers-ai", config.modelId)
   if (model === undefined) throw new Error(`Workers AI model not in the pinned pi-ai catalog: ${config.modelId}`)
+  requirePricedModel(config.modelId, model.cost)
   const files = new GitFiles(ROOT)
   const system = await instructions()
   const runs: RunVerdicts[] = []
@@ -181,6 +182,7 @@ async function main(): Promise<void> {
   if (problems.length > 0) throw new Error(`Corpus is incomplete; no model call made:\n${problems.join("\n")}`)
   await checkWorkersAiAccess(account, token, fetch)
   const lockPath = new URL("../../.superpowers/sdd/2026-10-24-verify/replay-costs.lock", import.meta.url)
+  await mkdir(new URL("./", lockPath), { recursive: true })
   const lock = await open(lockPath, "wx")
   try {
     await runMeasured(options.model, options.runs, account, token, set.findings)
