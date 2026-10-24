@@ -20,6 +20,7 @@ export const StoredPending = Type.Object({
   repoSkillsFingerprint: Type.Optional(Type.String()),
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
   configError: Type.Optional(Type.String()),
+  verifyModel: Type.Optional(Type.String()),
 })
 
 export type StoredPending = Static<typeof StoredPending>
@@ -53,6 +54,14 @@ export function decideFlight(pending: PendingReview | undefined, headSha: string
 
 export function ownsOperation(pending: PendingReview, operationId: string): boolean {
   return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
+}
+
+export function reviewOperations<Operation extends { operationId: string }>(
+  pending: PendingReview,
+  root: readonly Operation[],
+  verify: readonly Operation[],
+): Operation[] {
+  return [...verify, ...root].filter(({ operationId }) => ownsOperation(pending, operationId))
 }
 
 export type SubmitStanding = { kind: "post"; deliveryId: string } | { kind: "no_review" } | { kind: "not_in_flight" }
@@ -92,4 +101,13 @@ export function runStanding(
 ): RunStanding {
   if (pending?.deliveryId === deliveryId) return "in_flight"
   return endedDelivery === deliveryId ? "ended" : "replaced"
+}
+
+export function standingAfterVerify(
+  pending: PendingReview | undefined,
+  deliveryId: string,
+  headNow: string,
+): "post" | "replaced" | "moved" {
+  if (pending?.deliveryId !== deliveryId) return "replaced"
+  return pending.headSha === headNow ? "post" : "moved"
 }

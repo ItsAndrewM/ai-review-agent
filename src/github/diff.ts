@@ -114,7 +114,9 @@ function isMarked(anchor: Anchor, marked: MarkedLines | undefined): boolean {
   return (anchor.side === "RIGHT" ? marked.right : marked.left).has(anchor.line)
 }
 
-function truncateAtLine(text: string, maxChars: number): string {
+export const MAX_PATCH_CHARS = 40_000
+
+export function truncateAtLine(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text
   const cut = text.lastIndexOf("\n", maxChars)
   return `${cut === -1 ? "" : text.slice(0, cut)}\n... (patch truncated at ${maxChars} characters)`
@@ -168,7 +170,7 @@ export const everyFileFiltered = (files: readonly ChangedFile[], patterns: reado
 
 export function renderPatches(
   files: readonly ChangedFile[],
-  maxCharsPerFile = 40_000,
+  maxCharsPerFile = MAX_PATCH_CHARS,
   marked?: ReadonlyMap<string, MarkedLines>,
 ): string {
   return files
@@ -176,7 +178,7 @@ export function renderPatches(
     .join("\n\n")
 }
 
-export function renderChanges(files: readonly ChangedFile[], maxCharsPerFile = 40_000): string {
+export function renderChanges(files: readonly ChangedFile[], maxCharsPerFile = MAX_PATCH_CHARS): string {
   return files.map((file) => renderFile(file, maxCharsPerFile, (patch) => patch)).join("\n\n")
 }
 

@@ -12,6 +12,8 @@ import {
   renderSkillWithResources,
   type SkillFile,
 } from "../src/review/skills.ts"
+import { SUBMIT_VERDICTS_TOOL, VERIFY_TOOL_BUDGET } from "../src/review/verify-tools.ts"
+import { verifyPrompt } from "../src/review/verify.ts"
 
 const ROOT = new URL("../skills/", import.meta.url).pathname
 const walk = (dir: string): string[] =>
@@ -25,10 +27,10 @@ const files: SkillFile[] = walk(ROOT).map((full) => ({
 }))
 
 describe("buildSkillManifest", () => {
-  it("lists the three skills with their frontmatter and the review references", () => {
+  it("lists the four skills with their frontmatter and the review references", () => {
     const manifest = buildSkillManifest(files, "abc")
     expect(manifest.id).toBe("builtin")
-    expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
+    expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
     const review = manifest.skills.find((s) => s.name === "review")
     expect(review?.version).toBe("9")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
@@ -168,9 +170,9 @@ describe("renderSkillWithResources", () => {
 describe("manifestSource", () => {
   const source = manifestSource(buildSkillManifest(files, "fingerprint"))
 
-  it("carries the manifest's id and fingerprint and lists the three skills", async () => {
+  it("carries the manifest's id and fingerprint and lists the four skills", async () => {
     expect([source.id, source.fingerprint]).toEqual(["builtin", "fingerprint"])
-    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
+    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
   })
 
   it("loads a skill with its resources as descriptors, without their content", async () => {
@@ -208,10 +210,10 @@ describe("bundledSkills", () => {
     expect(BUNDLED_SKILL_FILES.map((f) => f.path).sort()).toEqual(files.map((f) => f.path).sort())
   })
 
-  it("lists the three skills and serves a reference through the source", async () => {
+  it("lists the four skills and serves a reference through the source", async () => {
     const { source, fingerprint } = await bundledSkills()
     expect(fingerprint).toBe(await fingerprintOf(files))
-    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary"])
+    expect((await source.list()).map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
     const resource = await source.readResource?.("review", "references/severity.md")
     expect(resource?.content).toContain("blocking")
   })
@@ -265,5 +267,34 @@ describe("bundledSkills", () => {
     expect(review?.body).toContain(
       "Done when every changed file, or in an incremental review every file under `## Changes since your last review`, has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.",
     )
+  })
+
+  it("points verify at the patches heading and the held-back mark its prompt writes, the severity reference it is handed, its tool budget and submit_verdicts", async () => {
+    const verify = await (await bundledSkills()).source.load("verify")
+    const held = {
+      path: "src/a.ts",
+      line: 40,
+      quote: "q",
+      basis_kind: "defect",
+      basis: "b",
+      severity: "blocking",
+      title: "t",
+      body: "b",
+    } as const
+    const prompt = verifyPrompt([
+      {
+        candidate: { id: "F1", finding: held, held: true },
+        window: "    1 | a",
+        patch: "@@ -1 +1 @@\n-a\n+b",
+        issue: undefined,
+      },
+    ])
+    for (const mark of ["`## Patches`", "`held back:`"]) {
+      expect(prompt).toContain(mark.slice(1, -1))
+      expect(verify?.body).toContain(mark)
+    }
+    expect(verify?.body).toContain("`references/severity.md`, below")
+    expect(verify?.body).toContain(`at most ${VERIFY_TOOL_BUDGET} tool calls`)
+    expect(verify?.body).toContain(`\`${SUBMIT_VERDICTS_TOOL}\``)
   })
 })

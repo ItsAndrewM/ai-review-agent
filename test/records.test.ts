@@ -1,6 +1,6 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { PostedReview, PullRequestKey, SummaryCommentId } from "../src/records.ts"
+import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from "../src/records.ts"
 
 describe("PullRequestKey", () => {
   it("accepts the key the object stores on its first event", () => {
@@ -11,6 +11,13 @@ describe("PullRequestKey", () => {
 
   it("rejects a key without the installation its token is minted for", () => {
     expect(Value.Check(PullRequestKey, { owner: "ItsAndrewM", repo: "ai-review-agent", number: 44 })).toBe(false)
+  })
+})
+
+describe("StoredSessionId", () => {
+  it("reads a stored Pi session's id, the summary's or verify's, as a string", () => {
+    expect(Value.Check(StoredSessionId, "2")).toBe(true)
+    expect(Value.Check(StoredSessionId, 2)).toBe(false)
   })
 })
 
@@ -49,6 +56,12 @@ describe("PostedReview", () => {
     ]
     expect(Value.Check(PostedReview, { ...posted, spend })).toBe(true)
     expect(Value.Check(PostedReview, { ...posted, spend: [{ ...spend[0], usd: "0.0067" }] })).toBe(false)
+  })
+
+  it("accepts whether the review posted unverified, which a later run of the head repeats in its title", () => {
+    expect(Value.Check(PostedReview, { ...posted, unverified: true })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, unverified: false })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, unverified: "yes" })).toBe(false)
   })
 
   it("rejects a record whose event isn't one GitHub posts", () => {

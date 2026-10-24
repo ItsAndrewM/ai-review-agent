@@ -9,13 +9,14 @@ import {
   type Extension,
   type ToolExecutionResult,
 } from "@earendil-works/pi-durable"
+import type { Static } from "typebox"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
 import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../repository/search.ts"
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
+import { BUDGET_REFUSAL_MARKER, numberedLine, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -44,22 +45,80 @@ export interface ReviewHost {
 
 const MAX_FILE_CHARS = 60_000
 
-export function createReviewExtension(host: ReviewHost): Extension {
-  const readFile = defineTool({
+export const ReadFileParameters = Type.Object({
+  path: Type.String({ description: "Path from the repository root." }),
+  ref: Type.Optional(
+    Type.Union([Type.Literal("head"), Type.Literal("base")], { description: "head (default) or base." }),
+  ),
+})
+
+export type ReadFileArgs = Static<typeof ReadFileParameters>
+
+export const GrepParameters = Type.Object({
+  pattern: Type.String({
+    description:
+      "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works, but \\s matches ASCII whitespace only, and lookaround and backreferences aren't supported: a pattern using them is searched as literal text.",
+  }),
+  glob: Type.Optional(
+    Type.String({
+      description:
+        "Only search files whose path matches this glob. It is matched against the path from the repository root, not from `path`, and a pattern without a slash matches at any depth, so `*.ts` finds every TypeScript file.",
+    }),
+  ),
+  path: Type.Optional(Type.String({ description: "Only search under this directory, from the repository root." })),
+})
+
+export type GrepArgs = Static<typeof GrepParameters>
+
+export const TreeParameters = Type.Object({
+  path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
+  depth: Type.Optional(Type.Integer({ minimum: 1, description: "How many levels to list, at least 1. Default 2." })),
+})
+
+export type TreeArgs = Static<typeof TreeParameters>
+
+type ToolText<Args> = (args: Args, conversationId: ConversationId) => Promise<string>
+
+export function readFileTool(read: ToolText<ReadFileArgs>) {
+  return defineTool({
     name: "read_file",
     description:
       "Read a file from the repository at the pull request's head (default) or base commit, with line numbers. Use it when the diff alone cannot settle a question.",
-    parameters: Type.Object({
-      path: Type.String({ description: "Path from the repository root." }),
-      ref: Type.Optional(
-        Type.Union([Type.Literal("head"), Type.Literal("base")], { description: "head (default) or base." }),
-      ),
-    }),
+    parameters: ReadFileParameters,
     replay: "safe",
-    async execute(args) {
-      return text(await readFileText(host, args))
+    async execute(args, api) {
+      return text(await read(args, api.conversationId))
     },
   })
+}
+
+export function grepTool(search: ToolText<GrepArgs>) {
+  return defineTool({
+    name: "grep",
+    description:
+      "Search the files at the pull request's head by regular expression, line by line. Use it to find the callers of a changed function, an export's users, or where a name is defined.",
+    parameters: GrepParameters,
+    replay: "unsafe",
+    async execute(args, api) {
+      return text(await search(args, api.conversationId))
+    },
+  })
+}
+
+export function treeTool(list: ToolText<TreeArgs>) {
+  return defineTool({
+    name: "tree",
+    description: "List the directories and files at the pull request's head under a path.",
+    parameters: TreeParameters,
+    replay: "unsafe",
+    async execute(args, api) {
+      return text(await list(args, api.conversationId))
+    },
+  })
+}
+
+export function createReviewExtension(host: ReviewHost): Extension {
+  const readFile = readFileTool((args) => readFileText(host, args))
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
@@ -83,43 +142,9 @@ export function createReviewExtension(host: ReviewHost): Extension {
     },
   })
 
-  const grepTool = defineTool({
-    name: "grep",
-    description:
-      "Search the files at the pull request's head by regular expression, line by line. Use it to find the callers of a changed function, an export's users, or where a name is defined.",
-    parameters: Type.Object({
-      pattern: Type.String({
-        description:
-          "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works, but \\s matches ASCII whitespace only, and lookaround and backreferences aren't supported: a pattern using them is searched as literal text.",
-      }),
-      glob: Type.Optional(
-        Type.String({
-          description:
-            "Only search files whose path matches this glob. It is matched against the path from the repository root, not from `path`, and a pattern without a slash matches at any depth, so `*.ts` finds every TypeScript file.",
-        }),
-      ),
-      path: Type.Optional(Type.String({ description: "Only search under this directory, from the repository root." })),
-    }),
-    replay: "unsafe",
-    async execute(args) {
-      return text(await grepText(host, args))
-    },
-  })
+  const grepFiles = grepTool((query) => grepText(host, query))
 
-  const treeTool = defineTool({
-    name: "tree",
-    description: "List the directories and files at the pull request's head under a path.",
-    parameters: Type.Object({
-      path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
-      depth: Type.Optional(
-        Type.Integer({ minimum: 1, description: "How many levels to list, at least 1. Default 2." }),
-      ),
-    }),
-    replay: "unsafe",
-    async execute(args) {
-      return text(await treeText(host, args))
-    },
-  })
+  const listTree = treeTool((args) => treeText(host, args))
 
   const submitReview = defineTool({
     name: SUBMIT_REVIEW_TOOL,
@@ -127,6 +152,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
       "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; rejected findings and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
     callers: ["model"],
+    executionMode: "sequential",
     async execute(submission, api) {
       return submitResult(await host.submitReview(submission, api.conversationId))
     },
@@ -145,7 +171,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
         tag: false,
       },
     ],
-    tools: [readFile, listChangedFiles, getIssue, grepTool, treeTool, submitReview],
+    tools: [readFile, listChangedFiles, getIssue, grepFiles, listTree, submitReview],
     hooks: [
       hook(ToolTask, {
         beforeTool: async (call, api) => blockOrNothing(await host.budgetBlockFor(call.name, api.conversationId)),
@@ -168,21 +194,30 @@ function markedOrNothing(messages: readonly Message[], decision: RequestBudget) 
   return { messages: [...messages, marker] }
 }
 
-export async function readFileText(host: ReviewHost, args: { path: string; ref?: "head" | "base" }): Promise<string> {
+export async function readFileText(host: ReviewHost, args: ReadFileArgs): Promise<string> {
   const { path, ref } = args
+  const { sha, content } = await fileAt(host, path, ref)
+  if (content === undefined) return `${path} does not exist at ${ref ?? "head"} (${sha.slice(0, 7)}).`
+  const out = content
+    .split("\n")
+    .map((line, i) => numberedLine(i + 1, line))
+    .join("\n")
+  return out.length > MAX_FILE_CHARS
+    ? `${out.slice(0, MAX_FILE_CHARS)}\n... (truncated at ${MAX_FILE_CHARS} characters)`
+    : out
+}
+
+export async function fileAt(
+  host: ReviewHost,
+  path: string,
+  ref: ReadFileArgs["ref"],
+): Promise<{ sha: string; content: string | undefined }> {
   const pr = await host.pullRequest()
   const sha = ref === "base" ? pr.base.sha : pr.head.sha
   const content =
     (ref !== "base" ? snapshotContent(host.loadedSnapshot(), sha, path) : undefined) ??
     (await fetchContent(host, pr, path, sha))
-  if (content === undefined) return `${path} does not exist at ${ref ?? "head"} (${sha.slice(0, 7)}).`
-  const out = content
-    .split("\n")
-    .map((line, i) => `${String(i + 1).padStart(5)} | ${line}`)
-    .join("\n")
-  return out.length > MAX_FILE_CHARS
-    ? `${out.slice(0, MAX_FILE_CHARS)}\n... (truncated at ${MAX_FILE_CHARS} characters)`
-    : out
+  return { sha, content }
 }
 
 function snapshotContent(snapshot: SnapshotFiles | undefined, sha: string, path: string): string | undefined {
@@ -195,10 +230,7 @@ async function fetchContent(host: ReviewHost, pr: PullRequestInfo, path: string,
   return github.getFileContent({ owner: owner(pr), repo: repo(pr) }, path, sha)
 }
 
-export async function grepText(
-  host: ReviewHost,
-  query: { pattern: string; glob?: string; path?: string },
-): Promise<string> {
+export async function grepText(host: ReviewHost, query: GrepArgs): Promise<string> {
   const problem = patternProblem(query.pattern)
   if (problem !== undefined) return `Pattern refused: ${problem}`
   const access = await host.repositorySearch("grep")
@@ -206,7 +238,7 @@ export async function grepText(
   return access.files.record() === undefined ? searchRefusal(SNAPSHOT_REPLACED) : grep(access.files, query, access.work)
 }
 
-export async function treeText(host: ReviewHost, args: { path?: string; depth?: number }): Promise<string> {
+export async function treeText(host: ReviewHost, args: TreeArgs): Promise<string> {
   const access = await host.repositorySearch("tree")
   if (access.kind !== "ready") return searchRefusal(access)
   return access.files.record() === undefined

@@ -6,7 +6,9 @@ import {
   migratePending,
   ownsOperation,
   replacedExit,
+  reviewOperations,
   runStanding,
+  standingAfterVerify,
   StoredPending,
   submitStanding,
   type PendingReview,
@@ -63,6 +65,33 @@ describe("ownsOperation", () => {
   })
 })
 
+describe("reviewOperations", () => {
+  const root = [
+    { operationId: "review:d-1", session: "1", status: "running" },
+    { operationId: "chat:d-9", session: "1", status: "queued" },
+  ]
+  const verify = [
+    { operationId: "review:d-1:verify:1", session: "3", status: "running" },
+    { operationId: "review:d-0:verify:2", session: "3", status: "queued" },
+  ]
+
+  it("keeps the review's own operations in the root and verify sessions, and nothing else", () => {
+    expect(
+      reviewOperations(pending, root, verify)
+        .map(({ operationId }) => operationId)
+        .sort(),
+    ).toEqual(["review:d-1", "review:d-1:verify:1"])
+  })
+
+  it("lists verify's operations first, since the review's submit_review call waits on verify, and aborting the call waits for it to return", () => {
+    expect(reviewOperations(pending, root, verify)).toEqual([verify[0], root[0]])
+  })
+
+  it("has nothing for a session that has nothing pending", () => {
+    expect(reviewOperations(pending, [], [])).toEqual([])
+  })
+})
+
 describe("replacedExit", () => {
   it("is superseded when the newer review, or the pull request when its record isn't written yet, is at another head", () => {
     expect(replacedExit("bbb", "aaa")).toBe("review.superseded")
@@ -92,6 +121,26 @@ describe("runStanding", () => {
   it("is ended once its own review ended without posting, even after another delivery takes the pending", () => {
     expect(runStanding(undefined, "d-1", "d-1")).toBe("ended")
     expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", "d-1")).toBe("ended")
+  })
+})
+
+describe("standingAfterVerify", () => {
+  it("posts while the review still holds the pending and the pull request is at the head it reviewed", () => {
+    expect(standingAfterVerify(pending, "d-1", "aaa")).toBe("post")
+  })
+
+  it("is replaced when no review is pending or another delivery holds it, since a replacer deletes the record before it writes its own", () => {
+    expect(standingAfterVerify(undefined, "d-1", "aaa")).toBe("replaced")
+    expect(standingAfterVerify({ ...pending, deliveryId: "d-2" }, "d-1", "aaa")).toBe("replaced")
+  })
+
+  it("has moved when the pull request is at another head than the one its pending review started at", () => {
+    expect(standingAfterVerify(pending, "d-1", "bbb")).toBe("moved")
+  })
+
+  it("is replaced rather than moved when the pending isn't its own, since that record's head says nothing about this review", () => {
+    expect(standingAfterVerify(undefined, "d-1", "bbb")).toBe("replaced")
+    expect(standingAfterVerify({ ...pending, deliveryId: "d-2" }, "d-1", "bbb")).toBe("replaced")
   })
 })
 
@@ -163,6 +212,13 @@ describe("migratePending", () => {
     expect(migratePending(settled)).toEqual(settled)
     expect(Value.Check(StoredPending, { ...pending, requestChangesWorkflow: "true" })).toBe(false)
     expect(Value.Check(StoredPending, { ...pending, configError: 5 })).toBe(false)
+  })
+
+  it("keeps the verify model the run resolved when it started, which the verify step reads back", () => {
+    const verified: PendingReview = { ...pending, verifyModel: "@cf/x/y" }
+    expect(Value.Check(StoredPending, verified)).toBe(true)
+    expect(migratePending(verified)).toEqual(verified)
+    expect(Value.Check(StoredPending, { ...pending, verifyModel: 5 })).toBe(false)
   })
 
   it("does not accept a record without its head and delivery id", () => {

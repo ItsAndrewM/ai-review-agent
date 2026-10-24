@@ -1,10 +1,19 @@
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context"
 import { createModels } from "@earendil-works/pi-ai/models"
-import { createRegistry, Harness, type ConversationId, type Extension } from "@earendil-works/pi-durable"
+import {
+  createRegistry,
+  Harness,
+  type AgentChange,
+  type ConversationId,
+  type EntryRecord,
+  type Extension,
+} from "@earendil-works/pi-durable"
 import {
   PiHarness,
   ROOT_SESSION,
   skills as skillsExtension,
+  type PiModel,
+  type PiPendingOperation,
   type PiPromptResponse,
   type PiSession,
 } from "agents/harness/pi"
@@ -35,7 +44,7 @@ import {
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
-import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
+import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from "./records.ts"
 import {
   CONFIG_PREFIX,
   configKey,
@@ -144,6 +153,7 @@ import {
   type FindingInput,
   type ReviewSubmissionInput,
   type SummarySubmissionInput,
+  type ValidatedReview,
   type WrittenReview,
 } from "./review/findings.ts"
 import {
@@ -151,7 +161,9 @@ import {
   migratePending,
   ownsOperation,
   replacedExit,
+  reviewOperations,
   runStanding,
+  standingAfterVerify,
   StoredPending,
   submitStanding,
   type FlightDecision,
@@ -232,6 +244,7 @@ import {
   type Coverage,
   type RetryOutcome,
   type Verdict,
+  type VerifyDisplay,
 } from "./review/render.ts"
 import { approvalNote, resolveRefusal, resolveReply, resolveTargets, type ResolveScope } from "./review/resolve.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
@@ -243,19 +256,42 @@ import {
   summarizedRecord,
   summaryLive,
   summaryReply,
-  SummarySessionId,
   type SummaryOutcome,
   type WrittenSummary,
 } from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import {
   createReviewExtension,
+  fileAt,
   type RequestBudget,
   type ReviewHost,
   type SearchAccess,
   type SubmitOutcome,
 } from "./review/tools.ts"
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
+import { createVerifyExtension, verifyHostOf, VerifyPasses, withoutVerifyByDefault } from "./review/verify-tools.ts"
+import {
+  answerAfter,
+  attemptOrFailed,
+  backstopReason,
+  backstopTimer,
+  findingContexts,
+  linkedIssueText,
+  unverifiedDisplay,
+  verdictFields,
+  verifiedReview,
+  verifyCandidates,
+  verifyCounts,
+  VERIFY_BACKSTOP_MS,
+  verifyOperationId,
+  verifyPrompt,
+  verifyRunId,
+  verifyWithRetry,
+  whileUnsettled,
+  type FindingContext,
+  type VerifyAttempt,
+  type VerifyCandidate,
+} from "./review/verify.ts"
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -326,8 +362,40 @@ interface Attribution {
 
 interface CheckedSubmission {
   scope: ReviewScope
+  validated: ValidatedReview
   scoped: ScopedReview
   missing: string[]
+}
+
+interface Publication {
+  checked: CheckedSubmission
+  verdict: ReviewSubmissionInput["verdict"]
+  verify: VerifyDisplay | undefined
+}
+
+interface VerifyRun {
+  pr: PullRequestInfo
+  pending: PendingReview
+  submission: ReviewSubmissionInput
+  checked: CheckedSubmission
+  candidates: VerifyCandidate[]
+  model: string
+}
+
+interface VerifyAttempts {
+  run: VerifyRun
+  runId: string
+  prompt: string
+  aborting: Promise<void>
+}
+
+type SessionKey = "summarySession" | "verifySession"
+
+interface SkillSetup {
+  skill: string
+  reference: string
+  tools: Pick<AgentChange, "extensions" | "modelTools">
+  model: PiModel
 }
 
 interface ReviewRun {
@@ -367,9 +435,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   readonly ai = createAI({ binding: this.env.AI })
   readonly registry = createRegistry()
   #catalog: Extension | undefined
+  readonly #verifyPasses = new VerifyPasses<ConversationId>()
+  readonly #verifyTools = createVerifyExtension(verifyHostOf(this, this.#verifyPasses))
   readonly harness = new PiHarness({
     harness: async ({ storage, context }) => {
       this.registry.install(createReviewExtension(this))
+      this.registry.install(this.#verifyTools)
       await this.restoreCatalog()
       const models = createModels()
       models.setProvider(withBudgetRefusal(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit()))))
@@ -378,7 +449,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         {
           models,
           registry: this.registry,
-          settings: { retry: { enabled: true, maxRetries: 4, baseDelayMs: 1000 } },
+          settings: withoutVerifyByDefault(this.registry, {
+            retry: { enabled: true, maxRetries: 4, baseDelayMs: 1000 },
+          }),
           onReport: (error) => console.warn("pi report", error),
         },
         context,
@@ -554,13 +627,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
 
     const pr = await this.freshPullRequest()
-    if (pr.head.sha !== pending.headSha) {
-      await this.logRefusal("head_moved", pending, { was: shortSha(pending.headSha), now: shortSha(pr.head.sha) })
-      return {
-        text: `Not posted: the pull request moved from ${shortSha(pending.headSha)} to ${shortSha(pr.head.sha)} while you reviewed. A new review will run for the new head; stop here.`,
-        done: false,
-      }
-    }
+    if (pr.head.sha !== pending.headSha) return this.headMovedRefusal(pending, pr.head.sha)
     const checked = await this.checkSubmission(submission, pr, pending)
     const returned = [...checked.scoped.rejected, ...checked.scoped.duplicates]
     if (pending.rejectionsReturned !== true && (returned.length > 0 || checked.missing.length > 0)) {
@@ -568,7 +635,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return { text: problemsText(returned, checked.missing), done: false }
     }
     if (checked.missing.length > 0) return this.endIncomplete(pr, pending, checked.missing)
-    return this.publishReview(pr, pending, submission, checked)
+    return this.verifyAndPublish(pr, pending, submission, checked)
+  }
+
+  private async headMovedRefusal(pending: PendingReview, headNow: string): Promise<SubmitOutcome> {
+    await this.logRefusal("head_moved", pending, { was: shortSha(pending.headSha), now: shortSha(headNow) })
+    return {
+      text: `Not posted: the pull request moved from ${shortSha(pending.headSha)} to ${shortSha(headNow)} while you reviewed. A new review will run for the new head; stop here.`,
+      done: false,
+    }
   }
 
   private async checkSubmission(
@@ -597,7 +672,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       missingRows: missing.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    return { scope, scoped, missing }
+    return { scope, validated, scoped, missing }
   }
 
   private async endIncomplete(
@@ -618,18 +693,185 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return { text: `Not posted: no walkthrough row for ${missing.join(", ")}. The review ends here.`, done: true }
   }
 
+  private async verifyAndPublish(
+    pr: PullRequestInfo,
+    pending: PendingReview,
+    submission: ReviewSubmissionInput,
+    checked: CheckedSubmission,
+  ): Promise<SubmitOutcome> {
+    const candidates = verifyCandidates(checked.scoped)
+    const model = pending.verifyModel
+    const drafted = { checked, verdict: submission.verdict }
+    if (model === undefined || candidates.length === 0) {
+      return this.publishReview(pr, pending, submission, { ...drafted, verify: undefined })
+    }
+    if (await this.spentBeforeVerify(pr, pending, model)) {
+      return this.publishReview(pr, pending, submission, { ...drafted, verify: unverifiedDisplay(model, "budget") })
+    }
+    const publication = await this.verify({ pr, pending, submission, checked, candidates, model })
+    const headNow = (await this.freshPullRequest()).head.sha
+    const current = await this.readPending()
+    const standing = standingAfterVerify(current, pending.deliveryId, headNow)
+    if (standing === "moved") return this.headMovedRefusal(pending, headNow)
+    if (standing === "replaced") {
+      await this.logRefusal("not_in_flight", current)
+      return { text: NOT_IN_FLIGHT_REFUSAL, done: false }
+    }
+    return this.publishReview(pr, pending, submission, publication)
+  }
+
+  private async spentBeforeVerify(pr: PullRequestInfo, pending: PendingReview, model: string): Promise<boolean> {
+    const standing = await this.budgetStandingOf(pending)
+    if (standing.kind !== "spent") return false
+    log("verify.skip", {
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      reason: "budget",
+      model,
+      neurons: Math.round(standing.neurons * 10) / 10,
+      budget: standing.budget,
+    })
+    return true
+  }
+
+  private async verify(run: VerifyRun): Promise<Publication> {
+    const started = Date.now()
+    const outcome = await this.runVerify(run)
+    const fields = { ...verifyFields(run), ms: Date.now() - started, attempts: outcome.attempts }
+    if (outcome.kind === "failed") {
+      logError("verify.failed", { ...fields, reason: outcome.reason })
+      return {
+        checked: run.checked,
+        verdict: run.submission.verdict,
+        verify: unverifiedDisplay(run.model, outcome.failure),
+      }
+    }
+    const { checked, candidates } = run
+    const draft = {
+      validated: checked.validated,
+      scoped: checked.scoped,
+      scope: deltaScopeOf(checked.scope),
+      candidates,
+    }
+    const verified = verifiedReview(draft, outcome.verdicts, run.submission.verdict)
+    for (const verdictLog of verdictFields(candidates, outcome.verdicts, verified.report)) {
+      log("verify.verdict", { ...verifyFields(run), ...verdictLog })
+    }
+    log("verify.done", { ...fields, ...verifyCounts(candidates, verified.report) })
+    return {
+      checked: { ...checked, scoped: verified.scoped },
+      verdict: verified.verdict,
+      verify: { kind: "verified", model: run.model, report: verified.report, leftOut: verified.leftOut },
+    }
+  }
+
+  private async runVerify(run: VerifyRun): Promise<VerifyAttempt & { attempts: number }> {
+    const attempts: VerifyAttempts = {
+      run,
+      runId: verifyRunId(),
+      prompt: verifyPrompt(await this.verifyContexts(run)),
+      aborting: Promise.resolve(),
+    }
+    try {
+      return await verifyWithRetry(
+        (n, signal) => this.verifyAttempt(attempts, n, signal),
+        VERIFY_BACKSTOP_MS,
+        backstopTimer,
+      )
+    } finally {
+      this.#verifyPasses.close(attempts.runId)
+    }
+  }
+
+  private async verifyAttempt(attempts: VerifyAttempts, n: 1 | 2, signal: AbortSignal): Promise<VerifyAttempt> {
+    await attempts.aborting
+    const answer = await attemptOrFailed(() => this.askVerify(attempts, n, signal))
+    if (answer.kind === "failed" && !signal.aborted) {
+      logError("verify.attempt_failed", { ...verifyFields(attempts.run), attempt: n, reason: answer.reason })
+    }
+    return answer
+  }
+
+  private async askVerify(attempts: VerifyAttempts, n: 1 | 2, signal: AbortSignal): Promise<VerifyAttempt> {
+    const { run } = attempts
+    if (!(await this.ownsPending(run.pending.deliveryId))) return REPLACED_BEFORE_ATTEMPT
+    await this.restartGrace(run.pending.deliveryId)
+    log("verify.start", { ...verifyFields(run), candidates: run.candidates.length, attempt: n })
+    const session = await this.sessionAt("verifySession")
+    const operationId = verifyOperationId(run.pending.operationId, attempts.runId, n)
+    const onBackstop = () => {
+      logError("verify.attempt_failed", {
+        ...verifyFields(run),
+        attempt: n,
+        reason: backstopReason(VERIFY_BACKSTOP_MS),
+      })
+      attempts.aborting = this.abortOperation({ session: session.id, operationId })
+    }
+    return whileUnsettled(signal, onBackstop, () => this.promptVerify(session, attempts, operationId))
+  }
+
+  private async promptVerify(
+    session: PiSession,
+    attempts: VerifyAttempts,
+    operationId: string,
+  ): Promise<VerifyAttempt> {
+    const { id } = await this.harness.conversation(session.id)
+    const submitted = this.#verifyPasses.open(id, attempts.runId, operationId)
+    await this.configureSkillSession(session, {
+      skill: "verify",
+      reference: SEVERITY_REFERENCE,
+      tools: { extensions: [this.#verifyTools] },
+      model: this.ai(attempts.run.model),
+    })
+    return answerAfter(() => session.prompt(attempts.prompt, { operationId }), submitted)
+  }
+
+  private async verifyContexts({ pr, pending, candidates }: VerifyRun): Promise<FindingContext[]> {
+    return findingContexts(candidates, {
+      files: await this.changedFiles(),
+      read: async (path, ref) => (await fileAt(this, path, ref)).content,
+      unreadable: (path, ref, error) => logError("verify.file_unreadable", { number: pr.number, path, ref, error }),
+      issue: await this.verifyIssueText(pr, pending, candidates),
+    })
+  }
+
+  private async verifyIssueText(
+    pr: PullRequestInfo,
+    pending: PendingReview,
+    candidates: readonly VerifyCandidate[],
+  ): Promise<string | undefined> {
+    const numbers = pending.linkedIssues ?? []
+    if (numbers.length === 0 || !candidates.some(({ finding }) => finding.basis_kind === "spec")) return undefined
+    const key = await this.key()
+    const github = await this.github()
+    const reads = await readLinkedIssues(
+      numbers,
+      (number) => github.getIssue(key, number),
+      (issue, error) => logError("verify.issue_unreadable", { number: pr.number, issue, error }),
+    )
+    return linkedIssueText(linkedIssuesFrom(reads))
+  }
+
+  private async resetVerifySession(): Promise<void> {
+    const stored = await this.storedSessionId("verifySession")
+    if (stored !== undefined) await this.harness.session(stored).reset()
+  }
+
   private async publishReview(
     pr: PullRequestInfo,
     pending: PendingReview,
     submission: ReviewSubmissionInput,
-    { scope, scoped }: CheckedSubmission,
+    publication: Publication,
   ): Promise<SubmitOutcome> {
+    const { scope, scoped } = publication.checked
+    const decided = { ...submission, verdict: publication.verdict }
+    const unverified = publication.verify?.kind === "unverified"
     const resolved = await this.resolveAddressed(
       pr,
       addressedThreads(submission.addressed_threads, scope.recheck).resolve,
     )
     const workflow = requestChangesWorkflow(pending.requestChangesWorkflow, this.env.REQUEST_CHANGES_WORKFLOW)
-    const verdict = await this.reviewVerdict(pr, submission, scoped, openBlockingAfter(scope, resolved), workflow)
+    const verdict = await this.reviewVerdict(pr, decided, scoped, openBlockingAfter(scope, resolved), workflow)
     const event = reviewEventOf(verdict)
     const key = await this.key()
     const github = await this.github()
@@ -659,6 +901,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       linkedIssues: pending.linkedIssues ?? [],
       instructionFiles: pending.instructionFiles ?? [],
       since: reviewed.since,
+      verify: publication.verify,
       configError: pending.configError,
     })
     await this.upsertSummary(summary)
@@ -679,7 +922,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         reviewId: review.id,
         event,
         headSha: pr.head.sha,
-        verdict: submission.verdict,
+        verdict: decided.verdict,
         shown: verdict,
         accepted: scoped.accepted,
         rejected: scoped.rejected,
@@ -696,11 +939,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       at: Date.now(),
       counts: countBySeverity(scoped.accepted),
       spend,
+      unverified,
       ...attribution,
     })
     await this.endOwnRun(
       pending.deliveryId,
-      postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now()),
+      postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now(), unverified),
     )
     if (evaluatesAfterReview(event, scoped.accepted)) {
       this.ctx.waitUntil(this.evaluateApproval("review", pending.deliveryId))
@@ -831,7 +1075,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       started: run.started,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
-      ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW),
+      ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
       ...(await this.usageBaseline()),
     })
     await this.runReview(pr, incoming, run)
@@ -888,23 +1132,30 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       head: shortSha(headSha),
     })
     await this.ctx.storage.delete("pending")
-    for (const operationId of operations) await this.abortOperation(operationId)
+    for (const operation of operations) await this.abortOperation(operation)
     await this.endReplacedRun(decision, headSha)
     return decision
   }
 
-  private async abortOperation(operationId: string): Promise<void> {
+  private async abortOperation({
+    session,
+    operationId,
+  }: Pick<PiPendingOperation, "session" | "operationId">): Promise<void> {
     try {
-      await this.harness.abort({ operationId })
+      await this.harness.abort({ session, operationId })
     } catch (error) {
-      logError("review.abort_failed", { operation: operationId, error: errorText(error) })
+      logError("review.abort_failed", { operation: operationId, session, error: errorText(error) })
     }
   }
 
-  private async operationsOf(pending: PendingReview | undefined): Promise<string[]> {
+  private async operationsOf(pending: PendingReview | undefined): Promise<PiPendingOperation[]> {
     if (pending === undefined) return []
-    const operations = await this.harness.pending()
-    return operations.map(({ operationId }) => operationId).filter((operationId) => ownsOperation(pending, operationId))
+    const verify = await this.storedSessionId("verifySession")
+    return reviewOperations(
+      pending,
+      await this.harness.pending({ session: ROOT_SESSION }),
+      verify === undefined ? [] : await this.harness.pending({ session: verify }),
+    )
   }
 
   private async endReplacedRun({ previous, because }: Replacement, headSha: string): Promise<void> {
@@ -1140,6 +1391,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       if (await this.replaced(pr, run)) return
       if (nothingToReview(scope)) return await this.skipUnchanged(pr, run, scope)
       await this.harness.session().reset()
+      await this.resetVerifySession()
       await this.harness.session().setModel(this.reviewModel())
       const offeredTools = await this.configureReview(repository)
       log("review.tools", {
@@ -1410,8 +1662,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private usageLedger(): UsageLedger {
     return {
       usage: async () => (await this.harness.pi()).usage(BACKGROUND_CONTEXT),
-      messages: () => this.harness.session().messages(),
+      messages: async () => [...(await this.harness.session().messages()), ...(await this.verifyMessages())],
     }
+  }
+
+  private async verifyMessages(): Promise<EntryRecord[]> {
+    const stored = await this.storedSessionId("verifySession")
+    return stored === undefined ? [] : this.harness.session(stored).messages()
   }
 
   private async usageBaseline(): Promise<Pick<StoredPending, "usageBefore">> {
@@ -1777,7 +2034,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async summaryOperationListed(operationId: string): Promise<boolean> {
-    const session = await this.storedSummarySession()
+    const session = await this.storedSessionId("summarySession")
     if (session === undefined) return false
     const operations = await this.harness.pending({ session })
     return operations.some((operation) => operation.operationId === operationId)
@@ -1844,42 +2101,46 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     issues: readonly LinkedIssue[],
     operationId: string,
   ): Promise<WrittenSummary> {
-    const session = await this.summarySession()
-    await this.configureSummary(session)
+    const session = await this.sessionAt("summarySession")
+    await this.configureSkillSession(session, {
+      skill: "summary",
+      reference: MERGE_DANGER_REFERENCE,
+      tools: { extensions: [], modelTools: [] },
+      model: this.reviewModel(),
+    })
     const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
     if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
     return parseWrittenSummary(result.text ?? "")
   }
 
-  private async summarySession(): Promise<PiSession> {
-    const stored = await this.storedSummarySession()
+  private async sessionAt(key: SessionKey): Promise<PiSession> {
+    const stored = await this.storedSessionId(key)
     if (stored !== undefined) return this.harness.session(stored)
     const session = await this.harness.sessions.create()
-    await this.ctx.storage.put("summarySession", session.id)
+    await this.ctx.storage.put(key, session.id)
     return session
   }
 
-  private async storedSummarySession(): Promise<string | undefined> {
-    const stored = await this.ctx.storage.get("summarySession")
-    return Value.Check(SummarySessionId, stored) ? stored : undefined
+  private async storedSessionId(key: SessionKey): Promise<string | undefined> {
+    const stored = await this.ctx.storage.get(key)
+    return Value.Check(StoredSessionId, stored) ? stored : undefined
   }
 
-  private async configureSummary(session: PiSession): Promise<void> {
+  private async configureSkillSession(session: PiSession, setup: SkillSetup): Promise<void> {
     const { source } = await bundledSkills()
-    const skill = await loadSkill(source, "summary")
-    const mergeDanger = await loadReference(source, "review", MERGE_DANGER_REFERENCE)
+    const skill = await loadSkill(source, setup.skill)
+    const reference = await loadReference(source, "review", setup.reference)
     await session.reset()
     const conversation = await this.harness.conversation(session.id)
     await conversation.configure(
       {
-        instructions: renderSkillWithResources(skill, [mergeDanger]),
+        instructions: renderSkillWithResources(skill, [reference]),
         thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
-        extensions: [],
-        modelTools: [],
+        ...setup.tools,
       },
       BACKGROUND_CONTEXT,
     )
-    await session.setModel(this.reviewModel())
+    await session.setModel(setup.model)
   }
 
   private async postSummary(
@@ -2356,6 +2617,18 @@ function retryOutcome(failure: string | undefined, refusal: string | undefined):
 const NOT_IN_FLIGHT_REFUSAL = "Not posted: this call is not the review in flight for this head. Stop here."
 
 const MERGE_DANGER_REFERENCE = "references/merge-danger.md"
+
+const SEVERITY_REFERENCE = "references/severity.md"
+
+const REPLACED_BEFORE_ATTEMPT = {
+  kind: "failed",
+  failure: "model",
+  reason: "the review was replaced before this attempt",
+} as const
+
+function verifyFields({ pr, model }: VerifyRun) {
+  return { number: pr.number, head: shortSha(pr.head.sha), model }
+}
 
 function unusableSummary(reason: string): SummaryOutcome {
   return { kind: "unusable", reason: oneClause(reason) }

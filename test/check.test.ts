@@ -86,6 +86,17 @@ describe("postedEarlierCheckRun", () => {
       "Review 9 was posted by an earlier run of this head.",
     )
   })
+
+  it("keeps (unverified) on the title when the review an earlier run posted was unverified", () => {
+    const posted = { reviewId: 9, event: "REQUEST_CHANGES" as const, counts: countOf(["blocking"]), unverified: true }
+    expect(postedEarlierCheckRun(posted, undefined, at).output.title).toBe("Changes requested: 1 blocking (unverified)")
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE", unverified: true }, undefined, at).output.title).toBe(
+      "Approved (unverified)",
+    )
+    expect(postedEarlierCheckRun({ ...posted, unverified: false }, undefined, at).output.title).toBe(
+      "Changes requested: 1 blocking",
+    )
+  })
 })
 
 describe("isoSeconds", () => {
@@ -145,6 +156,26 @@ describe("postedCheckRun", () => {
       details_url: "https://github.com/o/r/pull/5#issuecomment-1",
       output: { title: "Changes requested: 1 blocking", summary: "## andabot review" },
     })
+  })
+
+  it("appends (unverified) to the title, after the counts, when verify failed", () => {
+    const update = postedCheckRun(
+      "REQUEST_CHANGES",
+      [finding("blocking")],
+      "## andabot review",
+      "https://example.test",
+      at,
+      true,
+    )
+    expect(update.output.title).toBe("Changes requested: 1 blocking (unverified)")
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at, true).output.title).toBe(
+      "Approved (unverified)",
+    )
+  })
+
+  it("leaves the title alone when verify ran or wasn't asked for", () => {
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at).output.title).toBe("Approved")
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at, false).output.title).toBe("Approved")
   })
 
   it("truncates the summary to GitHub's cap", () => {

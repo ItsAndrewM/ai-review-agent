@@ -196,7 +196,7 @@ describe("repositorySkillFiles", () => {
   it("shadows exactly the skills the bundle holds, the summary skill included", async () => {
     const bundled = (await (await bundledSkills()).source.list()).map(({ name }) => name)
     expect([...BUNDLED_SKILL_NAMES].sort()).toEqual([...bundled].sort())
-    expect([...BUNDLED_SKILL_NAMES].sort()).toEqual(["answer", "review", "summary"])
+    expect([...BUNDLED_SKILL_NAMES].sort()).toEqual(["answer", "review", "summary", "verify"])
     expect(shadowedSkillFiles([blob(".claude/skills/summary/SKILL.md")]).map(({ name }) => name)).toEqual(["summary"])
   })
 

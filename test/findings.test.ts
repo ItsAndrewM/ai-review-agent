@@ -17,6 +17,7 @@ import {
 import {
   approvalBody,
   chooseReviewEvent,
+  holdsBlocking,
   incompleteNote,
   mergeWalkthrough,
   renderReviewBody,
@@ -26,7 +27,9 @@ import {
   reviewEventOf,
   SUMMARY_MARKER,
   withApprovedVerdict,
+  type VerifyDisplay,
 } from "../src/review/render.ts"
+import type { Changed, VerifyReport } from "../src/review/verify.ts"
 
 const patch = ["@@ -1,3 +1,3 @@", " const a = 1;", "-const b = 2;", "+const b = 3;", " export { a, b };"].join("\n")
 const commentable = new Map([["src/x.ts", commentableLines(patch)]])
@@ -686,6 +689,30 @@ describe("chooseReviewEvent", () => {
   })
 })
 
+describe("holdsBlocking", () => {
+  const rejectedAs = (overrides: Partial<FindingInput>, unfounded = false) => ({
+    finding: finding(overrides),
+    reason: "r",
+    unfounded,
+  })
+
+  it("holds while a blocking finding is accepted, or rejected and held back", () => {
+    expect(holdsBlocking([finding()], [])).toBe(true)
+    expect(holdsBlocking([], [rejectedAs({})])).toBe(true)
+    expect(holdsBlocking([finding({ severity: "nitpick" })], [rejectedAs({})])).toBe(true)
+  })
+
+  it("holds nothing when every finding is a suggestion or a nitpick", () => {
+    expect(holdsBlocking([], [])).toBe(false)
+    const graded = [finding({ severity: "suggestion" }), finding({ severity: "nitpick" })]
+    expect(holdsBlocking(graded, [rejectedAs({ severity: "suggestion" })])).toBe(false)
+  })
+
+  it("ignores a rejected blocking finding whose basis is unfounded, since it holds nothing back", () => {
+    expect(holdsBlocking([], [rejectedAs({}, true)])).toBe(false)
+  })
+})
+
 describe("renderReviewBody", () => {
   it("names the blocking findings that couldn't be posted inline, since they hold approval back", () => {
     const body = renderReviewBody(
@@ -888,6 +915,7 @@ describe("renderSummaryComment", () => {
     budgetNote?: string
     instructionFiles?: string[]
     configError?: string
+    verify?: VerifyDisplay
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -1104,6 +1132,210 @@ describe("renderSummaryComment", () => {
 
   it("adds no budget note when the review stayed within its budget", () => {
     expect(summaryWith({})).not.toContain("stopped reading early")
+  })
+
+  describe("when verify ran", () => {
+    const REVIEW_MODEL = "@cf/zai-org/glm-5.3-flash"
+    const VERIFY_MODEL = "@cf/moonshotai/kimi-k2.7-code"
+    const attributed = { model: REVIEW_MODEL, skillsFingerprint: "89abcdef01234567" }
+
+    const verified = (parts: Partial<VerifyReport> = {}, leftOut: FindingInput[] = []): VerifyDisplay => ({
+      kind: "verified",
+      model: VERIFY_MODEL,
+      report: { dropped: [], changed: [], capped: [], notJudged: [], unknown: [], ...parts },
+      leftOut,
+    })
+
+    const unverified = (reason: string): VerifyDisplay => ({ kind: "unverified", model: VERIFY_MODEL, reason })
+
+    const demotion = (original: FindingInput, to: FindingInput["severity"], reason: string): Changed => ({
+      finding: original,
+      reason,
+      from: original.severity,
+      to,
+      revised: finding({ ...original, severity: to }),
+    })
+
+    it("lists a drop, a severity change and an unjudged finding in a collapsed Verify section", () => {
+      const text = summaryWith({
+        verify: verified({
+          dropped: [
+            {
+              finding: finding({ path: "src/a.ts", line: 10, title: "Wrong total" }),
+              reason: "the guard on line 9 covers it",
+            },
+          ],
+          changed: [
+            demotion(
+              finding({ path: "src/b.ts", line: 20, title: "Stale cache" }),
+              "suggestion",
+              "the cache is rebuilt on the next call",
+            ),
+          ],
+          notJudged: [finding({ path: "src/c.ts", line: 30, title: "Odd name", severity: "suggestion" })],
+        }),
+      })
+      expect(text).toContain(
+        [
+          "<details><summary>Verify: 1 dropped, 1 severity changed, 1 not judged</summary>",
+          "",
+          "- Dropped `src/a.ts:10` Wrong total: the guard on line 9 covers it",
+          "- `src/b.ts:20` Stale cache: blocking → suggestion: the cache is rebuilt on the next call",
+          "- Not judged: `src/c.ts:30` Odd name",
+          "",
+          "</details>",
+        ].join("\n"),
+      )
+    })
+
+    it("puts the section after the dropped line and before the since section, a blank line from each", () => {
+      const text = renderSummaryComment({
+        botLogin: "andabot",
+        headSha: "def5678901",
+        event: "COMMENT",
+        submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+        accepted: [],
+        droppedCount: 2,
+        linkedIssues: [],
+        instructionFiles: [],
+        since: { from: "abc1234567", to: "def5678901", summary: "Fixed the total.", files: ["a.ts"], resolved: 0 },
+        verify: verified({ notJudged: [finding({ title: "Odd name" })] }),
+      })
+      expect(text).toContain(
+        "even after a retry.</sub>\n\n<details><summary>Verify: 1 not judged</summary>\n\n- Not judged: `src/x.ts:2` Odd name\n\n</details>\n\n### Since `abc1234`",
+      )
+    })
+
+    it("puts the section a blank line above the footer when the review has no since section", () => {
+      const text = summaryWith({ ...attributed, verify: verified({ notJudged: [finding()] }) })
+      expect(text).toContain("\n\n</details>\n\n<sub>Reviewed by `@cf/zai-org/glm-5.3-flash`")
+    })
+
+    it("leaves the section out when verify dropped, changed and skipped nothing, even if it capped a promotion or named an unknown id", () => {
+      const capped = [{ finding: finding({ severity: "nitpick" }), reason: "a promotion past the cap" }]
+      for (const verify of [verified(), verified({ capped, unknown: ["F9"] })]) {
+        expect(summaryWith({ ...attributed, verify })).not.toContain("<details>")
+      }
+    })
+
+    it("doesn't list a capped promotion or an unknown id in a section that other entries open", () => {
+      const text = summaryWith({
+        verify: verified({
+          dropped: [{ finding: finding({ title: "Wrong total" }), reason: "covered" }],
+          capped: [{ finding: finding({ title: "Capped title" }), reason: "capped reason" }],
+          unknown: ["F9"],
+        }),
+      })
+      expect(text).toContain("<summary>Verify: 1 dropped</summary>")
+      expect(text).not.toContain("Capped title")
+      expect(text).not.toContain("capped reason")
+      expect(text).not.toContain("F9")
+    })
+
+    it("names only the parts of the summary line that are above zero", () => {
+      const dropped = { finding: finding(), reason: "r" }
+      const changed = demotion(finding(), "suggestion", "r")
+      const summaryOf = (parts: Partial<VerifyReport>) => summaryWith({ verify: verified(parts) })
+      expect(summaryOf({ notJudged: [finding()] })).toContain("<summary>Verify: 1 not judged</summary>")
+      expect(summaryOf({ dropped: [dropped, dropped] })).toContain("<summary>Verify: 2 dropped</summary>")
+      expect(summaryOf({ changed: [changed] })).toContain("<summary>Verify: 1 severity changed</summary>")
+      expect(summaryOf({ dropped: [dropped], notJudged: [finding()] })).toContain(
+        "<summary>Verify: 1 dropped, 1 not judged</summary>",
+      )
+    })
+
+    it("says a demotion left the finding out, matching it by object identity, and shows the other changes as they are", () => {
+      const left = demotion(finding({ path: "src/a.ts", line: 4, title: "Odd branch" }), "nitpick", "a style point")
+      const stays = demotion(finding({ path: "src/b.ts", line: 8, title: "Slow loop" }), "suggestion", "not a defect")
+      const text = summaryWith({
+        verify: verified({ changed: [left, stays] }, [left.revised, { ...stays.revised }]),
+      })
+      expect(text).toContain("<summary>Verify: 2 severity changed</summary>")
+      expect(text).toContain(
+        "- `src/a.ts:4` Odd branch: blocking → nitpick, left out: a style point\n- `src/b.ts:8` Slow loop: blocking → suggestion: not a defect\n",
+      )
+    })
+
+    it("flattens a title and a reason onto the entry's line and escapes their pipes", () => {
+      const text = summaryWith({
+        verify: verified({ dropped: [{ finding: finding({ title: "a | b\nc" }), reason: "it is\n  fine | really" }] }),
+      })
+      expect(text).toContain("\n- Dropped `src/x.ts:2` a \\| b c: it is fine \\| really\n")
+    })
+
+    it("wraps a location that holds a backtick in a double-backtick span, so the entry's code span cannot end early", () => {
+      const text = summaryWith({ verify: verified({ notJudged: [finding({ path: "docs/a`b.md", line: 3 })] }) })
+      expect(text).toContain("\n- Not judged: `` docs/a`b.md:3 `` b changed\n")
+    })
+
+    it("names both models in the reviewed-by line when verified, before the skills", () => {
+      expect(summaryWith({ ...attributed, verify: verified() })).toContain(
+        "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` · verified by `@cf/moonshotai/kimi-k2.7-code` with skills `review@89abcdef`.</sub>\n<sub>Linked issues: none</sub>",
+      )
+      expect(summaryWith({ ...attributed, repoSkillsFingerprint: "1a2b3c4d5e6f7a8b", verify: verified() })).toContain(
+        "verified by `@cf/moonshotai/kimi-k2.7-code` with skills `review@89abcdef`, `repo@1a2b3c4d`.</sub>",
+      )
+    })
+
+    it("leaves the verified claim out with the reviewed-by line when the build recorded no model or fingerprint", () => {
+      const text = summaryWith({ verify: verified() })
+      expect(text).not.toContain("Reviewed by")
+      expect(text).not.toContain("verified by")
+    })
+
+    it("adds the unverified line after the reviewed-by line, and no section", () => {
+      const text = summaryWith({ ...attributed, verify: unverified("no_model") })
+      expect(text).toContain(
+        "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@89abcdef`.</sub>\n<sub>Not verified by `@cf/moonshotai/kimi-k2.7-code`: no_model.</sub>\n<sub>Linked issues: none</sub>",
+      )
+      expect(text).not.toContain("· verified by")
+      expect(text).not.toContain("<details>")
+    })
+
+    it("flattens the unverified reason onto one line and cuts one longer than 200 characters to 200 and an ellipsis", () => {
+      expect(summaryWith({ verify: unverified("the model\n  did not\tanswer") })).toContain(
+        "<sub>Not verified by `@cf/moonshotai/kimi-k2.7-code`: the model did not answer.</sub>",
+      )
+      expect(summaryWith({ verify: unverified("x".repeat(201)) })).toContain(`: ${"x".repeat(200)}….</sub>`)
+      expect(summaryWith({ verify: unverified("y".repeat(200)) })).toContain(`: ${"y".repeat(200)}.</sub>`)
+    })
+
+    it("orders the footer as reviewed-by with the verifier, the unverified line, the cost line, then the budget note", () => {
+      const spent = {
+        ...attributed,
+        spend: [
+          {
+            model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+            calls: 3,
+            inputTokens: 61_204,
+            cachedTokens: 40_000,
+            outputTokens: 4_811,
+            usd: 0.006692,
+            priced: true,
+          },
+        ],
+        budgetNote: budgetNote(10_000),
+      }
+      const cost = "<sub>3 model calls · 61k in / 4.8k out tokens · ≈ 608 neurons ($0.007)</sub>"
+      const note = "_This review stopped reading early: it spent its budget of 10,000 neurons._"
+      expect(summaryWith({ ...spent, verify: verified() })).toContain(
+        [
+          "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` · verified by `@cf/moonshotai/kimi-k2.7-code` with skills `review@89abcdef`.</sub>",
+          cost,
+          note,
+          "<sub>Linked issues: none</sub>",
+        ].join("\n"),
+      )
+      expect(summaryWith({ ...spent, verify: unverified("the review spent its budget") })).toContain(
+        [
+          "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@89abcdef`.</sub>",
+          "<sub>Not verified by `@cf/moonshotai/kimi-k2.7-code`: the review spent its budget.</sub>",
+          cost,
+          note,
+          "<sub>Linked issues: none</sub>",
+        ].join("\n"),
+      )
+    })
   })
 
   it("shows the wait as the verdict", () => {
