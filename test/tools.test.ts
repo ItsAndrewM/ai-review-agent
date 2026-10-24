@@ -164,7 +164,12 @@ describe("createReviewExtension", () => {
       ),
     ).toEqual([false, false, false])
     expect(accepts("tree", { path: "src", depth: 3 })).toBe(true)
-    expect([{ path: 1 }, { depth: "3" }].map((args) => accepts("tree", args))).toEqual([false, false])
+    expect([{ path: 1 }, { depth: "3" }, { depth: 0 }, { depth: -1 }].map((args) => accepts("tree", args))).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ])
   })
 
   it("tells the model that a grep glob matches the repository-relative path at any depth", () => {
