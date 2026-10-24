@@ -75,6 +75,7 @@ type Selector = (path: string) => boolean
 
 const GLOB_OPTIONS = { dot: true, matchBase: true }
 const MAX_EXAMPLE_PATHS = 10
+const MAX_EXAMPLE_PATH_CHARS = 200
 const NOTE_RESERVE = 400
 const LEADING_DOT_SLASH = /^(?:\.\/)+/
 const LEADING_SLASHES = /^\/+/
@@ -118,8 +119,16 @@ function compile(pattern: string): Compiled {
   }
 }
 
+function linesOf(content: string): string[] {
+  const lines = content.split("\n")
+  if (lines.at(-1) === "") lines.pop()
+  return lines
+}
+
 function* lineHits(file: SnapshotFile, engine: Engine, found: Found): Generator<Hit> {
-  for (const [index, raw] of file.content.split("\n").entries()) {
+  const lines = linesOf(file.content)
+  if (lines.length === 0) found.searched++
+  for (const [index, raw] of lines.entries()) {
     const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw
     const searched = line.slice(0, MAX_SEARCHED_LINE_CHARS)
     if (found.work + worstWork(engine, searched.length) > MAX_SEARCH_WORK) {
@@ -197,13 +206,16 @@ interface Examples {
 function longLineNote(count: number): string {
   if (count === 0) return ""
   const [subject, pronoun] = count === 1 ? ["long line", "its"] : ["long lines", "their"]
-  return `${count} ${subject} searched only in ${pronoun} first ${MAX_SEARCHED_LINE_CHARS.toLocaleString("en-US")} characters.`
+  return `${count} ${subject} searched only in ${pronoun} first ${MAX_SEARCHED_LINE_CHARS.toLocaleString("en-US")} characters, so \`$\` and \`\\b\` can match at the cut.`
 }
 
 function stoppedNote(found: Found): string {
   if (!found.stopped) return ""
   return `Stopped early after ${plural(found.searched, "file", "files")}: ${COSTLY_REASON}`
 }
+
+const shortPath = (path: string): string =>
+  path.length <= MAX_EXAMPLE_PATH_CHARS ? path : `…${path.slice(1 - MAX_EXAMPLE_PATH_CHARS)}`
 
 function exampleGroups(chosen: readonly LeftOut[]): Examples {
   let room = MAX_EXAMPLE_PATHS
@@ -212,7 +224,7 @@ function exampleGroups(chosen: readonly LeftOut[]): Examples {
     const paths = chosen
       .filter((entry) => entry.reason === reason)
       .slice(0, room)
-      .map((entry) => entry.path)
+      .map((entry) => shortPath(entry.path))
     if (paths.length > 0) groups.push(`${reason}: ${paths.join(", ")}`)
     room -= paths.length
   }

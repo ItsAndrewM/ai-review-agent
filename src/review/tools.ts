@@ -104,7 +104,9 @@ export function createReviewExtension(host: ReviewHost): Extension {
     description: "List the directories and files at the pull request's head under a path.",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
-      depth: Type.Optional(Type.Integer({ description: "How many levels to list. Default 2." })),
+      depth: Type.Optional(
+        Type.Integer({ minimum: 1, description: "How many levels to list, at least 1. Default 2." }),
+      ),
     }),
     replay: "unsafe",
     async execute(args) {

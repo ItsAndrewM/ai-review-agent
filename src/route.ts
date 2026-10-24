@@ -72,11 +72,26 @@ export function routeWebhook(eventName: string, payload: WebhookPayload, deliver
   const repo = repoKeyOf(payload)
   if (!repo) return ignore("no installation or repository")
   const delivery = { repo, deliveryId, action: payload.action }
+  const fromAnySender = routeFromAnySender(eventName, payload, delivery, botLogin)
+  if (fromAnySender) return fromAnySender
+  if (payload.sender?.type === "Bot") return ignore("sent by a bot")
+  return routeEvent(eventName, payload, delivery, botLogin)
+}
+
+function routeFromAnySender(
+  eventName: string,
+  payload: WebhookPayload,
+  delivery: Delivery,
+  botLogin: string,
+): Routed | undefined {
   if (eventName === "check_suite" && delivery.action === "completed") {
     return routeCompletedSuite(payload.check_suite, delivery, botLogin)
   }
-  if (payload.sender?.type === "Bot") return ignore("sent by a bot")
-  return routeEvent(eventName, payload, delivery, botLogin)
+  if (eventName === "pull_request" && delivery.action === "closed" && payload.pull_request) {
+    const key = { ...delivery.repo, number: payload.pull_request.number }
+    return { kind: "handle", incoming: [{ kind: "closed", key, deliveryId: delivery.deliveryId }] }
+  }
+  return undefined
 }
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
