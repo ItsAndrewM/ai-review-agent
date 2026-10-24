@@ -1,9 +1,19 @@
-import type { Message, ModelThinkingLevel, Provider, TranscriptContext } from "@earendil-works/pi-ai"
+import {
+  createAssistantMessageEventStream,
+  type Api,
+  type AssistantMessage,
+  type Message,
+  type Model,
+  type ModelThinkingLevel,
+  type Provider,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai"
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
+import { BUDGET_REFUSAL } from "./review/budget.ts"
 import { ReviewSubmission, SummarySubmission } from "./review/findings.ts"
-import { isResubmitPrompt, isSummaryPrompt } from "./review/prompt.ts"
+import { BUDGET_REFUSAL_MARKER, isResubmitPrompt, isSummaryPrompt } from "./review/prompt.ts"
 
 const DEFAULT_OUTPUT_LIMIT = 16_000
 
@@ -43,11 +53,58 @@ const REVIEW_AS_JSON = { type: "json_schema", json_schema: { name: "review_submi
 const SUMMARY_AS_JSON = { type: "json_schema", json_schema: { name: "summary_submission", schema: SummarySubmission } }
 
 function forcedFormatOf(context: TranscriptContext) {
-  const latest = context.messages.filter((message) => message.role !== "system").at(-1)
+  const latest = latestMessage(context)
   if (latest?.role !== "user") return undefined
   const text = userText(latest)
   if (isResubmitPrompt(text)) return REVIEW_AS_JSON
   return isSummaryPrompt(text) ? SUMMARY_AS_JSON : undefined
+}
+
+function latestMessage(context: TranscriptContext) {
+  return context.messages.filter((message) => message.role !== "system").at(-1)
+}
+
+export function withBudgetRefusal(provider: Provider): Provider {
+  return {
+    ...provider,
+    streamSimple: (model, context, options) =>
+      isMarkedForRefusal(context) ? refusedStream(model) : provider.streamSimple(model, context, options),
+  }
+}
+
+function isMarkedForRefusal(context: TranscriptContext): boolean {
+  const latest = latestMessage(context)
+  return latest?.role === "user" && userText(latest) === BUDGET_REFUSAL_MARKER
+}
+
+type RefusedModel = Pick<Model<Api>, "api" | "id" | "provider">
+
+function refusedStream(model: RefusedModel) {
+  const stream = createAssistantMessageEventStream()
+  stream.push({ type: "error", reason: "error", error: refusedMessage(model) })
+  stream.end()
+  return stream
+}
+
+function refusedMessage(model: RefusedModel): AssistantMessage {
+  return {
+    role: "assistant",
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "error",
+    errorMessage: BUDGET_REFUSAL,
+    timestamp: Date.now(),
+  }
 }
 
 function userText(message: Extract<Message, { role: "user" }>): string {

@@ -11,7 +11,7 @@ import {
 } from "@earendil-works/pi-durable"
 import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { describe, expect, it } from "vitest"
-import { GitHubClient, type TreeEntry } from "../src/github/client.ts"
+import { GitHubClient, SYMLINK_MODE, type TreeEntry } from "../src/github/client.ts"
 import {
   loadRepositoryContext,
   MAX_INSTRUCTION_LOADS,
@@ -54,6 +54,8 @@ const TREE_SHA = "f00d".repeat(10)
 const CONTENTS = "/repos/o/r/contents/"
 
 const blob = (path: string, sha = "1", size = 100): TreeEntry => ({ path, type: "blob", sha, size })
+
+const symlink = (path: string, sha = "1", size = 100): TreeEntry => ({ ...blob(path, sha, size), mode: SYMLINK_MODE })
 
 const unsized = (path: string): TreeEntry => ({ path, type: "blob", sha: "1" })
 
@@ -458,6 +460,133 @@ describe("loading a repository's skills at the base commit", () => {
     ]
     const smallBody = contextOf(entries, Object.fromEntries([file(".claude/skills/small/SKILL.md", skillMd("Small."))]))
     expect(unloadedSkillPaths(smallBody)).toEqual([".claude/skills/small/notes.md"])
+  })
+})
+
+describe("a skill file the listing marks as a symlink", () => {
+  const lintBody = ".github/skills/lint/SKILL.md"
+  const lintRules = ".github/skills/lint/rules.md"
+  const lintExtra = ".github/skills/lint/extra.md"
+  const linkedBody = ".github/skills/linked/SKILL.md"
+
+  it("leaves out a skill whose SKILL.md is a symlink, logging cap symlink, and still offers a regular skill beside it", async () => {
+    const regular = [blob(lintBody, "b2")]
+    const entries = [symlink(linkedBody, "a1"), ...regular]
+    const cached = Object.fromEntries([file(linkedBody, skillMd("Linked.")), file(lintBody, skillMd("Lint."))])
+    const skills = await repositorySkills(contextOf(entries, cached))
+    expect(skills.offered?.names).toEqual(["lint"])
+    expect(skills.capped).toEqual([{ name: "linked", path: linkedBody, cap: "symlink" }])
+    expect(skills.invalid).toEqual([])
+    expect(skillLogs(4, skills)).toEqual([
+      { event: "skills.capped", fields: { number: 4, name: "linked", path: linkedBody, cap: "symlink" } },
+    ])
+    expect(skills.offered?.fingerprint).toBe(await repositorySkillFingerprint(regular))
+    expect(unloadedSkillPaths(contextOf(entries, {}))).toEqual([lintBody])
+  })
+
+  it.each([
+    { label: "an earlier", linked: ".github/skills/x/SKILL.md", regular: ".claude/skills/x/SKILL.md" },
+    { label: "a later", linked: ".claude/skills/x/SKILL.md", regular: ".github/skills/x/SKILL.md" },
+  ])(
+    "offers the regular skill of a name when $label root's SKILL.md of that name is a symlink, which holds no name, so nothing is shadowed",
+    async ({ linked, regular }) => {
+      const entries = [symlink(linked), blob(regular)]
+      const cached = Object.fromEntries([file(linked, skillMd("Linked.")), file(regular, skillMd("Regular."))])
+      const skills = await repositorySkills(contextOf(entries, cached))
+      expect(skills.offered?.names).toEqual(["x"])
+      expect(await skills.offered?.source.list()).toEqual([{ name: "x", description: "Regular." }])
+      expect(skills.capped).toEqual([{ name: "x", path: linked, cap: "symlink" }])
+      expect(skills.shadowed).toEqual([])
+      expect(repositorySkillFiles(entries).map(({ files }) => files)).toEqual([[regular]])
+    },
+  )
+
+  it("fingerprints no file of a skill whose SKILL.md is a symlink, its regular resources included", async () => {
+    const lint = [blob(lintBody, "a1")]
+    const linked = [symlink(linkedBody, "b2"), blob(".github/skills/linked/notes.md", "c3")]
+    expect(repositorySkillFiles([...linked, ...lint]).map(({ name }) => name)).toEqual(["lint"])
+    expect(await repositorySkillFingerprint([...linked, ...lint])).toBe(await repositorySkillFingerprint(lint))
+  })
+
+  it("logs each skill whose SKILL.md is a symlink as capped by symlink, roots in order and names sorted within each, a built-in skill's name included", async () => {
+    const claudeBeta = ".claude/skills/beta/SKILL.md"
+    const githubReview = ".github/skills/review/SKILL.md"
+    const githubAlpha = ".github/skills/alpha/SKILL.md"
+    const entries = [symlink(claudeBeta), symlink(githubReview), symlink(githubAlpha)]
+    const skills = await repositorySkills(contextOf(entries, {}))
+    expect(skills.capped).toEqual([
+      { name: "alpha", path: githubAlpha, cap: "symlink" },
+      { name: "review", path: githubReview, cap: "symlink" },
+      { name: "beta", path: claudeBeta, cap: "symlink" },
+    ])
+    expect(skills.shadowed).toEqual([])
+    expect(skills.offered).toBeUndefined()
+  })
+
+  it("leaves a symlinked resource out of its skill's files, the catalog's resource list and the fingerprint, and counts it under resources", async () => {
+    const regular = [blob(lintBody, "a1"), blob(lintRules, "b2")]
+    const entries = [...regular, symlink(lintExtra, "c3")]
+    expect(repositorySkillFiles(entries).map(({ files }) => files)).toEqual([[lintBody, lintRules]])
+    expect(await repositorySkillFingerprint(entries)).toBe(await repositorySkillFingerprint(regular))
+    const cached = Object.fromEntries([
+      file(lintBody, skillMd("Lint.")),
+      file(lintRules, "Rules."),
+      file(lintExtra, "Target text."),
+    ])
+    const skills = await repositorySkills(contextOf(entries, cached))
+    expect(skills.offered?.names).toEqual(["lint"])
+    expect(skills.offered?.fingerprint).toBe(await repositorySkillFingerprint(regular))
+    expect((await skills.offered?.source.load("lint"))?.resources?.map(({ path }) => path)).toEqual(["rules.md"])
+    expect(await skills.offered?.source.readResource?.("lint", "extra.md")).toBeNull()
+    expect(skills.capped).toEqual([{ name: "lint", path: lintBody, cap: "symlink", resources: 1 }])
+    const bodyOnly = contextOf(entries, Object.fromEntries([file(lintBody, skillMd("Lint."))]))
+    expect(unloadedSkillPaths(bodyOnly)).toEqual([lintRules])
+  })
+
+  it.each([
+    { label: "skills root", link: ".claude/skills" },
+    { label: "skill's directory", link: ".claude/skills/lint" },
+  ])(
+    "discovers nothing under a $label that is itself a symlink, so a skill symlinked between roots is offered once",
+    async ({ link }) => {
+      const entries = [symlink(link), blob(lintBody)]
+      const skills = await repositorySkills(contextOf(entries, Object.fromEntries([file(lintBody, skillMd("Lint."))])))
+      expect(skills.offered?.names).toEqual(["lint"])
+      expect(skills.shadowed).toEqual([])
+      expect(skills.capped).toEqual([])
+    },
+  )
+
+  it("treats a skill file listed without a mode as a regular one, as records from before modes were kept list it", async () => {
+    const entries = [blob(lintBody, "a1"), blob(lintExtra, "b2")]
+    expect(repositorySkillFiles(entries).map(({ files }) => files)).toEqual([[lintBody, lintExtra]])
+    expect(await repositorySkillFingerprint(entries)).toBe(await sha256Hex(`${lintBody}:a1\n${lintExtra}:b2`))
+    const cached = Object.fromEntries([file(lintBody, skillMd("Lint.")), file(lintExtra, "Extra.")])
+    const skills = await repositorySkills(contextOf(entries, cached))
+    expect(skills.capped).toEqual([])
+    expect((await skills.offered?.source.readResource?.("lint", "extra.md"))?.content).toBe("Extra.")
+  })
+
+  it("counts no file of a skill whose SKILL.md is a symlink toward the 512 KiB, since that skill is never served", () => {
+    const heavy = Array.from({ length: 11 }, (_, index) => `.github/skills/linked/r-${indexed(index)}.md`)
+    const small = [".claude/skills/small/SKILL.md", ".claude/skills/small/notes.md"]
+    const entries = [
+      symlink(linkedBody),
+      ...heavy.map((path) => blob(path, "1", 50_000)),
+      ...small.map((path) => blob(path)),
+    ]
+    const smallBody = contextOf(entries, Object.fromEntries([file(".claude/skills/small/SKILL.md", skillMd("Small."))]))
+    expect(unloadedSkillPaths(smallBody)).toEqual([".claude/skills/small/notes.md"])
+  })
+
+  it("names the symlink rather than the size when the listing also sizes a symlinked SKILL.md or resource over 50 KiB", async () => {
+    const huge = MAX_SKILL_FILE_BYTES + 1
+    const entries = [symlink(linkedBody, "a1", huge), blob(lintBody), symlink(lintExtra, "c3", huge)]
+    const skills = await repositorySkills(contextOf(entries, Object.fromEntries([file(lintBody, skillMd("Lint."))])))
+    expect(skills.capped).toEqual([
+      { name: "linked", path: linkedBody, cap: "symlink" },
+      { name: "lint", path: lintBody, cap: "symlink", resources: 1 },
+    ])
   })
 })
 

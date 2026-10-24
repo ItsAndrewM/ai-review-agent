@@ -1,7 +1,10 @@
-import { Type } from "@earendil-works/pi-ai"
+import { Type, type Message } from "@earendil-works/pi-ai"
 import {
   defineExtension,
   defineTool,
+  GenerationTask,
+  hook,
+  ToolTask,
   type ConversationId,
   type Extension,
   type ToolExecutionResult,
@@ -12,7 +15,7 @@ import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { numberedLine, systemPrompt } from "./prompt.ts"
+import { BUDGET_REFUSAL_MARKER, numberedLine, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -24,6 +27,8 @@ export type SearchAccess =
   | { kind: "unavailable"; reason: string }
   | { kind: "spent" }
 
+export type RequestBudget = "allow" | "refuse"
+
 export interface ReviewHost {
   botLogin(): string
   github(): Promise<GitHubClient>
@@ -33,6 +38,8 @@ export interface ReviewHost {
   submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
   loadedSnapshot(): SnapshotFiles | undefined
+  budgetBlockFor(toolName: string, conversationId: ConversationId): Promise<string | undefined>
+  requestBudget(conversationId: ConversationId): Promise<RequestBudget>
 }
 
 const MAX_FILE_CHARS = 60_000
@@ -104,7 +111,9 @@ export function createReviewExtension(host: ReviewHost): Extension {
     description: "List the directories and files at the pull request's head under a path.",
     parameters: Type.Object({
       path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
-      depth: Type.Optional(Type.Integer({ description: "How many levels to list. Default 2." })),
+      depth: Type.Optional(
+        Type.Integer({ minimum: 1, description: "How many levels to list, at least 1. Default 2." }),
+      ),
     }),
     replay: "unsafe",
     async execute(args) {
@@ -113,7 +122,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
   })
 
   const submitReview = defineTool({
-    name: "submit_review",
+    name: SUBMIT_REVIEW_TOOL,
     description:
       "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, and a verdict. The host validates every finding and posts the review to GitHub. Call it once; rejected findings and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
@@ -137,7 +146,26 @@ export function createReviewExtension(host: ReviewHost): Extension {
       },
     ],
     tools: [readFile, listChangedFiles, getIssue, grepTool, treeTool, submitReview],
+    hooks: [
+      hook(ToolTask, {
+        beforeTool: async (call, api) => blockOrNothing(await host.budgetBlockFor(call.name, api.conversationId)),
+      }),
+      hook(GenerationTask, {
+        beforeRequest: async (request, api) =>
+          markedOrNothing(request.messages, await host.requestBudget(api.conversationId)),
+      }),
+    ],
   })
+}
+
+function blockOrNothing(message: string | undefined) {
+  return message === undefined ? undefined : { block: message }
+}
+
+function markedOrNothing(messages: readonly Message[], decision: RequestBudget) {
+  if (decision === "allow") return undefined
+  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 } satisfies Message
+  return { messages: [...messages, marker] }
 }
 
 export async function readFileText(host: ReviewHost, args: { path: string; ref?: "head" | "base" }): Promise<string> {

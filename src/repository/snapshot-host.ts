@@ -51,7 +51,9 @@ export function snapshotFailure(cause: unknown): SnapshotFailure {
 
 export type RunEnd = "review_end" | "answer_end"
 
-export type DropReason = RunEnd | "stale"
+export type IdleDropReason = "stale" | "closed"
+
+export type DropReason = RunEnd | IdleDropReason
 
 export interface SearchHead {
   number: number
@@ -94,9 +96,9 @@ export class SnapshotRuns {
     }
   }
 
-  dropStale(number: number): void {
+  dropIdle(number: number, reason: IdleDropReason): void {
     if (this.#active > 0 || this.#loading !== undefined) return
-    this.#drop(number, "stale")
+    this.#drop(number, reason)
   }
 
   async access(tool: "grep" | "tree", head: () => Promise<SearchHead>): Promise<SearchAccess> {
