@@ -45,7 +45,7 @@ export interface ReviewHost {
 
 const MAX_FILE_CHARS = 60_000
 
-const ReadFileParameters = Type.Object({
+export const ReadFileParameters = Type.Object({
   path: Type.String({ description: "Path from the repository root." }),
   ref: Type.Optional(
     Type.Union([Type.Literal("head"), Type.Literal("base")], { description: "head (default) or base." }),
@@ -54,7 +54,7 @@ const ReadFileParameters = Type.Object({
 
 export type ReadFileArgs = Static<typeof ReadFileParameters>
 
-const GrepParameters = Type.Object({
+export const GrepParameters = Type.Object({
   pattern: Type.String({
     description:
       "RE2 regular expression, matched against the first 500 characters of each line. JavaScript syntax mostly works, but \\s matches ASCII whitespace only, and lookaround and backreferences aren't supported: a pattern using them is searched as literal text.",
@@ -70,7 +70,7 @@ const GrepParameters = Type.Object({
 
 export type GrepArgs = Static<typeof GrepParameters>
 
-const TreeParameters = Type.Object({
+export const TreeParameters = Type.Object({
   path: Type.Optional(Type.String({ description: "Directory from the repository root. Default: the root." })),
   depth: Type.Optional(Type.Integer({ minimum: 1, description: "How many levels to list, at least 1. Default 2." })),
 })
