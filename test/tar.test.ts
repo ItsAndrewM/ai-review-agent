@@ -1,6 +1,20 @@
+import { setFlagsFromString } from "node:v8"
+import { runInNewContext } from "node:vm"
 import { describe, expect, it } from "vitest"
 import { readTar, type TarFile } from "../src/repository/tar.ts"
-import { concat, streamOf, tarOf, type TarEntry } from "./tar-archive.ts"
+import { concat, streamOf, tarOf, withHeaderField, type TarEntry } from "./tar-archive.ts"
+
+setFlagsFromString("--expose-gc")
+
+const collectGarbage: () => void = runInNewContext("gc")
+
+const BLOCK = 512
+
+const SIZE_FIELD = 124
+
+const ZERO_DIGIT = "0".charCodeAt(0)
+
+const nextMacrotask = () => new Promise((resolve) => setTimeout(resolve, 0))
 
 const decoder = new TextDecoder()
 
@@ -116,5 +130,108 @@ describe("readTar", () => {
     const archive = tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }])
 
     await expect(readAll(archive.subarray(0, 600))).rejects.toThrow("truncated")
+  })
+
+  it("fails on an archive cut off at a block boundary before its zero blocks, as a truncated download is", async () => {
+    const archive = tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }])
+
+    await expect(readAll(archive.subarray(0, archive.length - 2 * BLOCK))).rejects.toThrow("truncated")
+    await expect(readAll(archive.subarray(0, archive.length - BLOCK))).rejects.toThrow("truncated")
+  })
+
+  it("fails on a lone zero block followed by more entries", async () => {
+    const first = tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }])
+    const archive = concat([
+      first.subarray(0, first.length - 2 * BLOCK),
+      new Uint8Array(BLOCK),
+      tarOf([{ name: `${ROOT}/b.ts`, body: "b" }]),
+    ])
+
+    await expect(readAll(archive)).rejects.toThrow("lone zero block")
+  })
+
+  it("rejects a header whose checksum doesn't match its bytes", async () => {
+    const archive = tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }])
+    const renamed = archive.slice()
+    renamed[ROOT.length + 2] = "x".charCodeAt(0)
+    const checksumEdited = archive.slice()
+    const lastDigit = 153
+    checksumEdited[lastDigit] = checksumEdited[lastDigit] === ZERO_DIGIT ? ZERO_DIGIT + 1 : ZERO_DIGIT
+
+    await expect(readAll(renamed)).rejects.toThrow("checksum")
+    await expect(readAll(checksumEdited)).rejects.toThrow("checksum")
+  })
+
+  it.each([
+    ["trailing junk", "00000000003x"],
+    ["junk after the terminator", "0000000003\0x"],
+    ["a digit that isn't octal", "00000000009\0"],
+    ["no digits", "\0\0\0\0\0\0\0\0\0\0\0\0"],
+    ["base-256", "\x80\0\0\0\0\0\0\0\0\0\0\x03"],
+  ])("rejects a size field with %s", async (_label, field) => {
+    const archive = withHeaderField(tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }]), 0, SIZE_FIELD, field)
+
+    await expect(readAll(archive)).rejects.toThrow("unreadable size")
+  })
+
+  it("reads a size field padded with spaces", async () => {
+    const archive = withHeaderField(tarOf([{ name: `${ROOT}/a.ts`, body: "abc" }]), 0, SIZE_FIELD, "         3 ")
+
+    expect(await readAll(archive)).toEqual([{ path: "a.ts", size: 3, body: "abc" }])
+  })
+
+  it.each([
+    ["a length past the record's end", "99 path=x\n"],
+    ["a length that isn't decimal", "1x path=x\n"],
+    ["no space after the length", "11path=abc\n"],
+    ["no newline at the record's end", "10 path=abc"],
+    ["a length too short for its key", "3 path=x\n"],
+    ["no key=value", "8 pathX\n"],
+  ])("rejects a pax record with %s", async (_label, rawPax) => {
+    const archive = tarOf([{ rawPax }, { name: `${ROOT}/a.ts`, body: "abc" }])
+
+    await expect(readAll(archive)).rejects.toThrow("pax record is malformed")
+  })
+
+  it("lets the chunks of a skipped entry go as they stream past, keeping at most the latest, so a large one is never held in memory", async () => {
+    const chunkSize = 65_536
+    const chunkCount = 32
+    const header = tarOf([{ name: `${ROOT}/big.bin`, bytes: new Uint8Array(chunkSize * chunkCount) }]).slice(0, BLOCK)
+    const tail = tarOf([{ name: `${ROOT}/after.ts`, body: "after" }])
+    const skipped: WeakRef<Uint8Array>[] = []
+    const alive = { now: 0, most: 0 }
+    let pulls = 0
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          await nextMacrotask()
+          collectGarbage()
+          alive.now = skipped.filter((chunk) => chunk.deref() !== undefined).length
+          alive.most = Math.max(alive.most, alive.now)
+          pulls += 1
+          if (pulls === 1) {
+            controller.enqueue(header)
+          } else if (pulls <= chunkCount + 1) {
+            const chunk = new Uint8Array(chunkSize)
+            skipped.push(new WeakRef(chunk))
+            controller.enqueue(chunk)
+          } else if (pulls === chunkCount + 2) {
+            controller.enqueue(tail)
+          } else {
+            controller.close()
+          }
+        },
+      },
+      { highWaterMark: 0 },
+    )
+    const files: ReadFile[] = []
+    for await (const file of readTar(stream, 1_000)) files.push(describeFile(file))
+
+    expect(files).toEqual([
+      { path: "big.bin", size: chunkSize * chunkCount, body: undefined },
+      { path: "after.ts", size: 5, body: "after" },
+    ])
+    expect(skipped).toHaveLength(chunkCount)
+    expect(alive.most).toBeLessThanOrEqual(1)
   })
 })

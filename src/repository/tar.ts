@@ -18,26 +18,58 @@ const NAME_RECORD_FLAGS = ["x", "L"]
 
 const REGULAR_FLAGS = ["0", "\0"]
 
+const CHECKSUM_START = 148
+
+const CHECKSUM_END = 156
+
+const SPACE = 0x20
+
+const NEWLINE = 0x0a
+
+const OCTAL_FIELD = /^ *([0-7]+)[ \0]*$/
+
+const DECIMAL = /^[0-9]+$/
+
 const decoder = new TextDecoder()
 
 const paddedSize = (size: number): number => Math.ceil(size / BLOCK) * BLOCK
 
 const truncated = (): Error => new Error("tar archive is truncated")
 
+const malformedPax = (): Error => new Error("tar pax record is malformed")
+
+const isZero = (block: Uint8Array): boolean => block.every((byte) => byte === 0)
+
 function cString(bytes: Uint8Array): string {
   const end = bytes.indexOf(0)
   return decoder.decode(end < 0 ? bytes : bytes.subarray(0, end))
 }
 
+function octal(field: Uint8Array): number | undefined {
+  const digits = OCTAL_FIELD.exec(decoder.decode(field))?.[1]
+  return digits === undefined ? undefined : Number.parseInt(digits, 8)
+}
+
 function parseSize(field: Uint8Array): number {
-  const size = Number.parseInt(cString(field).trim(), 8)
-  if (!Number.isSafeInteger(size) || size < 0) {
+  const size = octal(field)
+  if (size === undefined) {
     throw new Error("tar header has an unreadable size")
   }
   return size
 }
 
+function checksumMatches(block: Uint8Array): boolean {
+  let sum = 0
+  for (const [index, byte] of block.entries()) {
+    sum += index >= CHECKSUM_START && index < CHECKSUM_END ? SPACE : byte
+  }
+  return octal(block.subarray(CHECKSUM_START, CHECKSUM_END)) === sum
+}
+
 function parseHeader(block: Uint8Array): TarHeader {
+  if (!checksumMatches(block)) {
+    throw new Error("tar header checksum doesn't match")
+  }
   const name = cString(block.subarray(0, 100))
   const prefix = cString(block.subarray(345, 500))
   return {
@@ -47,17 +79,34 @@ function parseHeader(block: Uint8Array): TarHeader {
   }
 }
 
+interface PaxRecord {
+  field: string
+  end: number
+}
+
+function paxRecord(body: Uint8Array, offset: number): PaxRecord {
+  const space = body.indexOf(SPACE, offset)
+  if (space < 0) {
+    throw malformedPax()
+  }
+  const digits = decoder.decode(body.subarray(offset, space))
+  const end = offset + Number.parseInt(digits, 10)
+  if (!DECIMAL.test(digits) || end <= space + 1 || end > body.length || body[end - 1] !== NEWLINE) {
+    throw malformedPax()
+  }
+  const field = decoder.decode(body.subarray(space + 1, end - 1))
+  if (!field.includes("=")) {
+    throw malformedPax()
+  }
+  return { field, end }
+}
+
 function paxPath(body: Uint8Array): string | undefined {
   let path: string | undefined
   for (let offset = 0; offset < body.length;) {
-    const space = body.indexOf(0x20, offset)
-    const length = Number.parseInt(decoder.decode(body.subarray(offset, Math.max(space, offset))), 10)
-    if (space < 0 || !(length > space - offset + 1)) {
-      throw new Error("tar pax record is malformed")
-    }
-    const field = decoder.decode(body.subarray(space + 1, offset + length - 1))
+    const { field, end } = paxRecord(body, offset)
     path = field.startsWith("path=") ? field.slice("path=".length) : path
-    offset += length
+    offset = end
   }
   return path
 }
@@ -75,12 +124,14 @@ class TarSource {
   constructor(private readonly reader: ReadableStreamDefaultReader<Uint8Array>) {}
 
   async header(): Promise<TarHeader | undefined> {
-    await this.fill(BLOCK)
-    if (this.queued === 0) {
-      return undefined
-    }
     const block = await this.take(BLOCK)
-    return block.every((byte) => byte === 0) ? undefined : parseHeader(block)
+    if (!isZero(block)) {
+      return parseHeader(block)
+    }
+    if (!isZero(await this.take(BLOCK))) {
+      throw new Error("tar archive has a lone zero block")
+    }
+    return undefined
   }
 
   async take(count: number): Promise<Uint8Array> {

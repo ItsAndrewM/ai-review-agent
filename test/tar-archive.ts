@@ -15,7 +15,11 @@ export interface TarGlobalEntry {
   global: Record<string, string>
 }
 
-export type TarEntry = TarFileEntry | TarGlobalEntry
+export interface TarRawPaxEntry {
+  rawPax: string
+}
+
+export type TarEntry = TarFileEntry | TarGlobalEntry | TarRawPaxEntry
 
 function octal(value: number, width: number): string {
   return `${value.toString(8).padStart(width - 1, "0")}\0`
@@ -35,9 +39,22 @@ function headerBlock(name: string, size: number, typeflag: string, prefix: strin
   write(257, "ustar\0", 6)
   write(263, "00", 2)
   write(345, prefix, 155)
+  return sealed(block)
+}
+
+function sealed(block: Uint8Array): Uint8Array {
+  block.set(encoder.encode("        "), 148)
   const checksum = block.reduce((sum, byte) => sum + byte, 0)
-  write(148, `${checksum.toString(8).padStart(6, "0")}\0 `, 8)
+  block.set(encoder.encode(`${checksum.toString(8).padStart(6, "0")}\0 `), 148)
   return block
+}
+
+export function withHeaderField(archive: Uint8Array, headerAt: number, offset: number, text: string): Uint8Array {
+  const out = archive.slice()
+  const header = out.subarray(headerAt, headerAt + BLOCK)
+  header.set(encoder.encode(text), offset)
+  sealed(header)
+  return out
 }
 
 function padded(bytes: Uint8Array): Uint8Array {
@@ -78,6 +95,9 @@ function fileParts(entry: TarFileEntry): Uint8Array[] {
 function partsOf(entry: TarEntry): Uint8Array[] {
   if ("global" in entry) {
     return record("pax_global_header", "g", paxRecords(entry.global))
+  }
+  if ("rawPax" in entry) {
+    return record("PaxHeader/x", "x", encoder.encode(entry.rawPax))
   }
   return fileParts(entry)
 }
