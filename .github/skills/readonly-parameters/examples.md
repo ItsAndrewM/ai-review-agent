@@ -1,0 +1,1 @@
+../../../docs/readonly-examples.md
