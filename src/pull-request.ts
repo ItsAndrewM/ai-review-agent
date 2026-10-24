@@ -1002,10 +1002,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async reportActivation(name: string): Promise<void> {
     this.#activated.push(name)
-    const pending = await this.readPending()
     log("skills.activated", {
       number: await this.storedNumber(),
-      head: pending === undefined ? undefined : shortSha(pending.headSha),
+      head: await this.pendingHead(),
       name,
     })
   }
@@ -1014,6 +1013,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       const key = await this.ctx.storage.get("key")
       return Value.Check(PullRequestKey, key) ? key.number : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  private async pendingHead(): Promise<string | undefined> {
+    try {
+      const pending = await this.readPending()
+      return pending === undefined ? undefined : shortSha(pending.headSha)
     } catch {
       return undefined
     }

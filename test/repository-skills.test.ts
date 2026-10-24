@@ -783,13 +783,15 @@ describe("the catalog", () => {
     return tool
   }
 
+  const sdkAnswer = { isError: false, content: [{ type: "text" as const, text: "Activated." }] }
+
   const activateSkill = () =>
     defineTool({
       name: "activate_skill",
       description: "Activate a skill by name.",
       parameters: Type.Object({ name: Type.String() }),
       async execute() {
-        return { output: [{ type: "text" as const, text: "Activated." }] }
+        return sdkAnswer
       },
     })
 
@@ -907,15 +909,7 @@ describe("the catalog", () => {
     })
 
     it("wraps every tool of an extension, keeping its name, its sections and each tool's definition", () => {
-      const activate = defineTool({
-        name: "activate_skill",
-        description: "Activate a skill by name.",
-        parameters: Type.Object({ name: Type.String() }),
-        replay: "safe",
-        async execute() {
-          return { output: [] }
-        },
-      })
+      const activate = { ...activateSkill(), replay: "safe" as const }
       const section = { key: "skills", render: () => "Available skills." }
       const extension = defineExtension({ name: "agents.skills", tools: [activate], sections: [section] })
       const wrapped = withContentAsOutput(extension, ignoreActivation)
@@ -932,24 +926,8 @@ describe("the catalog", () => {
     })
 
     it("sets output limits above the file cap in bytes and in lines on every wrapped tool, since pi-durable cuts a tool result at 50 KiB and 2,000 lines by default", () => {
-      const activate = defineTool({
-        name: "activate_skill",
-        description: "Activate a skill by name.",
-        parameters: Type.Object({ name: Type.String() }),
-        async execute() {
-          return { output: [] }
-        },
-      })
-      const read = defineTool({
-        name: "read_skill_resource",
-        description: "Read a resource of a skill.",
-        parameters: Type.Object({ name: Type.String(), path: Type.String() }),
-        async execute() {
-          return { output: [] }
-        },
-      })
       const wrapped = withContentAsOutput(
-        defineExtension({ name: "agents.skills", tools: [activate, read] }),
+        defineExtension({ name: "agents.skills", tools: [activateSkill(), readSkillResource()] }),
         ignoreActivation,
       )
       expect((wrapped.tools ?? []).map((tool) => tool.outputLimits)).toEqual([
@@ -994,14 +972,14 @@ describe("the catalog", () => {
       expect(events).toEqual(["reported lint", "ran"])
     })
 
-    it("wraps activate_skill with the activation report and leaves read_skill_resource with the content wrapper alone, even for a call that carries a name", async () => {
+    it("wraps activate_skill with the activation report inside the content wrapper, so the SDK's content still reaches the model, and leaves read_skill_resource with the content wrapper alone, even for a call that carries a name", async () => {
       const { report, names } = activationRecorder()
       const wrapped = withContentAsOutput(
         defineExtension({ name: "agents.skills", tools: [activateSkill(), readSkillResource()] }),
         report,
       )
       const activate = await toolCalledWithoutHarness(wrapped, "activate_skill").execute({ name: "lint" })
-      expect(activate.output).toEqual([{ type: "text", text: "Activated." }])
+      expect(activate.output).toEqual(sdkAnswer.content)
       expect(names).toEqual(["lint"])
       const read = await toolCalledWithoutHarness(wrapped, "read_skill_resource").execute({
         name: "lint",
@@ -1042,14 +1020,7 @@ describe("the catalog", () => {
 
     it("installs the catalog with every tool wrapped, so what the SDK's tools return reaches the model", async () => {
       const registry = createRegistry()
-      const activate = defineTool({
-        name: "activate_skill",
-        description: "Activate a skill by name.",
-        parameters: Type.Object({ name: Type.String() }),
-        async execute() {
-          return { output: [] }
-        },
-      })
+      const activate = activateSkill()
       const sdkCatalog = defineExtension({ name: "agents.skills", tools: [activate] })
       const installed = await installCatalog(registry, undefined, [], async () => sdkCatalog, ignoreActivation)
       expect(installed).not.toBe(sdkCatalog)
