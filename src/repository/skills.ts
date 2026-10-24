@@ -80,7 +80,6 @@ type CachedFiles = Readonly<Record<string, string>>
 interface SkillPlan {
   readonly skills: RepositorySkillFiles[]
   readonly oversized: ReadonlySet<string>
-  readonly symlinked: ReadonlySet<string>
   readonly loadable: ReadonlySet<string>
   readonly overFileCap: ReadonlyMap<string, number>
   readonly symlinkedResources: ReadonlyMap<string, number>
@@ -172,8 +171,20 @@ const skillsUnder = (root: string, blobs: readonly TreeEntry[]): RepositorySkill
       return { name, dir, files: files.sort(compareText) }
     })
 
-const discoveredSkills = (entries: readonly TreeEntry[]): RepositorySkillFiles[] => {
+const symlinkedSkillsUnder = (root: string, blobs: readonly TreeEntry[]): SkillAt[] =>
+  blobs
+    .filter(isSymlink)
+    .flatMap(({ path }) => skillNameAt(root, path).map((name) => ({ name, path })))
+    .sort((a, b) => compareText(a.name, b.name))
+
+const symlinkedSkills = (entries: readonly TreeEntry[]): SkillAt[] => {
   const blobs = safeBlobs(entries)
+  return SKILL_ROOTS.flatMap((root) => symlinkedSkillsUnder(root, blobs))
+}
+
+const discoveredSkills = (entries: readonly TreeEntry[]): RepositorySkillFiles[] => {
+  const symlinkedBodies = new Set(symlinkedSkills(entries).map(({ path }) => path))
+  const blobs = safeBlobs(entries).filter(({ path }) => !symlinkedBodies.has(path))
   return SKILL_ROOTS.flatMap((root) => skillsUnder(root, blobs))
 }
 
@@ -190,9 +201,7 @@ export function shadowedSkillFiles(entries: readonly TreeEntry[]): RepositorySki
 
 export async function repositorySkillFingerprint(entries: readonly TreeEntry[]): Promise<string> {
   const files = new Set(repositorySkillFiles(entries).flatMap(({ files }) => files))
-  const pairs = entries
-    .filter((entry) => files.has(entry.path) && !isSymlink(entry))
-    .map(({ path, sha }) => `${path}:${sha}`)
+  const pairs = entries.filter(({ path }) => files.has(path)).map(({ path, sha }) => `${path}:${sha}`)
   return sha256Hex(pairs.sort(compareText).join("\n"))
 }
 
@@ -221,11 +230,6 @@ const overFileCapOf = (skill: RepositorySkillFiles, blobs: readonly TreeEntry[])
 const symlinkedResourcesOf = (skill: RepositorySkillFiles, blobs: readonly TreeEntry[]): number =>
   blobs.filter((entry) => isResourceOf(skill, entry) && isSymlink(entry)).length
 
-const symlinkedBodiesOf = (skills: readonly RepositorySkillFiles[], entries: readonly TreeEntry[]): Set<string> => {
-  const symlinks = new Set(entries.filter(isSymlink).map(({ path }) => path))
-  return new Set(skills.map(bodyPathOf).filter((path) => symlinks.has(path)))
-}
-
 const countsBySkill = (
   skills: readonly RepositorySkillFiles[],
   count: (skill: RepositorySkillFiles) => number,
@@ -236,15 +240,12 @@ const planOf = (entries: readonly TreeEntry[]): SkillPlan => {
   const sizes = new Map(entries.map((entry): [string, number] => [entry.path, sizeOf(entry)]))
   const tooLarge = (path: string): boolean => (sizes.get(path) ?? Number.POSITIVE_INFINITY) > MAX_SKILL_FILE_BYTES
   const oversized = new Set(skills.map(bodyPathOf).filter(tooLarge))
-  const symlinked = symlinkedBodiesOf(skills, entries)
-  const leftOutBodies = new Set([...oversized, ...symlinked])
-  const servable = skills.filter((skill) => !leftOutBodies.has(bodyPathOf(skill)))
+  const servable = skills.filter((skill) => !oversized.has(bodyPathOf(skill)))
   const order = [...servable.map(bodyPathOf), ...servable.flatMap(resourcePathsOf)]
   const blobs = safeBlobs(entries)
   return {
     skills,
     oversized,
-    symlinked,
     loadable: withinSkillBytes(order, sizes),
     overFileCap: countsBySkill(skills, (skill) => overFileCapOf(skill, blobs)),
     symlinkedResources: countsBySkill(skills, (skill) => symlinkedResourcesOf(skill, blobs)),
@@ -263,7 +264,6 @@ const loadedResources = (skill: RepositorySkillFiles, files: CachedFiles, loadab
 const stateOf = (skill: RepositorySkillFiles, files: CachedFiles, plan: SkillPlan): SkillState => {
   const bodyPath = bodyPathOf(skill)
   const at = { name: skill.name, path: bodyPath }
-  if (plan.symlinked.has(bodyPath)) return { kind: "capped", at, cap: "symlink" }
   if (plan.oversized.has(bodyPath)) return { kind: "capped", at, cap: "file" }
   if (!plan.loadable.has(bodyPath)) return { kind: "capped", at, cap: "base" }
   const body = cachedText(files, bodyPath)
@@ -336,6 +336,9 @@ const atsOf = (states: readonly SkillState[], kind: "unloaded" | "invalid"): Ski
 const cappedSkillsOf = (states: readonly SkillState[]): CappedSkill[] =>
   states.flatMap((state) => (state.kind === "capped" ? [{ ...state.at, cap: state.cap }] : []))
 
+const cappedSymlinksOf = (entries: readonly TreeEntry[]): CappedSkill[] =>
+  symlinkedSkills(entries).map((at): CappedSkill => ({ ...at, cap: "symlink" }))
+
 const resourceCapsOf = (skill: RepositorySkillFiles, plan: SkillPlan): CappedSkill[] => {
   const at = { name: skill.name, path: bodyPathOf(skill) }
   const leftOut = (cap: SkillCap, resources: number): CappedSkill[] =>
@@ -370,7 +373,7 @@ export async function repositorySkills(context: SkillContext | undefined): Promi
     shadowed: shadowedSkillFiles(context.tree.entries).map((skill) => ({ name: skill.name, path: bodyPathOf(skill) })),
     unloaded: atsOf(states, "unloaded"),
     invalid: atsOf(states, "invalid"),
-    capped: [...cappedSkillsOf(states), ...cappedResourcesOf(survey)],
+    capped: [...cappedSymlinksOf(context.tree.entries), ...cappedSkillsOf(states), ...cappedResourcesOf(survey)],
     loadsSkipped: unloadedBodies(survey.plan, context.files).length + unloadedResources(survey, context.files).length,
   }
 }

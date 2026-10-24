@@ -1,4 +1,4 @@
-import { SYMLINK_MODE, type BlobText, type ListedEntry, type TreeListing } from "../github/client.ts"
+import { isSymlink, type BlobText, type ListedEntry, type TreeListing } from "../github/client.ts"
 import { errorText, logError } from "../log.ts"
 import {
   classify,
@@ -207,7 +207,7 @@ function verdictFor(entry: ListedEntry, collector: Collector, limits: SnapshotLi
   if (entry.type === "tree" || collector.has(entry.path)) {
     return "skip"
   }
-  if (entry.mode === SYMLINK_MODE) {
+  if (isSymlink(entry)) {
     return "symlink"
   }
   if (entry.type === "commit") {
