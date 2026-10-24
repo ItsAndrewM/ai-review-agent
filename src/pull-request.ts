@@ -488,7 +488,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
   }
 
-  async budgetBlock(toolName: string, conversationId: ConversationId): Promise<string | undefined> {
+  async budgetBlockFor(toolName: string, conversationId: ConversationId): Promise<string | undefined> {
     const spent = await this.spentReview(conversationId)
     if (spent === undefined) return undefined
     const message = budgetBlock(spent.standing, toolName)
@@ -1429,11 +1429,26 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async spentReview(conversationId: ConversationId): Promise<SpentReview | undefined> {
+    try {
+      return await this.readSpentReview(conversationId)
+    } catch (error) {
+      logError("review.budget_unreadable", { error: errorText(error) })
+      return undefined
+    }
+  }
+
+  private async readSpentReview(conversationId: ConversationId): Promise<SpentReview | undefined> {
     const root = (await this.harness.conversation(ROOT_SESSION)).id
     const pending = conversationId === root ? await this.readPending() : undefined
     if (pending === undefined) return undefined
     const standing = await this.budgetStandingOf(pending)
-    return standing.kind === "spent" ? { pending, standing } : undefined
+    if (standing.kind !== "spent" || !(await this.reviewIsRunning(pending))) return undefined
+    return { pending, standing }
+  }
+
+  private async reviewIsRunning(pending: PendingReview): Promise<boolean> {
+    const running = await this.runningRootOperation()
+    return running !== undefined && ownsOperation(pending, running)
   }
 
   private async budgetStandingOf(pending: PendingReview): Promise<BudgetStanding> {

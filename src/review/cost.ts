@@ -177,7 +177,8 @@ function neuronsOf(usd: number): number {
 
 function neuronText(neurons: number): string {
   const rounded = Math.round(neurons)
-  return rounded === 0 ? "< 1 neuron" : `≈ ${rounded.toLocaleString("en-US")} neurons`
+  if (rounded === 0) return "< 1 neuron"
+  return `≈ ${rounded.toLocaleString("en-US")} ${rounded === 1 ? "neuron" : "neurons"}`
 }
 
 function dollarText(usd: number): string {

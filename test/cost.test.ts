@@ -181,6 +181,13 @@ describe("spendLine", () => {
     expect(spendLine([spend({ usd: 0.000_005 })])).toContain(" · < 1 neuron (<$0.001)")
   })
 
+  it.each([
+    [0.000_011, "≈ 1 neuron"],
+    [0.000_022, "≈ 2 neurons"],
+  ])("renders a cost of %s USD as %s", (usd, counted) => {
+    expect(spendLine([spend({ usd })])).toContain(` · ${counted} (<$0.001)`)
+  })
+
   it("adds up every model the review used", () => {
     const line = spendLine([spend({ usd: 0.005 }), spend({ model: KIMI, calls: 1, usd: 0.006 })])
     expect(line).toBe("4 model calls · 122k in / 9.6k out tokens · ≈ 1,000 neurons ($0.011)")

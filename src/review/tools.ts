@@ -15,7 +15,7 @@ import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { BUDGET_REFUSAL_MARKER, systemPrompt } from "./prompt.ts"
+import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -38,13 +38,11 @@ export interface ReviewHost {
   submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
   loadedSnapshot(): SnapshotFiles | undefined
-  budgetBlock(toolName: string, conversationId: ConversationId): Promise<string | undefined>
+  budgetBlockFor(toolName: string, conversationId: ConversationId): Promise<string | undefined>
   requestBudget(conversationId: ConversationId): Promise<RequestBudget>
 }
 
 const MAX_FILE_CHARS = 60_000
-
-export const SUBMIT_REVIEW_TOOL = "submit_review"
 
 export function createReviewExtension(host: ReviewHost): Extension {
   const readFile = defineTool({
@@ -150,7 +148,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
     tools: [readFile, listChangedFiles, getIssue, grepTool, treeTool, submitReview],
     hooks: [
       hook(ToolTask, {
-        beforeTool: async (call, api) => blockOrNothing(await host.budgetBlock(call.name, api.conversationId)),
+        beforeTool: async (call, api) => blockOrNothing(await host.budgetBlockFor(call.name, api.conversationId)),
       }),
       hook(GenerationTask, {
         beforeRequest: async (request, api) =>

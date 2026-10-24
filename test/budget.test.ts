@@ -1,4 +1,4 @@
-import { fauxAssistantMessage, isRetryableAssistantError } from "@earendil-works/pi-ai"
+import { fauxAssistantMessage, isContextOverflow, isRetryableAssistantError } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
 import {
   BUDGET_REFUSAL,
@@ -71,10 +71,21 @@ describe("budgetBlock", () => {
     const others = ["grep", "tree", "list_changed_files", "get_issue", "activate_skill", "read_skill_resource"]
     for (const tool of others) expect(budgetBlock(SPENT, tool)).toBe(BLOCK)
   })
+
+  it.each([
+    [1, "1 neuron"],
+    [2, "2 neurons"],
+    [1_000, "1,000 neurons"],
+  ])("counts a budget of %d as %s", (budget, counted) => {
+    const standing = { kind: "spent", neurons: budget + 0.7, budget } as const
+    expect(budgetBlock(standing, "read_file")).toContain(
+      `this review has used ${budget.toLocaleString("en-US")} of its ${counted}. Call submit_review now`,
+    )
+  })
 })
 
 describe("refusesRequest", () => {
-  it("lets the first three requests past the budget through, for a resubmission and the closing reply", () => {
+  it("lets the first three requests past the budget through, for the answer to the block and a resubmission, with one to spare", () => {
     for (const requestsPastBudget of [0, 1, 2]) expect(refusesRequest(SPENT, requestsPastBudget)).toBe(false)
   })
 
@@ -89,22 +100,35 @@ describe("refusesRequest", () => {
 })
 
 describe("BUDGET_REFUSAL", () => {
-  it("says the budget was spent and the model kept calling tools after it was told to submit", () => {
+  const failed = (errorMessage: string) => fauxAssistantMessage("", { stopReason: "error", errorMessage })
+
+  it("says the budget was spent and the review didn't submit within the requests allowed past it, whatever used them", () => {
     expect(BUDGET_REFUSAL).toBe(
-      "the review's budget was spent and the model kept calling tools after it was told to submit",
+      "the review's budget was spent and it didn't submit within the model requests allowed past it",
     )
   })
 
-  it("holds no number, since pi-ai retries a failure that mentions one such as 500", () => {
-    const failed = (errorMessage: string) => fauxAssistantMessage("", { stopReason: "error", errorMessage })
+  it("holds no number, since Pi Durable's generation task retries a failure that pi-ai's classifier reads as transient, such as one that mentions 500", () => {
     expect(isRetryableAssistantError(failed("the review spent 10,500 neurons"))).toBe(true)
     expect(isRetryableAssistantError(failed(BUDGET_REFUSAL))).toBe(false)
     expect(BUDGET_REFUSAL).not.toMatch(/\d/)
+  })
+
+  it("isn't read as a context overflow, which Pi Durable would compact and ask again instead of failing the run", () => {
+    expect(isContextOverflow(failed("prompt is too long: 213462 tokens > 200000 maximum"))).toBe(true)
+    expect(isContextOverflow(failed(BUDGET_REFUSAL))).toBe(false)
   })
 })
 
 describe("budgetNote", () => {
   it("tells a reader the review stopped reading early, and the budget it spent", () => {
     expect(budgetNote(10_000)).toBe("_This review stopped reading early: it spent its budget of 10,000 neurons._")
+  })
+
+  it.each([
+    [1, "1 neuron"],
+    [2, "2 neurons"],
+  ])("counts a budget of %d as %s", (budget, counted) => {
+    expect(budgetNote(budget)).toBe(`_This review stopped reading early: it spent its budget of ${counted}._`)
   })
 })

@@ -13,8 +13,8 @@ import { withBudgetRefusal } from "../src/models.ts"
 import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
 import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
-import { BUDGET_REFUSAL } from "../src/review/budget.ts"
-import { BUDGET_REFUSAL_MARKER } from "../src/review/prompt.ts"
+import { BUDGET_REFUSAL, budgetBlock } from "../src/review/budget.ts"
+import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
 import {
   changedFilesText,
   createReviewExtension,
@@ -72,7 +72,7 @@ const host = {
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
-  budgetBlock: async (): Promise<string | undefined> => undefined,
+  budgetBlockFor: async (): Promise<string | undefined> => undefined,
   requestBudget: async (): Promise<RequestBudget> => "allow",
 } satisfies ReviewHost
 
@@ -225,16 +225,22 @@ describe("the budget hooks", () => {
     const asked: { tool: string; conversation: ConversationId }[] = []
     const spent = {
       ...host,
-      budgetBlock: async (tool: string, conversation: ConversationId) => {
+      budgetBlockFor: async (tool: string, conversation: ConversationId) => {
         asked.push({ tool, conversation })
         return "Budget spent."
       },
     }
     const { beforeTool } = hooksOf(createReviewExtension(spent), toolTask)
-    expect(await beforeTool?.({ name: "read_file" }, { conversationId: ROOT_CONVERSATION_ID })).toEqual({
+    expect(await beforeTool?.({ name: "grep" }, { conversationId: ROOT_CONVERSATION_ID })).toEqual({
       block: "Budget spent.",
     })
-    expect(asked).toEqual([{ tool: "read_file", conversation: ROOT_CONVERSATION_ID }])
+    expect(asked).toEqual([{ tool: "grep", conversation: ROOT_CONVERSATION_ID }])
+  })
+
+  it("registers the review tool under the one name the budget lets through, so it blocks every other tool", () => {
+    const registered = createReviewExtension(host).tools?.map((tool) => tool.name) ?? []
+    const spent = { kind: "spent", neurons: 20, budget: 10 } as const
+    expect(registered.filter((name) => budgetBlock(spent, name) === undefined)).toEqual([SUBMIT_REVIEW_TOOL])
   })
 
   it("leaves a tool call alone when the host has no message for it", async () => {
@@ -266,7 +272,7 @@ describe("the budget hooks", () => {
   it("lets a failure of the host's budget read reach Pi Durable rather than hiding it", async () => {
     const failing = {
       ...host,
-      budgetBlock: async (): Promise<string | undefined> => {
+      budgetBlockFor: async (): Promise<string | undefined> => {
         throw new Error("storage closed")
       },
       requestBudget: async (): Promise<RequestBudget> => {
