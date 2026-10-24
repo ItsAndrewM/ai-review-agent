@@ -147,6 +147,26 @@ describe("postedCheckRun", () => {
     })
   })
 
+  it("appends (unverified) to the title, after the counts, when verify failed", () => {
+    const update = postedCheckRun(
+      "REQUEST_CHANGES",
+      [finding("blocking")],
+      "## andabot review",
+      "https://example.test",
+      at,
+      true,
+    )
+    expect(update.output.title).toBe("Changes requested: 1 blocking (unverified)")
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at, true).output.title).toBe(
+      "Approved (unverified)",
+    )
+  })
+
+  it("leaves the title alone when verify ran or wasn't asked for", () => {
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at).output.title).toBe("Approved")
+    expect(postedCheckRun("APPROVE", [], "s", "https://example.test", at, false).output.title).toBe("Approved")
+  })
+
   it("truncates the summary to GitHub's cap", () => {
     const update = postedCheckRun("APPROVE", [], "x".repeat(MAX_CHECK_SUMMARY_CHARS + 10), "https://example.test", at)
     expect(update.output.summary).toHaveLength(MAX_CHECK_SUMMARY_CHARS)

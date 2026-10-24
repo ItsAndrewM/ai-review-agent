@@ -13,6 +13,7 @@ import {
   type WrittenReview,
 } from "./findings.ts"
 import type { ReviewMode, SinceSection } from "./incremental.ts"
+import type { Changed, VerifyReport } from "./verify.ts"
 
 export interface Coverage {
   mode: ReviewMode
@@ -28,8 +29,13 @@ const MOST_HELD_BACK_LISTED = 5
 const MOST_MISSING_LISTED = 10
 const MOST_LISTED_CHARS = 100
 const MOST_CONFIG_ERROR_CHARS = 300
+const MOST_UNVERIFIED_REASON_CHARS = 200
 
 export type Verdict = ReviewEvent | "AWAITING_CHECKS"
+
+export type VerifyDisplay =
+  | { kind: "verified"; model: string; report: VerifyReport; leftOut: readonly FindingInput[] }
+  | { kind: "unverified"; model: string; reason: string }
 
 export const VERDICT_LABEL = {
   APPROVE: "Approved",
@@ -69,15 +75,17 @@ export function renderSummaryComment(input: {
   linkedIssues: readonly number[]
   instructionFiles: readonly string[]
   since?: SinceSection | undefined
+  verify?: VerifyDisplay | undefined
   configError?: string | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
     status: statusLine(input.headSha, { label: VERDICT_LABEL[input.event], counts: countBySeverity(input.accepted) }),
     content: input.submission,
-    afterWalkthrough: [droppedLine(input.droppedCount), ...sinceLines(input.since)],
+    afterWalkthrough: [droppedLine(input.droppedCount), ...verifyLines(input.verify), ...sinceLines(input.since)],
     footer: [
-      ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint),
+      ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify),
+      ...unverifiedLines(input.verify),
       ...spendLines(input.spend),
       linkedIssuesLine(input.linkedIssues),
       standardsLine(input.instructionFiles),
@@ -194,6 +202,38 @@ function sinceLines(since: SinceSection | undefined): string[] {
   ]
 }
 
+function verifyLines(verify: VerifyDisplay | undefined): string[] {
+  if (verify?.kind !== "verified") return []
+  const entries = verifyEntries(verify.report, verify.leftOut)
+  if (entries.length === 0) return []
+  return ["", `<details><summary>Verify: ${verifyCounts(verify.report)}</summary>`, "", ...entries, "", "</details>"]
+}
+
+function verifyEntries({ dropped, changed, notJudged }: VerifyReport, leftOut: readonly FindingInput[]): string[] {
+  return [
+    ...dropped.map(({ finding, reason }) => `- Dropped ${located(finding)}: ${oneLine(reason)}`),
+    ...changed.map((change) => changeEntry(change, leftOut)),
+    ...notJudged.map((finding) => `- Not judged: ${located(finding)}`),
+  ]
+}
+
+function verifyCounts({ dropped, changed, notJudged }: VerifyReport): string {
+  const parts: string[] = []
+  if (dropped.length > 0) parts.push(`${dropped.length} dropped`)
+  if (changed.length > 0) parts.push(`${changed.length} severity changed`)
+  if (notJudged.length > 0) parts.push(`${notJudged.length} not judged`)
+  return parts.join(", ")
+}
+
+function changeEntry({ finding, from, to, reason, revised }: Changed, leftOut: readonly FindingInput[]): string {
+  const leftOutNote = leftOut.includes(revised) ? ", left out" : ""
+  return `- ${located(finding)}: ${from} → ${to}${leftOutNote}: ${oneLine(reason)}`
+}
+
+function located(finding: FindingInput): string {
+  return `${codeSpan(`${flattened(finding.path)}:${finding.line}`)} ${oneLine(finding.title)}`
+}
+
 export function mergeWalkthrough(
   stored: readonly WalkthroughInput[],
   incoming: readonly WalkthroughInput[],
@@ -217,11 +257,19 @@ function reviewedBy(
   model: string | undefined,
   skillsFingerprint: string | undefined,
   repoSkillsFingerprint: string | undefined,
+  verify: VerifyDisplay | undefined,
 ): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   const repo = repoSkillsFingerprint === undefined ? [] : [`repo@${repoSkillsFingerprint.slice(0, 8)}`]
   const skills = [`review@${skillsFingerprint.slice(0, 8)}`, ...repo].map((skill) => `\`${skill}\``).join(", ")
-  return [`<sub>Reviewed by \`${model}\` with skills ${skills}.</sub>`]
+  const verifier = verify?.kind === "verified" ? ` · verified by \`${verify.model}\`` : ""
+  return [`<sub>Reviewed by \`${model}\`${verifier} with skills ${skills}.</sub>`]
+}
+
+function unverifiedLines(verify: VerifyDisplay | undefined): string[] {
+  if (verify?.kind !== "unverified") return []
+  const reason = cut(flattened(verify.reason), MOST_UNVERIFIED_REASON_CHARS)
+  return [`<sub>Not verified by \`${verify.model}\`: ${reason}.</sub>`]
 }
 
 function summarizedBy(model: string, skillsFingerprint: string): string {
@@ -371,7 +419,7 @@ export function chooseReviewEvent(
   openBlocking?: number | "unknown",
 ): ReviewEvent {
   if (!requestChangesWorkflow) return "COMMENT"
-  if (countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)) return "REQUEST_CHANGES"
+  if (holdsBlocking(accepted, rejected)) return "REQUEST_CHANGES"
   if (openBlocking === "unknown") return "COMMENT"
   if ((openBlocking ?? 0) > 0) return "REQUEST_CHANGES"
   if (submission.verdict === "approve") return "APPROVE"
@@ -380,6 +428,10 @@ export function chooseReviewEvent(
 
 export function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
   return !unfounded && finding.severity === "blocking"
+}
+
+export function holdsBlocking(accepted: readonly FindingInput[], rejected: readonly Rejected[]): boolean {
+  return countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)
 }
 
 function flattened(text: string): string {

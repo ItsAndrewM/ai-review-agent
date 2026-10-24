@@ -38,8 +38,10 @@ export function postedCheckRun(
   summary: string,
   detailsUrl: string | undefined,
   completedAt: number,
+  unverified = false,
 ): UpdateCheckRun {
-  const title = checkRunTitle(event, countBySeverity(accepted))
+  const verdictTitle = checkRunTitle(event, countBySeverity(accepted))
+  const title = unverified ? `${verdictTitle} (unverified)` : verdictTitle
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
 }
 

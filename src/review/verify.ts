@@ -3,7 +3,6 @@ import { Value } from "typebox/value"
 import { MAX_PATCH_CHARS, truncateAtLine } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import {
-  countBySeverity,
   exceedsBasisCap,
   jsonIn,
   Severity,
@@ -14,7 +13,7 @@ import {
 } from "./findings.ts"
 import type { ScopedReview } from "./incremental.ts"
 import { dataBlock, fenceFor, MATERIAL_NOTE, neutraliseClosingTag, numberedLine } from "./prompt.ts"
-import { holdsApprovalBack } from "./render.ts"
+import { holdsApprovalBack, holdsBlocking } from "./render.ts"
 
 export const VerdictInput = Type.Object({
   finding: Type.String({ description: "The id the finding was listed under, such as F1." }),
@@ -104,11 +103,9 @@ export function verdictAfterVerify(
   before: ScopedReview,
   after: ScopedReview,
 ): ReviewSubmissionInput["verdict"] {
-  return verdict === "request_changes" && hasBlockingFinding(before) && !hasBlockingFinding(after) ? "approve" : verdict
-}
-
-function hasBlockingFinding({ accepted, rejected }: ScopedReview): boolean {
-  return countBySeverity(accepted).blocking > 0 || rejected.some(holdsApprovalBack)
+  if (verdict !== "request_changes") return verdict
+  const cleared = holdsBlocking(before.accepted, before.rejected) && !holdsBlocking(after.accepted, after.rejected)
+  return cleared ? "approve" : verdict
 }
 
 function firstVerdicts(candidates: readonly VerifyCandidate[], verdicts: readonly VerdictInput[]) {
