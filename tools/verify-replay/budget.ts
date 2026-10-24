@@ -17,6 +17,11 @@ export interface ModelRates {
   readonly output: number
 }
 
+export function requirePricedModel(model: string, rates: ModelRates): void {
+  if (Number.isFinite(rates.input) && rates.input > 0 && Number.isFinite(rates.output) && rates.output > 0) return
+  throw new Error(`Workers AI model ${model} has no complete price in the catalog; the spend cap cannot bound it.`)
+}
+
 export class ReplaySpendCapError extends Error {
   constructor(limit: number) {
     super(`The $${limit.toFixed(2)} replay spend cap would be exceeded; no model call made.`)

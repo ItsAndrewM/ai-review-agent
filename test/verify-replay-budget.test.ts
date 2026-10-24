@@ -3,8 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai"
 import { afterEach, describe, expect, it } from "vitest"
-import { SpendBudget } from "../tools/verify-replay/budget.ts"
-import { ReplaySpendCapError } from "../tools/verify-replay/budget.ts"
+import { ReplaySpendCapError, SpendBudget, requirePricedModel } from "../tools/verify-replay/budget.ts"
 import { attemptReplay } from "../tools/verify-replay/conversation.ts"
 import { ReplayTools } from "../tools/verify-replay/tools.ts"
 
@@ -31,6 +30,12 @@ const response = {
 }
 
 describe("SpendBudget", () => {
+  it("refuses an unpriced model before any inference can evade the spend limit", () => {
+    expect(() => requirePricedModel("unpriced", { input: 0, output: 0 })).toThrow("spend cap cannot bound it")
+    expect(() => requirePricedModel("partly-priced", { input: 0.95, output: 0 })).toThrow("spend cap cannot bound it")
+    expect(() => requirePricedModel("priced", rates)).not.toThrow()
+  })
+
   it("shares the $2 cap between separate model invocations through its journal", async () => {
     const path = await journal()
     const budget = await SpendBudget.open(path, 0.15)
