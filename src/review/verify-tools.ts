@@ -64,13 +64,14 @@ export function createVerifyExtension(host: VerifyHost): Extension {
 }
 
 function passBudget(host: Pick<VerifyHost, "passOf">) {
-  const calls = new Map<string, number>()
+  let activePass: { id: string; calls: number } | undefined
   return async (conversationId: ConversationId, call: () => Promise<string>): Promise<string> => {
     const pass = host.passOf(conversationId)
     if (pass === undefined) return NO_VERIFY_PASS
-    const made = calls.get(pass) ?? 0
-    if (made >= VERIFY_TOOL_BUDGET) return BUDGET_SPENT
-    calls.set(pass, made + 1)
+    const active = activePass?.id === pass ? activePass : { id: pass, calls: 0 }
+    activePass = active
+    if (active.calls >= VERIFY_TOOL_BUDGET) return BUDGET_SPENT
+    active.calls++
     return call()
   }
 }
