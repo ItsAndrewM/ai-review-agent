@@ -18,9 +18,12 @@ import {
   VerdictInput,
   VerdictsSubmission,
   verifyCandidates,
+  VERIFY_BACKSTOP_MS,
   VERIFY_RADIUS,
   verifyPrompt,
+  verifyWithRetry,
   type FindingContext,
+  type VerifyAttempt,
   type VerifyCandidate,
   type VerifyReport,
 } from "../src/review/verify.ts"
@@ -838,5 +841,145 @@ describe("parseVerdictsText", () => {
     ["an empty list", '{"verdicts": []}'],
   ])("returns nothing for %s", (_, text) => {
     expect(parseVerdictsText(text)).toBeUndefined()
+  })
+})
+
+describe("verifyWithRetry", () => {
+  const answer: VerifyAttempt = { kind: "verdicts", verdicts: [verdict("F1", "blocking")] }
+  const BACKSTOP_REASON = "backstop: no answer in 15 minutes"
+
+  function failed(reason: string): VerifyAttempt {
+    return { kind: "failed", reason }
+  }
+
+  const gives = (result: VerifyAttempt) => () => Promise.resolve(result)
+
+  const never = () => new Promise<VerifyAttempt>(() => {})
+
+  const nextTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0))
+
+  function scripted(...behaviours: (() => Promise<VerifyAttempt>)[]) {
+    const started: number[] = []
+    const attempt = (n: 1 | 2) => {
+      started.push(n)
+      return behaviours[n - 1]?.() ?? Promise.reject(new Error(`attempt ${n} was not scripted`))
+    }
+    return { attempt, started }
+  }
+
+  function fakeTimer(firesAtOnce = false) {
+    const calls: { ms: number; signal: AbortSignal }[] = []
+    const timer = (ms: number, signal: AbortSignal) => {
+      calls.push({ ms, signal })
+      return firesAtOnce ? Promise.resolve() : new Promise<void>(() => {})
+    }
+    return { timer, calls }
+  }
+
+  const throwing: [string, () => Promise<VerifyAttempt>][] = [
+    ["rejects", () => Promise.reject(new Error("model unreachable"))],
+    [
+      "throws before it returns a promise",
+      () => {
+        throw new Error("model unreachable")
+      },
+    ],
+  ]
+
+  it("gives the verdicts of a first attempt that has them, and starts no second", async () => {
+    const { attempt, started } = scripted(gives(answer))
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
+    expect(result).toEqual({ ...answer, attempts: 1 })
+    expect(started).toEqual([1])
+  })
+
+  it("retries a failed first attempt once, and gives the verdicts of the second", async () => {
+    const { attempt, started } = scripted(gives(failed("no verdicts")), gives(answer))
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
+    expect(result).toEqual({ ...answer, attempts: 2 })
+    expect(started).toEqual([1, 2])
+  })
+
+  it("gives the second attempt's reason when both attempts fail, and starts no third", async () => {
+    const { attempt, started } = scripted(gives(failed("first reason")), gives(failed("second reason")))
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
+    expect(result).toEqual({ kind: "failed", reason: "second reason", attempts: 2 })
+    expect(started).toEqual([1, 2])
+  })
+
+  it.each(throwing)("counts a first attempt that %s as failed, and retries it", async (_, thrower) => {
+    const { attempt, started } = scripted(thrower, gives(answer))
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
+    expect(result).toEqual({ ...answer, attempts: 2 })
+    expect(started).toEqual([1, 2])
+  })
+
+  it.each(throwing)("gives the error's text as the reason when both attempts %s", async (_, thrower) => {
+    const { attempt } = scripted(thrower, thrower)
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
+    expect(result).toEqual({ kind: "failed", reason: "Error: model unreachable", attempts: 2 })
+  })
+
+  it("fails with the backstop's reason when the backstop fires before the first attempt answers, and starts no second", async () => {
+    const { attempt, started } = scripted(never)
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer(true).timer)
+    expect(result).toEqual({ kind: "failed", reason: BACKSTOP_REASON, attempts: 1 })
+    expect(started).toEqual([1])
+  })
+
+  it("holds the retry inside the same backstop, so a second attempt still running when it fires fails as the backstop", async () => {
+    let fire = () => {}
+    const timer = () =>
+      new Promise<void>((resolve) => {
+        fire = resolve
+      })
+    const { attempt, started } = scripted(gives(failed("no verdicts")), () => {
+      fire()
+      return never()
+    })
+    const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, timer)
+    expect(result).toEqual({ kind: "failed", reason: BACKSTOP_REASON, attempts: 2 })
+    expect(started).toEqual([1, 2])
+  })
+
+  it("starts the backstop once, at its full length, for the pass as a whole and not for each attempt", async () => {
+    const { attempt } = scripted(gives(failed("first reason")), gives(failed("second reason")))
+    const { timer, calls } = fakeTimer()
+    await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, timer)
+    expect(calls.map(({ ms }) => ms)).toEqual([VERIFY_BACKSTOP_MS])
+  })
+
+  it("words the backstop's reason from the length it was given", async () => {
+    const result = await verifyWithRetry(scripted(never).attempt, 120_000, fakeTimer(true).timer)
+    expect(result).toEqual({ kind: "failed", reason: "backstop: no answer in 2 minutes", attempts: 1 })
+  })
+
+  it.each([
+    ["it has verdicts", gives(answer), false],
+    ["both attempts have failed", gives(failed("no verdicts")), false],
+    ["the backstop has fired", never, true],
+  ])(
+    "aborts the backstop's timer as soon as %s, and not before, so the timer can clear itself",
+    async (_, outcome, firesAtOnce) => {
+      const { timer, calls } = fakeTimer(firesAtOnce)
+      let abortedWhileWorking: boolean | undefined
+      const attempt = () => {
+        abortedWhileWorking = calls[0]?.signal.aborted
+        return outcome()
+      }
+      await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, timer)
+      expect(abortedWhileWorking).toBe(false)
+      expect(calls[0]?.signal.aborted).toBe(true)
+    },
+  )
+
+  it("is undisturbed by a timer that rejects once it is aborted", async () => {
+    const timer = (_ms: number, signal: AbortSignal) =>
+      new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("timer aborted")))
+      })
+    const result = await verifyWithRetry(scripted(gives(answer)).attempt, VERIFY_BACKSTOP_MS, timer)
+    await nextTask()
+    expect(result).toEqual({ ...answer, attempts: 1 })
   })
 })

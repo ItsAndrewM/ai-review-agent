@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import { MAX_PATCH_CHARS, truncateAtLine } from "../github/diff.ts"
+import { errorText } from "../log.ts"
 import {
   countBySeverity,
   exceedsBasisCap,
@@ -258,4 +259,41 @@ export function parseVerdictsText(text: string): VerdictInput[] | undefined {
   }
   if (!Value.Check(VerdictsSubmission, value)) return undefined
   return value.verdicts.length === 0 ? undefined : value.verdicts
+}
+
+export type VerifyAttempt = { kind: "verdicts"; verdicts: VerdictInput[] } | { kind: "failed"; reason: string }
+
+export const VERIFY_BACKSTOP_MS = 900_000
+
+const MS_PER_MINUTE = 60_000
+
+export async function verifyWithRetry(
+  attempt: (n: 1 | 2) => Promise<VerifyAttempt>,
+  backstopMs: number,
+  timer: (ms: number, signal: AbortSignal) => Promise<void>,
+): Promise<VerifyAttempt & { attempts: number }> {
+  const stop = new AbortController()
+  const backstop = timer(backstopMs, stop.signal).then(() => "backstop" as const)
+  try {
+    const first = await Promise.race([attemptOrFailed(() => attempt(1)), backstop])
+    if (first === "backstop") return backstopFailure(backstopMs, 1)
+    if (first.kind === "verdicts") return { ...first, attempts: 1 }
+    const second = await Promise.race([attemptOrFailed(() => attempt(2)), backstop])
+    if (second === "backstop") return backstopFailure(backstopMs, 2)
+    return { ...second, attempts: 2 }
+  } finally {
+    stop.abort()
+  }
+}
+
+async function attemptOrFailed(run: () => Promise<VerifyAttempt>): Promise<VerifyAttempt> {
+  try {
+    return await run()
+  } catch (cause) {
+    return { kind: "failed", reason: errorText(cause) }
+  }
+}
+
+function backstopFailure(backstopMs: number, attempts: number): VerifyAttempt & { attempts: number } {
+  return { kind: "failed", reason: `backstop: no answer in ${backstopMs / MS_PER_MINUTE} minutes`, attempts }
 }

@@ -94,3 +94,12 @@ export function runStanding(
   if (pending?.deliveryId === deliveryId) return "in_flight"
   return endedDelivery === deliveryId ? "ended" : "replaced"
 }
+
+export function standingAfterVerify(
+  pending: PendingReview | undefined,
+  deliveryId: string,
+  headNow: string,
+): "post" | "replaced" | "moved" {
+  if (pending?.deliveryId !== deliveryId) return "replaced"
+  return pending.headSha === headNow ? "post" : "moved"
+}

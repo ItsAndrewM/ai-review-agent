@@ -7,6 +7,7 @@ import {
   ownsOperation,
   replacedExit,
   runStanding,
+  standingAfterVerify,
   StoredPending,
   submitStanding,
   type PendingReview,
@@ -92,6 +93,26 @@ describe("runStanding", () => {
   it("is ended once its own review ended without posting, even after another delivery takes the pending", () => {
     expect(runStanding(undefined, "d-1", "d-1")).toBe("ended")
     expect(runStanding({ ...pending, deliveryId: "d-2" }, "d-1", "d-1")).toBe("ended")
+  })
+})
+
+describe("standingAfterVerify", () => {
+  it("posts while the review still holds the pending and the pull request is at the head it reviewed", () => {
+    expect(standingAfterVerify(pending, "d-1", "aaa")).toBe("post")
+  })
+
+  it("is replaced when no review is pending or another delivery holds it, since a replacer deletes the record before it writes its own", () => {
+    expect(standingAfterVerify(undefined, "d-1", "aaa")).toBe("replaced")
+    expect(standingAfterVerify({ ...pending, deliveryId: "d-2" }, "d-1", "aaa")).toBe("replaced")
+  })
+
+  it("has moved when the pull request is at another head than the one its pending review started at", () => {
+    expect(standingAfterVerify(pending, "d-1", "bbb")).toBe("moved")
+  })
+
+  it("is replaced rather than moved when the pending isn't its own, since that record's head says nothing about this review", () => {
+    expect(standingAfterVerify(undefined, "d-1", "bbb")).toBe("replaced")
+    expect(standingAfterVerify({ ...pending, deliveryId: "d-2" }, "d-1", "bbb")).toBe("replaced")
   })
 })
 
