@@ -40,17 +40,18 @@ export function postedCheckRun(
   completedAt: number,
   unverified = false,
 ): UpdateCheckRun {
-  const verdictTitle = checkRunTitle(event, countBySeverity(accepted))
-  const title = unverified ? `${verdictTitle} (unverified)` : verdictTitle
+  const title = markedUnverified(checkRunTitle(event, countBySeverity(accepted)), unverified)
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
 }
 
 export function postedEarlierCheckRun(
-  posted: Pick<PostedReview, "reviewId" | "event" | "counts">,
+  posted: Pick<PostedReview, "reviewId" | "event" | "counts" | "unverified">,
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  const title = posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
+  const verdictTitle =
+    posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
+  const title = markedUnverified(verdictTitle, posted.unverified === true)
   const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
   const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
@@ -87,6 +88,10 @@ export function checkRunTitle(event: Verdict, counts: Record<FindingInput["sever
   if (counts.nitpick > 0) parts.push(counted(counts.nitpick, "nitpick"))
   const label = VERDICT_LABEL[event]
   return parts.length === 0 ? label : `${label}: ${parts.join(", ")}`
+}
+
+function markedUnverified(title: string, unverified: boolean): string {
+  return unverified ? `${title} (unverified)` : title
 }
 
 export function isoSeconds(ms: number): string {

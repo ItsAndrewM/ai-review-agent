@@ -1299,6 +1299,43 @@ describe("renderSummaryComment", () => {
       expect(summaryWith({ verify: unverified("x".repeat(201)) })).toContain(`: ${"x".repeat(200)}….</sub>`)
       expect(summaryWith({ verify: unverified("y".repeat(200)) })).toContain(`: ${"y".repeat(200)}.</sub>`)
     })
+
+    it("orders the footer as reviewed-by with the verifier, the unverified line, the cost line, then the budget note", () => {
+      const spent = {
+        ...attributed,
+        spend: [
+          {
+            model: "cloudflare/@cf/zai-org/glm-5.3-flash",
+            calls: 3,
+            inputTokens: 61_204,
+            cachedTokens: 40_000,
+            outputTokens: 4_811,
+            usd: 0.006692,
+            priced: true,
+          },
+        ],
+        budgetNote: budgetNote(10_000),
+      }
+      const cost = "<sub>3 model calls · 61k in / 4.8k out tokens · ≈ 608 neurons ($0.007)</sub>"
+      const note = "_This review stopped reading early: it spent its budget of 10,000 neurons._"
+      expect(summaryWith({ ...spent, verify: verified() })).toContain(
+        [
+          "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` · verified by `@cf/moonshotai/kimi-k2.7-code` with skills `review@89abcdef`.</sub>",
+          cost,
+          note,
+          "<sub>Linked issues: none</sub>",
+        ].join("\n"),
+      )
+      expect(summaryWith({ ...spent, verify: unverified("the review spent its budget") })).toContain(
+        [
+          "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@89abcdef`.</sub>",
+          "<sub>Not verified by `@cf/moonshotai/kimi-k2.7-code`: the review spent its budget.</sub>",
+          cost,
+          note,
+          "<sub>Linked issues: none</sub>",
+        ].join("\n"),
+      )
+    })
   })
 
   it("shows the wait as the verdict", () => {

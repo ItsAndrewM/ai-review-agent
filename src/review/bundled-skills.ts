@@ -7,6 +7,7 @@ import smellsReference from "../../skills/review/references/smells.md"
 import testsReference from "../../skills/review/references/tests.md"
 import reviewSkill from "../../skills/review/SKILL.md"
 import summarySkill from "../../skills/summary/SKILL.md"
+import verifySkill from "../../skills/verify/SKILL.md"
 import { buildSkillManifest, fingerprintOf, manifestSource, type SkillFile } from "./skills.ts"
 
 export const BUNDLED_SKILL_FILES: readonly SkillFile[] = [
@@ -18,6 +19,7 @@ export const BUNDLED_SKILL_FILES: readonly SkillFile[] = [
   { path: "review/references/smells.md", content: smellsReference },
   { path: "review/references/tests.md", content: testsReference },
   { path: "summary/SKILL.md", content: summarySkill },
+  { path: "verify/SKILL.md", content: verifySkill },
 ]
 
 const SKILL_FILE_SUFFIX = "/SKILL.md"

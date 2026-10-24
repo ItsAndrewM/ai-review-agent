@@ -28,6 +28,7 @@ export const PostedReview = Type.Object({
   model: Type.Optional(Type.String()),
   counts: Type.Optional(SeverityCounts),
   spend: Type.Optional(ReviewSpend),
+  unverified: Type.Optional(Type.Boolean()),
 })
 
 export type PostedReview = Static<typeof PostedReview>

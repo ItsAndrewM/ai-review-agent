@@ -1,7 +1,9 @@
+import type { PiOperationResult } from "agents/harness/pi"
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
-import { MAX_PATCH_CHARS, truncateAtLine } from "../github/diff.ts"
-import { errorText } from "../log.ts"
+import { MAX_PATCH_CHARS, truncateAtLine, type ChangedFile } from "../github/diff.ts"
+import { errorText, type LogFields } from "../log.ts"
+import { describeFailure, type TranscriptEntry } from "./failure.ts"
 import {
   exceedsBasisCap,
   jsonIn,
@@ -11,23 +13,29 @@ import {
   type ReviewSubmissionInput,
   type ValidatedReview,
 } from "./findings.ts"
-import type { ScopedReview } from "./incremental.ts"
+import { applyDeltaPolicy, type DeltaScope, type ScopedReview } from "./incremental.ts"
+import type { LinkedIssue } from "./linked-issues.ts"
 import { dataBlock, fenceFor, MATERIAL_NOTE, neutraliseClosingTag, numberedLine } from "./prompt.ts"
-import { holdsApprovalBack, holdsBlocking } from "./render.ts"
+import { holdsApprovalBack, holdsBlocking, type VerifyDisplay } from "./render.ts"
+
+const MAX_REASON_CHARS = 300
 
 export const VerdictInput = Type.Object({
-  finding: Type.String({ description: "The id the finding was listed under, such as F1." }),
-  keep: Type.Boolean({ description: "true to keep the finding, false to drop it as wrong." }),
+  finding: Type.String({ description: "The finding's id, as the prompt lists it: F1, F2 and so on." }),
+  keep: Type.Boolean({ description: "true keeps the finding; false drops it as wrong." }),
   severity: Severity,
   reason: Type.String({
     minLength: 1,
-    description: "One line on why the finding stands or falls, and why at this severity.",
+    maxLength: MAX_REASON_CHARS,
+    description: `One line, at most ${MAX_REASON_CHARS} characters: why the finding stands or falls, and why at this severity.`,
   }),
 })
 
 export type VerdictInput = Static<typeof VerdictInput>
 
 export const VerdictsSubmission = Type.Object({ verdicts: Type.Array(VerdictInput) })
+
+export const VerifySessionId = Type.String()
 
 export interface VerifyCandidate {
   id: string
@@ -106,6 +114,40 @@ export function verdictAfterVerify(
   if (verdict !== "request_changes") return verdict
   const cleared = holdsBlocking(before.accepted, before.rejected) && !holdsBlocking(after.accepted, after.rejected)
   return cleared ? "approve" : verdict
+}
+
+export interface VerifyDraft {
+  validated: ValidatedReview
+  scoped: ScopedReview
+  scope: DeltaScope
+  candidates: readonly VerifyCandidate[]
+}
+
+export interface Verified {
+  scoped: ScopedReview
+  verdict: ReviewSubmissionInput["verdict"]
+  report: VerifyReport
+  leftOut: FindingInput[]
+}
+
+export function verifiedReview(
+  draft: VerifyDraft,
+  verdicts: readonly VerdictInput[],
+  verdict: ReviewSubmissionInput["verdict"],
+): Verified {
+  const applied = applyVerdicts(draft.validated, draft.candidates, verdicts)
+  const scoped = applyDeltaPolicy(applied.validated, draft.scope)
+  return {
+    scoped,
+    verdict: verdictAfterVerify(verdict, draft.scoped, scoped),
+    report: applied.report,
+    leftOut: leftOutOf(applied.report, scoped),
+  }
+}
+
+export function leftOutOf(report: VerifyReport, scoped: ScopedReview): FindingInput[] {
+  const setAside = new Set([...scoped.rejected, ...scoped.duplicates].map(({ finding }) => finding))
+  return report.changed.map(({ revised }) => revised).filter((revised) => setAside.has(revised))
 }
 
 function firstVerdicts(candidates: readonly VerifyCandidate[], verdicts: readonly VerdictInput[]) {
@@ -245,6 +287,60 @@ function fenced(text: string, language: string): string {
   return `${fence}${language}\n${text}\n${fence}`
 }
 
+type FileRef = "head" | "base"
+
+export interface ContextSources {
+  files: readonly ChangedFile[]
+  read(path: string, ref: FileRef): Promise<string | undefined>
+  unreadable(path: string, ref: FileRef, error: string): void
+  issue: string | undefined
+}
+
+export function findingContexts(
+  candidates: readonly VerifyCandidate[],
+  sources: ContextSources,
+): Promise<FindingContext[]> {
+  const contents = new Map<string, Promise<string | undefined>>()
+  const contentOf = (path: string, ref: FileRef): Promise<string | undefined> => {
+    const key = `${ref}:${path}`
+    const read = contents.get(key) ?? readOrNothing(sources, path, ref)
+    contents.set(key, read)
+    return read
+  }
+  return Promise.all(
+    candidates.map(async (candidate) => {
+      const { path, side } = candidate.finding
+      return contextOf(candidate, await contentOf(path, side === "LEFT" ? "base" : "head"), sources)
+    }),
+  )
+}
+
+async function readOrNothing(sources: ContextSources, path: string, ref: FileRef): Promise<string | undefined> {
+  try {
+    return await sources.read(path, ref)
+  } catch (cause) {
+    sources.unreadable(path, ref, errorText(cause))
+    return undefined
+  }
+}
+
+function contextOf(candidate: VerifyCandidate, content: string | undefined, sources: ContextSources): FindingContext {
+  const { path, line, start_line, basis_kind } = candidate.finding
+  return {
+    candidate,
+    window: content === undefined ? undefined : citedWindow(content, line, start_line, VERIFY_RADIUS),
+    patch: sources.files.find((file) => file.filename === path)?.patch,
+    issue: basis_kind === "spec" ? sources.issue : undefined,
+  }
+}
+
+export function linkedIssueText(issues: readonly LinkedIssue[]): string | undefined {
+  if (issues.length === 0) return undefined
+  return issues
+    .map(({ number, title, body, cut }) => `#${number}: ${title}\n${body}${cut ? "\n(cut)" : ""}`)
+    .join("\n\n")
+}
+
 export function parseVerdictsText(text: string): VerdictInput[] | undefined {
   const json = jsonIn(text)
   if (json === undefined) return undefined
@@ -258,11 +354,71 @@ export function parseVerdictsText(text: string): VerdictInput[] | undefined {
   return value.verdicts.length === 0 ? undefined : value.verdicts
 }
 
-export type VerifyAttempt = { kind: "verdicts"; verdicts: VerdictInput[] } | { kind: "failed"; reason: string }
+export type VerifyFailure = "model" | "answer" | "backstop"
+
+export type VerifyAttempt =
+  | { kind: "verdicts"; verdicts: VerdictInput[] }
+  | { kind: "failed"; failure: VerifyFailure; reason: string }
+
+export type VerifyResult = PiOperationResult & { messages?: readonly TranscriptEntry[] }
+
+const MOST_QUOTED_ANSWER_CHARS = 500
+
+export function attemptOf(submitted: readonly VerdictInput[] | undefined, result: VerifyResult): VerifyAttempt {
+  if (submitted !== undefined) return submittedAttempt(submitted)
+  if (result.status !== "done") return { kind: "failed", failure: "model", reason: describeFailure(result) }
+  const text = result.text ?? ""
+  const verdicts = parseVerdictsText(text)
+  if (verdicts === undefined) return { kind: "failed", failure: "answer", reason: unusableText(text) }
+  return { kind: "verdicts", verdicts }
+}
+
+function submittedAttempt(submitted: readonly VerdictInput[]): VerifyAttempt {
+  if (submitted.length === 0) {
+    return { kind: "failed", failure: "answer", reason: "submit_verdicts was called with no verdicts" }
+  }
+  return { kind: "verdicts", verdicts: [...submitted] }
+}
+
+function unusableText(text: string): string {
+  const answer = text.trim()
+  if (answer === "") return "no submit_verdicts call, and no text"
+  const quoted = answer.length > MOST_QUOTED_ANSWER_CHARS ? `${answer.slice(0, MOST_QUOTED_ANSWER_CHARS)}…` : answer
+  return `no submit_verdicts call, and no verdicts in the text: ${quoted}`
+}
 
 export const VERIFY_BACKSTOP_MS = 900_000
 
 const MS_PER_MINUTE = 60_000
+
+export type UnverifiedCause = VerifyFailure | "budget"
+
+const UNVERIFIED_REASONS = {
+  model: "the model call failed",
+  answer: "no usable answer",
+  backstop: noAnswerWithin(VERIFY_BACKSTOP_MS),
+  budget: "the review spent its budget",
+} satisfies Record<UnverifiedCause, string>
+
+export function unverifiedDisplay(model: string, cause: UnverifiedCause): VerifyDisplay {
+  return { kind: "unverified", model, reason: UNVERIFIED_REASONS[cause] }
+}
+
+export function backstopTimer(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(resolve, ms)
+    signal.addEventListener("abort", () => clearTimeout(timeout), { once: true })
+  })
+}
+
+export async function whileUnsettled<T>(signal: AbortSignal, onAbort: () => void, work: () => Promise<T>): Promise<T> {
+  signal.addEventListener("abort", onAbort, { once: true })
+  try {
+    return await work()
+  } finally {
+    signal.removeEventListener("abort", onAbort)
+  }
+}
 
 export async function verifyWithRetry(
   attempt: (n: 1 | 2, signal: AbortSignal) => Promise<VerifyAttempt>,
@@ -291,14 +447,63 @@ async function withinBackstop(
   }
 }
 
-async function attemptOrFailed(run: () => Promise<VerifyAttempt>): Promise<VerifyAttempt> {
+export async function attemptOrFailed(run: () => Promise<VerifyAttempt>): Promise<VerifyAttempt> {
   try {
     return await run()
   } catch (cause) {
-    return { kind: "failed", reason: errorText(cause) }
+    return { kind: "failed", failure: "model", reason: errorText(cause) }
   }
 }
 
 function backstopFailure(backstopMs: number): VerifyAttempt {
-  return { kind: "failed", reason: `backstop: no answer in ${backstopMs / MS_PER_MINUTE} minutes` }
+  return { kind: "failed", failure: "backstop", reason: backstopReason(backstopMs) }
+}
+
+export function backstopReason(backstopMs: number): string {
+  return `backstop: ${noAnswerWithin(backstopMs)}`
+}
+
+function noAnswerWithin(ms: number): string {
+  return `no answer in ${ms / MS_PER_MINUTE} minutes`
+}
+
+const SEVERITY_RANK = { nitpick: 0, suggestion: 1, blocking: 2 } satisfies Record<FindingInput["severity"], number>
+
+export function verdictFields(
+  candidates: readonly VerifyCandidate[],
+  verdicts: readonly VerdictInput[],
+  report: VerifyReport,
+): LogFields[] {
+  const findings = new Map(candidates.map(({ id, finding }) => [id, finding]))
+  const capped = new Set(report.capped.map(({ finding }) => finding))
+  const applied = new Set<string>()
+  return verdicts.map(({ finding: id, keep, severity, reason }) => {
+    const finding = findings.get(id)
+    const ignored = finding === undefined || applied.has(id)
+    applied.add(id)
+    return {
+      id,
+      path: finding?.path,
+      line: finding?.line,
+      keep,
+      from: finding?.severity,
+      to: severity,
+      capped: !ignored && finding !== undefined && capped.has(finding),
+      ignored,
+      reason,
+    }
+  })
+}
+
+export function verifyCounts(candidates: readonly VerifyCandidate[], report: VerifyReport): LogFields {
+  const promoted = report.changed.filter(({ from, to }) => SEVERITY_RANK[to] > SEVERITY_RANK[from]).length
+  return {
+    kept: candidates.length - report.dropped.length - report.notJudged.length,
+    dropped: report.dropped.length,
+    promoted,
+    demoted: report.changed.length - promoted,
+    capped: report.capped.length,
+    notJudged: report.notJudged.length,
+    unknown: report.unknown.length,
+  }
 }

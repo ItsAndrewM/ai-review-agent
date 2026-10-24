@@ -51,6 +51,12 @@ describe("PostedReview", () => {
     expect(Value.Check(PostedReview, { ...posted, spend: [{ ...spend[0], usd: "0.0067" }] })).toBe(false)
   })
 
+  it("accepts whether the review posted unverified, which a later run of the head repeats in its title", () => {
+    expect(Value.Check(PostedReview, { ...posted, unverified: true })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, unverified: false })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, unverified: "yes" })).toBe(false)
+  })
+
   it("rejects a record whose event isn't one GitHub posts", () => {
     expect(Value.Check(PostedReview, { ...posted, event: "approve" })).toBe(false)
     expect(Value.Check(PostedReview, { event: "APPROVE", at: 1 })).toBe(false)

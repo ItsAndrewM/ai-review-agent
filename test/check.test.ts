@@ -86,6 +86,17 @@ describe("postedEarlierCheckRun", () => {
       "Review 9 was posted by an earlier run of this head.",
     )
   })
+
+  it("keeps (unverified) on the title when the review an earlier run posted was unverified", () => {
+    const posted = { reviewId: 9, event: "REQUEST_CHANGES" as const, counts: countOf(["blocking"]), unverified: true }
+    expect(postedEarlierCheckRun(posted, undefined, at).output.title).toBe("Changes requested: 1 blocking (unverified)")
+    expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE", unverified: true }, undefined, at).output.title).toBe(
+      "Approved (unverified)",
+    )
+    expect(postedEarlierCheckRun({ ...posted, unverified: false }, undefined, at).output.title).toBe(
+      "Changes requested: 1 blocking",
+    )
+  })
 })
 
 describe("isoSeconds", () => {

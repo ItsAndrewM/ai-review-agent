@@ -56,6 +56,14 @@ export function ownsOperation(pending: PendingReview, operationId: string): bool
   return operationId === pending.operationId || operationId.startsWith(`${pending.operationId}:`)
 }
 
+export function reviewOperations<Operation extends { operationId: string }>(
+  pending: PendingReview,
+  root: readonly Operation[],
+  verify: readonly Operation[],
+): Operation[] {
+  return [...verify, ...root].filter(({ operationId }) => ownsOperation(pending, operationId))
+}
+
 export type SubmitStanding = { kind: "post"; deliveryId: string } | { kind: "no_review" } | { kind: "not_in_flight" }
 
 export interface SubmitCall<Conversation> {

@@ -6,6 +6,7 @@ import {
   migratePending,
   ownsOperation,
   replacedExit,
+  reviewOperations,
   runStanding,
   standingAfterVerify,
   StoredPending,
@@ -61,6 +62,33 @@ describe("ownsOperation", () => {
     expect(ownsOperation(pending, "review:d-2")).toBe(false)
     expect(ownsOperation(pending, "review:d-10")).toBe(false)
     expect(ownsOperation(pending, "chat:d-1")).toBe(false)
+  })
+})
+
+describe("reviewOperations", () => {
+  const root = [
+    { operationId: "review:d-1", session: "1", status: "running" },
+    { operationId: "chat:d-9", session: "1", status: "queued" },
+  ]
+  const verify = [
+    { operationId: "review:d-1:verify:1", session: "3", status: "running" },
+    { operationId: "review:d-0:verify:2", session: "3", status: "queued" },
+  ]
+
+  it("keeps the review's own operations in the root and verify sessions, and nothing else", () => {
+    expect(
+      reviewOperations(pending, root, verify)
+        .map(({ operationId }) => operationId)
+        .sort(),
+    ).toEqual(["review:d-1", "review:d-1:verify:1"])
+  })
+
+  it("lists verify's operations first, since the review's submit_review call waits on verify, and aborting the call waits for it to return", () => {
+    expect(reviewOperations(pending, root, verify)).toEqual([verify[0], root[0]])
+  })
+
+  it("has nothing for a session that has nothing pending", () => {
+    expect(reviewOperations(pending, [], [])).toEqual([])
   })
 })
 

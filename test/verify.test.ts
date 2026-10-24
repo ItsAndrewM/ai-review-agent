@@ -1,6 +1,7 @@
+import { fauxAssistantMessage } from "@earendil-works/pi-ai"
 import { Value } from "typebox/value"
-import { describe, expect, it } from "vitest"
-import { MAX_PATCH_CHARS } from "../src/github/diff.ts"
+import { afterEach, describe, expect, it, vi } from "vitest"
+import { MAX_PATCH_CHARS, type ChangedFile } from "../src/github/diff.ts"
 import {
   MAX_FINDINGS,
   type FindingInput,
@@ -12,16 +13,27 @@ import { applyDeltaPolicy, type DeltaScope, type OpenThread, type ScopedReview }
 import { chooseReviewEvent, holdsApprovalBack } from "../src/review/render.ts"
 import {
   applyVerdicts,
+  attemptOf,
+  backstopTimer,
   citedWindow,
+  findingContexts,
+  leftOutOf,
+  linkedIssueText,
   parseVerdictsText,
+  unverifiedDisplay,
   verdictAfterVerify,
+  verdictFields,
   VerdictInput,
   VerdictsSubmission,
+  verifiedReview,
   verifyCandidates,
+  verifyCounts,
   VERIFY_BACKSTOP_MS,
   VERIFY_RADIUS,
   verifyPrompt,
+  VerifySessionId,
   verifyWithRetry,
+  whileUnsettled,
   type FindingContext,
   type VerifyAttempt,
   type VerifyCandidate,
@@ -115,6 +127,18 @@ describe("VerdictInput", () => {
   it("refuses a submission whose verdicts aren't a list", () => {
     expect(Value.Check(VerdictsSubmission, { verdicts: good })).toBe(false)
     expect(Value.Check(VerdictsSubmission, {})).toBe(false)
+  })
+
+  it("refuses a reason over 300 characters, so 25 reasons stay well inside the summary comment", () => {
+    expect(Value.Check(VerdictInput, { ...good, reason: "x".repeat(300) })).toBe(true)
+    expect(Value.Check(VerdictInput, { ...good, reason: "x".repeat(301) })).toBe(false)
+  })
+})
+
+describe("VerifySessionId", () => {
+  it("reads the verify session's id as a string", () => {
+    expect(Value.Check(VerifySessionId, "3")).toBe(true)
+    expect(Value.Check(VerifySessionId, 3)).toBe(false)
   })
 })
 
@@ -849,7 +873,7 @@ describe("verifyWithRetry", () => {
   const BACKSTOP_REASON = "backstop: no answer in 15 minutes"
 
   function failed(reason: string): VerifyAttempt {
-    return { kind: "failed", reason }
+    return { kind: "failed", failure: "answer", reason }
   }
 
   const gives = (result: VerifyAttempt) => () => Promise.resolve(result)
@@ -905,7 +929,7 @@ describe("verifyWithRetry", () => {
   it("gives the second attempt's reason when both attempts fail, and starts no third", async () => {
     const { attempt, started } = scripted(gives(failed("first reason")), gives(failed("second reason")))
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
-    expect(result).toEqual({ kind: "failed", reason: "second reason", attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "answer", reason: "second reason", attempts: 2 })
     expect(started).toEqual([1, 2])
   })
 
@@ -919,7 +943,7 @@ describe("verifyWithRetry", () => {
   it.each(throwing)("gives the error's text as the reason when both attempts %s", async (_, thrower) => {
     const { attempt } = scripted(thrower, thrower)
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer().timer)
-    expect(result).toEqual({ kind: "failed", reason: "Error: model unreachable", attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "model", reason: "Error: model unreachable", attempts: 2 })
   })
 
   it("retries an attempt that hits the backstop, and gives the verdicts of the second", async () => {
@@ -932,21 +956,21 @@ describe("verifyWithRetry", () => {
   it("fails with the backstop's reason when both attempts hit the backstop, and starts no third", async () => {
     const { attempt, started } = scripted(never, never)
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer(true, true).timer)
-    expect(result).toEqual({ kind: "failed", reason: BACKSTOP_REASON, attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "backstop", reason: BACKSTOP_REASON, attempts: 2 })
     expect(started).toEqual([1, 2])
   })
 
   it("holds the retry to a backstop of its own, so a second attempt that stalls fails as the backstop", async () => {
     const { attempt, started } = scripted(gives(failed("no verdicts")), never)
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer(false, true).timer)
-    expect(result).toEqual({ kind: "failed", reason: BACKSTOP_REASON, attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "backstop", reason: BACKSTOP_REASON, attempts: 2 })
     expect(started).toEqual([1, 2])
   })
 
   it("gives the second attempt's own reason when the first hit the backstop and the second fails", async () => {
     const { attempt } = scripted(never, gives(failed("no verdicts")))
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, fakeTimer(true).timer)
-    expect(result).toEqual({ kind: "failed", reason: "no verdicts", attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "answer", reason: "no verdicts", attempts: 2 })
   })
 
   it("ignores the answer an attempt gives when its backstop aborts it, since passing the backstop is a failure", async () => {
@@ -957,7 +981,7 @@ describe("verifyWithRetry", () => {
           })
         : Promise.resolve(failed("no verdicts"))
     const result = await verifyWithRetry(answersWhenAborted, VERIFY_BACKSTOP_MS, fakeTimer(true).timer)
-    expect(result).toEqual({ kind: "failed", reason: "no verdicts", attempts: 2 })
+    expect(result).toEqual({ kind: "failed", failure: "answer", reason: "no verdicts", attempts: 2 })
   })
 
   it.each([
@@ -976,7 +1000,12 @@ describe("verifyWithRetry", () => {
 
   it("words the backstop's reason from the length it was given", async () => {
     const result = await verifyWithRetry(scripted(never, never).attempt, 120_000, fakeTimer(true, true).timer)
-    expect(result).toEqual({ kind: "failed", reason: "backstop: no answer in 2 minutes", attempts: 2 })
+    expect(result).toEqual({
+      kind: "failed",
+      failure: "backstop",
+      reason: "backstop: no answer in 2 minutes",
+      attempts: 2,
+    })
   })
 
   it.each([
@@ -1033,5 +1062,481 @@ describe("verifyWithRetry", () => {
     const result = await verifyWithRetry(attempt, VERIFY_BACKSTOP_MS, timer)
     await nextTask()
     expect(result).toEqual({ ...answer, attempts: 2 })
+  })
+})
+
+describe("backstopTimer", () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it("resolves once its time has passed", async () => {
+    vi.useFakeTimers()
+    const fired: boolean[] = []
+    void backstopTimer(1_000, new AbortController().signal).then(() => fired.push(true))
+    await vi.advanceTimersByTimeAsync(999)
+    expect(fired).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(fired).toEqual([true])
+  })
+
+  it("clears its timeout once aborted, so no timer outlives its attempt, and never rejects", async () => {
+    vi.useFakeTimers()
+    const clock = new AbortController()
+    const settled: string[] = []
+    void backstopTimer(1_000, clock.signal).then(
+      () => settled.push("resolved"),
+      () => settled.push("rejected"),
+    )
+    expect(vi.getTimerCount()).toBe(1)
+    clock.abort()
+    expect(vi.getTimerCount()).toBe(0)
+    await vi.advanceTimersByTimeAsync(5_000)
+    expect(settled).not.toContain("rejected")
+  })
+})
+
+describe("whileUnsettled", () => {
+  it("runs onAbort when the signal aborts while the work is still running", async () => {
+    const controller = new AbortController()
+    const aborted: string[] = []
+    let finish = (_answer: string) => {}
+    const work = new Promise<string>((resolve) => {
+      finish = resolve
+    })
+    const running = whileUnsettled(
+      controller.signal,
+      () => aborted.push("aborted"),
+      () => work,
+    )
+    controller.abort()
+    expect(aborted).toEqual(["aborted"])
+    finish("answer")
+    expect(await running).toBe("answer")
+  })
+
+  it("leaves onAbort alone once the work has settled, so ending a finished attempt aborts nothing", async () => {
+    const controller = new AbortController()
+    const aborted: string[] = []
+    const answer = await whileUnsettled(
+      controller.signal,
+      () => aborted.push("aborted"),
+      async () => "answer",
+    )
+    controller.abort()
+    expect(answer).toBe("answer")
+    expect(aborted).toEqual([])
+  })
+
+  it("leaves onAbort alone once the work has failed, and passes the failure on", async () => {
+    const controller = new AbortController()
+    const aborted: string[] = []
+    const failing = whileUnsettled(
+      controller.signal,
+      () => aborted.push("aborted"),
+      async () => {
+        throw new Error("model unreachable")
+      },
+    )
+    await expect(failing).rejects.toThrow("model unreachable")
+    controller.abort()
+    expect(aborted).toEqual([])
+  })
+})
+
+describe("attemptOf", () => {
+  const answered = { operationId: "review:d-1:verify:1", session: "3", status: "done" } as const
+  const submitted = [verdict("F1", "blocking"), verdict("F2", "suggestion", { keep: false })]
+
+  it("takes the verdicts submit_verdicts recorded, whatever the model wrote after the call", () => {
+    expect(attemptOf(submitted, { ...answered, text: "Done." })).toEqual({ kind: "verdicts", verdicts: submitted })
+  })
+
+  it("takes the recorded verdicts even when the run went unanswered after the call", () => {
+    expect(attemptOf(submitted, { ...answered, status: "unanswered", reason: "aborted" })).toEqual({
+      kind: "verdicts",
+      verdicts: submitted,
+    })
+  })
+
+  it("fails an attempt whose submit_verdicts call held no verdicts, as an answer with nothing to use", () => {
+    expect(attemptOf([], answered)).toEqual({
+      kind: "failed",
+      failure: "answer",
+      reason: "submit_verdicts was called with no verdicts",
+    })
+  })
+
+  it("reads verdicts written as text when submit_verdicts wasn't called", () => {
+    expect(attemptOf(undefined, { ...answered, text: JSON.stringify({ verdicts: submitted }) })).toEqual({
+      kind: "verdicts",
+      verdicts: submitted,
+    })
+  })
+
+  it("fails an attempt whose text holds no usable verdicts, with the start of the text for the log", () => {
+    const prose = `Both findings hold up. ${"F1 stands because the caller awaits it. ".repeat(20)}`
+    expect(prose.length).toBeGreaterThan(500)
+    expect(attemptOf(undefined, { ...answered, text: prose })).toEqual({
+      kind: "failed",
+      failure: "answer",
+      reason: `no submit_verdicts call, and no verdicts in the text: ${prose.slice(0, 500)}…`,
+    })
+    expect(attemptOf(undefined, { ...answered, text: "F1 stands." })).toEqual({
+      kind: "failed",
+      failure: "answer",
+      reason: "no submit_verdicts call, and no verdicts in the text: F1 stands.",
+    })
+  })
+
+  it("fails an attempt that answered nothing at all", () => {
+    const nothing = { kind: "failed", failure: "answer", reason: "no submit_verdicts call, and no text" }
+    expect(attemptOf(undefined, answered)).toEqual(nothing)
+    expect(attemptOf(undefined, { ...answered, text: " \n" })).toEqual(nothing)
+  })
+
+  it("fails an attempt whose run went unanswered as a failed model call, with Pi's reason and the model's error", () => {
+    const messages = [
+      {
+        kind: "pi.assistant",
+        model: [fauxAssistantMessage([], { stopReason: "error", errorMessage: "5007: no such model" })],
+      },
+    ]
+    expect(attemptOf(undefined, { ...answered, status: "unanswered", reason: "model_error", messages })).toEqual({
+      kind: "failed",
+      failure: "model",
+      reason: "model_error: 5007: no such model",
+    })
+  })
+})
+
+describe("unverifiedDisplay", () => {
+  it.each([
+    ["model", "the model call failed"],
+    ["answer", "no usable answer"],
+    ["backstop", "no answer in 15 minutes"],
+    ["budget", "the review spent its budget"],
+  ] as const)(
+    "gives the public footer a short fixed phrase for a %s failure, never the error's text",
+    (cause, reason) => {
+      expect(unverifiedDisplay("@cf/moonshotai/kimi-k2.7-code", cause)).toEqual({
+        kind: "unverified",
+        model: "@cf/moonshotai/kimi-k2.7-code",
+        reason,
+      })
+    },
+  )
+})
+
+describe("leftOutOf", () => {
+  const incremental: DeltaScope = {
+    mode: "incremental",
+    covered: new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]]),
+    open: [],
+  }
+
+  it("names a demoted finding the push's delta rules then rejected, as the very object the report carries", () => {
+    const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
+    const applied = judge(validated([elsewhere]), [verdict("F1", "suggestion")], incremental)
+    const leftOut = leftOutOf(applied.report, applyDeltaPolicy(applied.validated, incremental))
+    expect(leftOut).toEqual([{ ...elsewhere, severity: "suggestion" }])
+    expect(leftOut[0]).toBe(applied.report.changed[0]?.revised)
+  })
+
+  it("names a demoted finding the delta rules set aside as a duplicate of a non-blocking open thread", () => {
+    const scope: DeltaScope = { mode: "full", covered: new Map(), open: [thread("T1", { line: 3 })] }
+    const onThread = finding({ severity: "blocking", line: 3 })
+    const applied = judge(validated([onThread]), [verdict("F1", "nitpick")], scope)
+    expect(leftOutOf(applied.report, applyDeltaPolicy(applied.validated, scope))).toEqual([
+      { ...onThread, severity: "nitpick" },
+    ])
+  })
+
+  it("names a demoted held finding, which stays rejected now that it holds nothing back", () => {
+    const anchor = rejection({ severity: "blocking", line: 40 })
+    const applied = judge(validated([], [anchor]), [verdict("F1", "suggestion")])
+    expect(leftOutOf(applied.report, applyDeltaPolicy(applied.validated, FRESH))).toEqual([
+      { ...anchor.finding, severity: "suggestion" },
+    ])
+  })
+
+  it("names nothing a demotion leaves posted, nor a promotion, a drop or a rejection verify never judged", () => {
+    const demoted = finding({ severity: "blocking", line: 3 })
+    const promoted = finding({ severity: "suggestion", line: 4 })
+    const dropped = finding({ severity: "suggestion", line: 5 })
+    const unjudged = rejection({ severity: "suggestion", line: 41 })
+    const applied = judge(validated([demoted, promoted, dropped], [unjudged]), [
+      verdict("F1", "suggestion"),
+      verdict("F2", "blocking"),
+      verdict("F3", "suggestion", { keep: false }),
+    ])
+    const after = applyDeltaPolicy(applied.validated, FRESH)
+    expect(applied.report.changed).toHaveLength(2)
+    expect(after.rejected).toEqual([unjudged])
+    expect(leftOutOf(applied.report, after)).toEqual([])
+  })
+})
+
+describe("verifiedReview", () => {
+  function draftOf(review: ValidatedReview, scope: DeltaScope) {
+    const scoped = applyDeltaPolicy(review, scope)
+    return { validated: review, scoped, scope, candidates: verifyCandidates(scoped) }
+  }
+
+  it("applies the verdicts, runs the delta rules again, and approves a request for changes once nothing blocks", () => {
+    const blocker = finding({ severity: "blocking", line: 3 })
+    const verified = verifiedReview(
+      draftOf(validated([blocker]), FRESH),
+      [verdict("F1", "suggestion", { reason: "the caller awaits it" })],
+      "request_changes",
+    )
+    expect(verified).toEqual({
+      scoped: { accepted: [{ ...blocker, severity: "suggestion" }], rejected: [], duplicates: [] },
+      verdict: "approve",
+      report: {
+        ...NOTHING,
+        changed: [
+          {
+            finding: blocker,
+            reason: "the caller awaits it",
+            from: "blocking",
+            to: "suggestion",
+            revised: { ...blocker, severity: "suggestion" },
+          },
+        ],
+      },
+      leftOut: [],
+    })
+  })
+
+  it("leaves out a demoted finding the push's delta rules no longer let through, and names it left out", () => {
+    const scope: DeltaScope = {
+      mode: "incremental",
+      covered: new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]]),
+      open: [],
+    }
+    const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
+    const verified = verifiedReview(
+      draftOf(validated([elsewhere]), scope),
+      [verdict("F1", "suggestion")],
+      "request_changes",
+    )
+    expect(verified.scoped.accepted).toEqual([])
+    expect(verified.scoped.rejected.map((rejected) => rejected.finding)).toEqual([
+      { ...elsewhere, severity: "suggestion" },
+    ])
+    expect(verified.leftOut).toEqual([{ ...elsewhere, severity: "suggestion" }])
+    expect(verified.leftOut[0]).toBe(verified.scoped.rejected[0]?.finding)
+    expect(verified.verdict).toBe("approve")
+  })
+
+  it("keeps the request for changes while a blocking finding stands, and drops what verify dropped", () => {
+    const blocker = finding({ severity: "blocking", line: 3 })
+    const advice = finding({ severity: "suggestion", line: 4 })
+    const verified = verifiedReview(
+      draftOf(validated([blocker, advice]), FRESH),
+      [verdict("F1", "blocking"), verdict("F2", "suggestion", { keep: false })],
+      "request_changes",
+    )
+    expect(verified.scoped.accepted).toEqual([blocker])
+    expect(verified.verdict).toBe("request_changes")
+  })
+})
+
+describe("findingContexts", () => {
+  const patchOfA = "@@ -1,3 +1,3 @@\n one\n-two\n+TWO"
+  const files: ChangedFile[] = [
+    { filename: "src/a.ts", status: "modified", additions: 1, deletions: 1, patch: patchOfA },
+    { filename: "src/b.ts", status: "renamed", additions: 0, deletions: 0 },
+  ]
+
+  function sources(contents: Map<string, string | Error>, issue?: string) {
+    const reads: string[] = []
+    const unreadable: string[] = []
+    const read = async (path: string, ref: "head" | "base") => {
+      reads.push(`${ref}:${path}`)
+      const content = contents.get(`${ref}:${path}`)
+      if (content instanceof Error) throw content
+      return content
+    }
+    const report = (path: string, ref: "head" | "base", error: string) => {
+      unreadable.push(`${ref}:${path}: ${error}`)
+    }
+    return { reads, unreadable, given: { files, read, unreadable: report, issue } }
+  }
+
+  const candidate = (id: string, overrides: Partial<FindingInput>): VerifyCandidate => ({
+    id,
+    finding: finding(overrides),
+    held: false,
+  })
+
+  it("windows each candidate's cited lines at the head, or at the base for a LEFT finding", async () => {
+    const io = sources(
+      new Map([
+        ["head:src/a.ts", "one\nTWO\nthree"],
+        ["base:src/a.ts", "one\ntwo\nthree"],
+      ]),
+    )
+    const right = candidate("F1", { path: "src/a.ts", line: 2 })
+    const left = candidate("F2", { path: "src/a.ts", line: 2, side: "LEFT" })
+    const contexts = await findingContexts([right, left], io.given)
+    expect(contexts.map((context) => context.candidate)).toEqual([right, left])
+    expect(contexts.map(({ window }) => window)).toEqual([
+      "    1 | one\n    2 | TWO\n    3 | three",
+      "    1 | one\n    2 | two\n    3 | three",
+    ])
+  })
+
+  it("reads a file once for all the candidates that cite it on one side", async () => {
+    const io = sources(
+      new Map([
+        ["head:src/a.ts", "a"],
+        ["base:src/a.ts", "b"],
+      ]),
+    )
+    await findingContexts(
+      [
+        candidate("F1", { path: "src/a.ts", line: 1 }),
+        candidate("F2", { path: "src/a.ts", line: 1, side: "LEFT" }),
+        candidate("F3", { path: "src/a.ts", line: 1 }),
+      ],
+      io.given,
+    )
+    expect(io.reads.sort()).toEqual(["base:src/a.ts", "head:src/a.ts"])
+  })
+
+  it("gives a candidate whose file can't be read no window, and reports why", async () => {
+    const io = sources(new Map([["head:src/a.ts", new Error("502 Bad Gateway")]]))
+    const [context] = await findingContexts([candidate("F1", { path: "src/a.ts", line: 1 })], io.given)
+    expect(context?.window).toBeUndefined()
+    expect(io.unreadable).toEqual(["head:src/a.ts: Error: 502 Bad Gateway"])
+  })
+
+  it("gives a candidate whose file doesn't exist at that commit no window, and reports nothing", async () => {
+    const io = sources(new Map())
+    const [context] = await findingContexts([candidate("F1", { path: "src/gone.ts", line: 1 })], io.given)
+    expect(context?.window).toBeUndefined()
+    expect(io.unreadable).toEqual([])
+  })
+
+  it("takes each candidate's patch from its file among the changed files", async () => {
+    const io = sources(new Map())
+    const contexts = await findingContexts(
+      [
+        candidate("F1", { path: "src/a.ts" }),
+        candidate("F2", { path: "src/b.ts" }),
+        candidate("F3", { path: "src/c.ts" }),
+      ],
+      io.given,
+    )
+    expect(contexts.map(({ patch }) => patch)).toEqual([patchOfA, undefined, undefined])
+  })
+
+  it("hands the linked issues to spec candidates only", async () => {
+    const io = sources(new Map(), "#31: Verify findings\nCheck each finding.")
+    const contexts = await findingContexts(
+      [candidate("F1", { basis_kind: "spec" }), candidate("F2", { basis_kind: "defect" })],
+      io.given,
+    )
+    expect(contexts.map(({ issue }) => issue)).toEqual(["#31: Verify findings\nCheck each finding.", undefined])
+  })
+})
+
+describe("linkedIssueText", () => {
+  it("has nothing for a pull request with no linked issue", () => {
+    expect(linkedIssueText([])).toBeUndefined()
+  })
+
+  it("gives each issue's number, title and body, a blank line apart, and marks a body cut short", () => {
+    expect(
+      linkedIssueText([
+        { number: 31, title: "Verify findings", body: "Check each finding.", cut: false },
+        { number: 32, title: "Long spec", body: "First part", cut: true },
+      ]),
+    ).toBe("#31: Verify findings\nCheck each finding.\n\n#32: Long spec\nFirst part\n(cut)")
+  })
+})
+
+describe("verdictFields", () => {
+  it("logs each verdict with its finding's place and both severities, marking a capped promotion and an ignored verdict", () => {
+    const blocker = finding({ path: "src/a.ts", line: 10, severity: "blocking" })
+    const advice = finding({ path: "src/b.ts", line: 20, severity: "suggestion", basis_kind: "standard" })
+    const review = validated([blocker, advice])
+    const candidates = verifyCandidates(applyDeltaPolicy(review, FRESH))
+    const given = [
+      verdict("F1", "suggestion", { reason: "the caller checks it" }),
+      verdict("F2", "blocking", { reason: "it breaks the rule" }),
+      verdict("F9", "nitpick", { keep: false, reason: "a stray id" }),
+      verdict("F1", "blocking", { reason: "a second verdict" }),
+    ]
+    const { report } = applyVerdicts(review, candidates, given)
+    expect(verdictFields(candidates, given, report)).toEqual([
+      {
+        id: "F1",
+        path: "src/a.ts",
+        line: 10,
+        keep: true,
+        from: "blocking",
+        to: "suggestion",
+        capped: false,
+        ignored: false,
+        reason: "the caller checks it",
+      },
+      {
+        id: "F2",
+        path: "src/b.ts",
+        line: 20,
+        keep: true,
+        from: "suggestion",
+        to: "blocking",
+        capped: true,
+        ignored: false,
+        reason: "it breaks the rule",
+      },
+      { id: "F9", keep: false, to: "nitpick", capped: false, ignored: true, reason: "a stray id" },
+      {
+        id: "F1",
+        path: "src/a.ts",
+        line: 10,
+        keep: true,
+        from: "blocking",
+        to: "blocking",
+        capped: false,
+        ignored: true,
+        reason: "a second verdict",
+      },
+    ])
+  })
+})
+
+describe("verifyCounts", () => {
+  it("counts what verify kept, dropped, promoted, demoted, capped, left unjudged and named unknown", () => {
+    const review = validated([
+      finding({ severity: "blocking", line: 1 }),
+      finding({ severity: "suggestion", line: 2 }),
+      finding({ severity: "suggestion", line: 3 }),
+      finding({ severity: "blocking", line: 4 }),
+      finding({ severity: "suggestion", line: 5, basis_kind: "test" }),
+      finding({ severity: "suggestion", line: 6 }),
+    ])
+    const candidates = verifyCandidates(applyDeltaPolicy(review, FRESH))
+    const { report } = applyVerdicts(review, candidates, [
+      verdict("F1", "blocking"),
+      verdict("F2", "blocking"),
+      verdict("F3", "nitpick"),
+      verdict("F4", "blocking", { keep: false }),
+      verdict("F5", "blocking"),
+      verdict("F9", "nitpick"),
+    ])
+    expect(verifyCounts(candidates, report)).toEqual({
+      kept: 4,
+      dropped: 1,
+      promoted: 1,
+      demoted: 1,
+      capped: 1,
+      notJudged: 1,
+      unknown: 1,
+    })
   })
 })
