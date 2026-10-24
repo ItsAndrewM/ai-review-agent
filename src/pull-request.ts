@@ -266,6 +266,11 @@ export type Incoming =
       deliveryId: string
       trigger: WebhookTrigger
     }
+  | {
+      kind: "closed"
+      key: PullRequestKey
+      deliveryId: string
+    }
 
 export interface ThreadContext {
   commentId: number
@@ -728,11 +733,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "approval":
         await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
         return
+      case "closed":
+        this.#runs.dropIdle(incoming.key.number, "closed")
+        return
     }
   }
 
   private async review(incoming: ReviewIncoming, callerVersion?: Version): Promise<ReviewSkip | undefined> {
-    this.#runs.dropStale(incoming.key.number)
+    this.#runs.dropIdle(incoming.key.number, "stale")
     if (pausesReview(incoming, await this.isPaused())) {
       log("review.skip", { reason: "paused", head: shortSha(incoming.headSha), number: incoming.key.number })
       return "paused"
@@ -1383,7 +1391,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async comment(incoming: CommentIncoming, callerVersion?: Version): Promise<void> {
     const key = await this.key()
-    this.#runs.dropStale(key.number)
+    this.#runs.dropIdle(key.number, "stale")
     const github = await this.github()
     const thread = await this.threadFor(github, key, incoming.thread)
     const command = incoming.thread

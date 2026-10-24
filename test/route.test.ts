@@ -94,11 +94,29 @@ describe("routeWebhook", () => {
     })
   })
 
-  it("ignores closed events, bots and other events", () => {
+  it("turns a closed pull request into a closed event for its object, even when a bot closed or merged it", () => {
     const pr = { number: 3, draft: false, head: { sha: "abc" } }
-    expect(routeWebhook("pull_request", { ...base, action: "closed", pull_request: pr }, "d", "andabot")).toMatchObject(
-      { kind: "ignore" },
+    const closed = {
+      kind: "handle",
+      incoming: [
+        {
+          kind: "closed",
+          key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+          deliveryId: "d",
+        },
+      ],
+    }
+    const bot = { login: "github-merge-queue[bot]", type: "Bot" }
+    expect(routeWebhook("pull_request", { ...base, action: "closed", pull_request: pr }, "d", "andabot")).toEqual(
+      closed,
     )
+    expect(
+      routeWebhook("pull_request", { ...base, sender: bot, action: "closed", pull_request: pr }, "d", "andabot"),
+    ).toEqual(closed)
+  })
+
+  it("ignores bots and other events", () => {
+    const pr = { number: 3, draft: false, head: { sha: "abc" } }
     expect(
       routeWebhook(
         "pull_request",

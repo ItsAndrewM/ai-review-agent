@@ -301,14 +301,36 @@ describe("SnapshotRuns", () => {
     })
     const resumed = runs.access("grep", headAt(SHA))
     await vi.waitFor(() => expect(files.has("src/a.ts")).toBe(true))
-    runs.dropStale(NUMBER)
+    runs.dropIdle(NUMBER, "stale")
     expect(files.has("src/a.ts")).toBe(true)
     open()
     expect((await resumed).kind).toBe("ready")
     expect(files.record()?.sha).toBe(SHA)
-    runs.dropStale(NUMBER)
+    runs.dropIdle(NUMBER, "stale")
     expect(files.record()).toBeUndefined()
     expect(logged).toHaveBeenCalledWith(dropped("stale"))
+  })
+
+  it("drops a stored snapshot when the pull request closes, as after an eviction left it behind", async () => {
+    const files = new MemorySnapshotFiles()
+    await fill(files, SHA)
+    const { runs } = runsWith(fill, files)
+    runs.dropIdle(NUMBER, "closed")
+    expect(files.record()).toBeUndefined()
+    expect(files.has("src/a.ts")).toBe(false)
+    expect(logged).toHaveBeenCalledWith(dropped("closed"))
+  })
+
+  it("leaves the snapshot alone when the pull request closes during a run, and drops it when the run ends", async () => {
+    const { files, runs } = runsWith()
+    runs.start()
+    await runs.access("grep", headAt(SHA))
+    runs.dropIdle(NUMBER, "closed")
+    expect(files.record()?.sha).toBe(SHA)
+    expect(logged).not.toHaveBeenCalledWith(dropped("closed"))
+    await runs.end(NUMBER, "review_end")
+    expect(files.record()).toBeUndefined()
+    expect(logged).toHaveBeenCalledWith(dropped("review_end"))
   })
 
   it("logs a new head replacing the stored snapshot", async () => {
