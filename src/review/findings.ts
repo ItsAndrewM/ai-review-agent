@@ -374,9 +374,13 @@ function contentProblem(finding: FindingInput): string | undefined {
   return suggestionProblem(finding) ?? commentSizeProblem(finding)
 }
 
+export function exceedsBasisCap(finding: FindingInput): boolean {
+  return finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test")
+}
+
 function basisProblem(finding: FindingInput, hasLinkedIssues: boolean): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
-  if (finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test"))
+  if (exceedsBasisCap(finding))
     return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
   if (finding.basis_kind === "spec" && !hasLinkedIssues)
     return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
