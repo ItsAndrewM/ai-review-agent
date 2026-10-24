@@ -354,6 +354,16 @@ export function parseVerdictsText(text: string): VerdictInput[] | undefined {
   return value.verdicts.length === 0 ? undefined : value.verdicts
 }
 
+const VERIFY_RUN_ID_CHARS = 8
+
+export function verifyRunId(): string {
+  return crypto.randomUUID().slice(0, VERIFY_RUN_ID_CHARS)
+}
+
+export function verifyOperationId(reviewOperationId: string, run: string, attempt: 1 | 2): string {
+  return `${reviewOperationId}:verify:${run}:${attempt}`
+}
+
 export type VerifyFailure = "model" | "answer" | "backstop"
 
 export type VerifyAttempt =

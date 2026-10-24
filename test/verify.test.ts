@@ -9,6 +9,7 @@ import {
   type ReviewSubmissionInput,
   type ValidatedReview,
 } from "../src/review/findings.ts"
+import { ownsOperation } from "../src/review/flight.ts"
 import { applyDeltaPolicy, type DeltaScope, type OpenThread, type ScopedReview } from "../src/review/incremental.ts"
 import { chooseReviewEvent, holdsApprovalBack } from "../src/review/render.ts"
 import {
@@ -29,8 +30,10 @@ import {
   verifyCandidates,
   verifyCounts,
   VERIFY_BACKSTOP_MS,
+  verifyOperationId,
   VERIFY_RADIUS,
   verifyPrompt,
+  verifyRunId,
   VerifySessionId,
   verifyWithRetry,
   whileUnsettled,
@@ -139,6 +142,22 @@ describe("VerifySessionId", () => {
   it("reads the verify session's id as a string", () => {
     expect(Value.Check(VerifySessionId, "3")).toBe(true)
     expect(Value.Check(VerifySessionId, 3)).toBe(false)
+  })
+})
+
+describe("verifyOperationId", () => {
+  it("names an attempt by the review's operation, the verify run and the attempt, so the review owns it", () => {
+    const pending = { headSha: "aaa", deliveryId: "d-1", operationId: "review:d-1", started: 1 }
+    expect(verifyOperationId("review:d-1", "a1b2c3d4", 2)).toBe("review:d-1:verify:a1b2c3d4:2")
+    expect(ownsOperation(pending, verifyOperationId(pending.operationId, "a1b2c3d4", 1))).toBe(true)
+  })
+})
+
+describe("verifyRunId", () => {
+  it("is a short random part, new for every run, so a later verify run of a review never reuses an earlier run's operation", () => {
+    const runs = Array.from({ length: 20 }, () => verifyRunId())
+    for (const run of runs) expect(run).toMatch(/^[0-9a-f]{8}$/)
+    expect(new Set(runs).size).toBe(runs.length)
   })
 })
 

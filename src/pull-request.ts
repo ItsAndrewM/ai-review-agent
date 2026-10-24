@@ -282,7 +282,9 @@ import {
   verifyCandidates,
   verifyCounts,
   VERIFY_BACKSTOP_MS,
+  verifyOperationId,
   verifyPrompt,
+  verifyRunId,
   VerifySessionId,
   verifyWithRetry,
   whileUnsettled,
@@ -382,6 +384,7 @@ interface VerifyRun {
 
 interface VerifyAttempts {
   run: VerifyRun
+  runId: string
   prompt: string
   aborting: Promise<void>
 }
@@ -756,6 +759,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async runVerify(run: VerifyRun): Promise<VerifyAttempt & { attempts: number }> {
     const attempts: VerifyAttempts = {
       run,
+      runId: verifyRunId(),
       prompt: verifyPrompt(await this.verifyContexts(run)),
       aborting: Promise.resolve(),
     }
@@ -777,7 +781,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.restartGrace(run.pending.deliveryId)
     log("verify.start", { ...verifyFields(run), candidates: run.candidates.length, attempt: n })
     const session = await this.verifySession()
-    const operationId = `${run.pending.operationId}:verify:${n}`
+    const operationId = verifyOperationId(run.pending.operationId, attempts.runId, n)
     const onBackstop = () => {
       logError("verify.attempt_failed", {
         ...verifyFields(run),
