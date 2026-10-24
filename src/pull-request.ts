@@ -770,7 +770,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       started: run.started,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
-      ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW),
+      ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
       ...(await this.usageBaseline()),
     })
     await this.runReview(pr, incoming, run)

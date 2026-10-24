@@ -20,6 +20,7 @@ import {
   staleConfigKeys,
   StoredConfig,
   storedConfig,
+  verifyModelFor,
   type ConfigRead,
 } from "../src/repository/config.ts"
 
@@ -38,6 +39,7 @@ const FULL_FILE = [
   "    - WIP",
   "    - '[skip review]'",
   "  request_changes_workflow: true",
+  "  verify: false",
   "  path_filters:",
   "    - '!**/*.snap'",
   "    - '!pnpm-lock.yaml'",
@@ -50,6 +52,7 @@ const FULL_FILE = [
   "        Name the rollback.",
   "model:",
   "  name: glm-5.3-flash",
+  "  verify: '@cf/x/y'",
   "",
 ].join("\n")
 
@@ -60,12 +63,14 @@ const FULL_CONFIG = {
     base_branches: ["main", "release/*"],
     ignore_title_keywords: ["WIP", "[skip review]"],
     request_changes_workflow: true,
+    verify: false,
     path_filters: ["!**/*.snap", "!pnpm-lock.yaml"],
     path_instructions: [
       { path: "apps/web/**", instructions: "Use the design tokens, not raw colors." },
       { path: "**/*.sql", instructions: "A migration must be reversible.\nName the rollback.\n" },
     ],
   },
+  model: { verify: "@cf/x/y" },
 } satisfies AndabotConfig
 
 const LITERAL_DEFAULTS = {
@@ -74,9 +79,19 @@ const LITERAL_DEFAULTS = {
     drafts: false,
     base_branches: [],
     ignore_title_keywords: [],
+    verify: true,
     path_filters: [],
     path_instructions: [],
   },
+}
+
+const BEFORE_VERIFY_REVIEWS = {
+  auto: true,
+  drafts: false,
+  base_branches: [],
+  ignore_title_keywords: [],
+  path_filters: [],
+  path_instructions: [],
 }
 
 function fakeGitHub(respond: () => Response) {
@@ -104,12 +119,16 @@ const failOnUnreadable = (error: string): void => {
 const served = (body: string) => () => new Response(body, { status: 200 })
 
 describe("DEFAULT_CONFIG", () => {
-  it("reviews on every push, waits on drafts, restricts no base branch, ignores no title, filters no path and adds no instructions", () => {
+  it("reviews on every push, waits on drafts, restricts no base branch, ignores no title, filters no path, adds no instructions and verifies", () => {
     expect(DEFAULT_CONFIG).toEqual(LITERAL_DEFAULTS)
   })
 
   it("leaves request_changes_workflow unset, which means the Worker var applies", () => {
     expect(DEFAULT_CONFIG.reviews.request_changes_workflow).toBeUndefined()
+  })
+
+  it("names no verify model, which means the Worker var applies", () => {
+    expect(DEFAULT_CONFIG.model).toBeUndefined()
   })
 })
 
@@ -124,6 +143,17 @@ describe("AndabotConfig", () => {
     expect(Value.Check(AndabotConfig, { reviews: { ...LITERAL_DEFAULTS.reviews, mode: "strict" } })).toBe(false)
     expect(Value.Check(AndabotConfig, {})).toBe(false)
   })
+
+  it("refuses a config from before reviews.verify existed, so a record cached then reads as a miss", () => {
+    expect(Value.Check(AndabotConfig, { reviews: BEFORE_VERIFY_REVIEWS })).toBe(false)
+  })
+
+  it("takes a verify model, and refuses one that is not a non-empty string", () => {
+    expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: { verify: "@cf/x/y" } })).toBe(true)
+    expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: {} })).toBe(true)
+    expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: { verify: 3 } })).toBe(false)
+    expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: { verify: "" } })).toBe(false)
+  })
 })
 
 describe("parseConfig", () => {
@@ -137,7 +167,7 @@ describe("parseConfig", () => {
     expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error: undefined })
   })
 
-  it("reads every setting of a full file and drops model from the config", () => {
+  it("reads every setting of a full file, carrying model.verify and dropping the rest of model", () => {
     expect(parseConfig(FULL_FILE)).toEqual({ config: FULL_CONFIG, error: undefined })
   })
 
@@ -150,6 +180,7 @@ describe("parseConfig", () => {
           drafts: true,
           base_branches: [],
           ignore_title_keywords: [],
+          verify: true,
           path_filters: ["!**/*.snap"],
           path_instructions: [],
         },
@@ -164,9 +195,35 @@ describe("parseConfig", () => {
     expect(parseConfig("reviews:\n  auto: false\n").config.reviews.request_changes_workflow).toBeUndefined()
   })
 
-  it("accepts any mapping under model and ignores it", () => {
+  it("keeps reviews.verify: false as the repository's switch off, and leaves verify on when the file says nothing", () => {
+    expect(parseConfig("reviews:\n  verify: false\n").config.reviews.verify).toBe(false)
+    expect(parseConfig("reviews:\n  verify: true\n").config.reviews.verify).toBe(true)
+    expect(parseConfig("reviews:\n  auto: false\n").config.reviews.verify).toBe(true)
+    expect(DEFAULT_CONFIG.reviews.verify).toBe(true)
+  })
+
+  it("reads model.verify as the repository's verify model", () => {
+    expect(parseConfig('model:\n  verify: "@cf/x/y"\n')).toEqual({
+      config: { ...LITERAL_DEFAULTS, model: { verify: "@cf/x/y" } },
+      error: undefined,
+    })
+  })
+
+  it("leaves the verify model unset for a model that names none, as model.draft does", () => {
+    const parsed = parseConfig('model:\n  draft: "@cf/a"\n')
+    expect(parsed.error).toBeUndefined()
+    expect(parsed.config.model?.verify).toBeUndefined()
+    expect(parsed).toStrictEqual({ config: LITERAL_DEFAULTS, error: undefined })
+  })
+
+  it("accepts any other mapping under model and ignores it", () => {
     const text = "model:\n  name: glm-5.3-flash\n  options:\n    temperature: 0.2\n    stops: [a, b]\n"
-    expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error: undefined })
+    expect(parseConfig(text)).toStrictEqual({ config: LITERAL_DEFAULTS, error: undefined })
+  })
+
+  it("carries model.verify and nothing else of model, beside the other keys", () => {
+    const text = 'model:\n  name: glm-5.3-flash\n  verify: "@cf/x/y"\n  options:\n    temperature: 0.2\n'
+    expect(parseConfig(text).config.model).toStrictEqual({ verify: "@cf/x/y" })
   })
 
   it("gives the defaults and an error naming reviews/auto for a boolean written as a string", () => {
@@ -213,6 +270,9 @@ describe("parseConfig", () => {
       "reviews:\n  request_changes_workflow: sometimes\n",
       "/reviews/request_changes_workflow must be boolean",
     ],
+    ["a reviews verify that is not a boolean", "reviews:\n  verify: sometimes\n", "/reviews/verify must be boolean"],
+    ["a model verify that is not a string", "model:\n  verify: 3\n", "/model/verify must be string"],
+    ["a model verify that is empty", "model:\n  verify: ''\n", "/model/verify must not have fewer than 1 characters"],
     [
       "a path_filters entry without the leading !",
       "reviews:\n  path_filters:\n    - '!**/*.snap'\n    - pnpm-lock.yaml\n",
@@ -374,6 +434,10 @@ const withReviews = (reviews: Partial<AndabotConfig["reviews"]>): AndabotConfig 
   reviews: { ...LITERAL_DEFAULTS.reviews, ...reviews },
 })
 
+const NAMES_A_VERIFY_MODEL: AndabotConfig = { ...LITERAL_DEFAULTS, model: { verify: "k" } }
+
+const OPTS_OUT_OF_VERIFY: AndabotConfig = withReviews({ verify: false })
+
 describe("shouldReview", () => {
   const draft = { ...READY, draft: true }
 
@@ -530,6 +594,11 @@ describe("the config cache", () => {
     expect(Value.Check(StoredConfig, { ...stored, error: 5 })).toBe(false)
     expect(Value.Check(StoredConfig, { baseSha: BASE, config: FULL_CONFIG })).toBe(false)
   })
+
+  it("refuses a record cached before reviews.verify existed, so it reads as a miss and the file is read again", () => {
+    const stored = storedConfig(BASE, VALID)
+    expect(Value.Check(StoredConfig, { ...stored, config: { reviews: BEFORE_VERIFY_REVIEWS } })).toBe(false)
+  })
 })
 
 describe("requestChangesWorkflow", () => {
@@ -547,21 +616,69 @@ describe("requestChangesWorkflow", () => {
   })
 })
 
+describe("verifyModelFor", () => {
+  it("is off whatever the file says when the variable is empty or unset, the Worker's global switch", () => {
+    expect(verifyModelFor(LITERAL_DEFAULTS, "")).toBeUndefined()
+    expect(verifyModelFor(NAMES_A_VERIFY_MODEL, "")).toBeUndefined()
+    expect(verifyModelFor(LITERAL_DEFAULTS, undefined)).toBeUndefined()
+    expect(verifyModelFor(NAMES_A_VERIFY_MODEL, undefined)).toBeUndefined()
+  })
+
+  it("is the variable's model when the file names none", () => {
+    expect(verifyModelFor(LITERAL_DEFAULTS, "m")).toBe("m")
+  })
+
+  it("is the file's model over the variable's, once the variable has turned verify on", () => {
+    expect(verifyModelFor(NAMES_A_VERIFY_MODEL, "m")).toBe("k")
+  })
+
+  it("is off for a repository whose file sets reviews.verify to false, whichever model is named", () => {
+    expect(verifyModelFor(OPTS_OUT_OF_VERIFY, "m")).toBeUndefined()
+    expect(verifyModelFor({ ...OPTS_OUT_OF_VERIFY, model: { verify: "k" } }, "m")).toBeUndefined()
+  })
+})
+
 describe("runSettings", () => {
   it("carries the request-changes workflow a run starts with, the file's over the var", () => {
     const off = { ...parseConfig("reviews:\n  request_changes_workflow: false\n"), present: true }
-    expect(runSettings(off, "true")).toEqual({ requestChangesWorkflow: false })
-    expect(runSettings(VALID, "false")).toEqual({ requestChangesWorkflow: true })
-    expect(runSettings(MISSING, "true")).toEqual({ requestChangesWorkflow: true })
+    expect(runSettings(off, "true", "")).toEqual({ requestChangesWorkflow: false })
+    expect(runSettings(VALID, "false", "")).toEqual({ requestChangesWorkflow: true })
+    expect(runSettings(MISSING, "true", "")).toEqual({ requestChangesWorkflow: true })
   })
 
   it("carries the error of a file the run ignored, invalid or unreadable, with the var's workflow, since the defaults applied", () => {
-    expect(runSettings(INVALID, "true")).toEqual({
+    expect(runSettings(INVALID, "true", "")).toEqual({
       requestChangesWorkflow: true,
       configError: "/reviews/auto must be boolean",
     })
-    expect(runSettings(UNREADABLE, "false")).toEqual({
+    expect(runSettings(UNREADABLE, "false", "")).toEqual({
       requestChangesWorkflow: false,
+      configError: "Error: GitHub 502 : boom",
+    })
+  })
+
+  it("carries the verify model a run starts with, and has no verifyModel key when verify is off", () => {
+    expect(runSettings(MISSING, "true", "m")).toStrictEqual({ requestChangesWorkflow: true, verifyModel: "m" })
+    expect(runSettings(MISSING, "true", "")).toStrictEqual({ requestChangesWorkflow: true })
+    expect(runSettings(MISSING, "true", undefined)).toStrictEqual({ requestChangesWorkflow: true })
+  })
+
+  it("carries the file's verify model over the var's, and none for a file that turns verify off", () => {
+    const naming: ConfigRead = { config: NAMES_A_VERIFY_MODEL, error: undefined, present: true }
+    const optedOut: ConfigRead = { config: OPTS_OUT_OF_VERIFY, error: undefined, present: true }
+    expect(runSettings(naming, "false", "m")).toStrictEqual({ requestChangesWorkflow: false, verifyModel: "k" })
+    expect(runSettings(optedOut, "false", "m")).toStrictEqual({ requestChangesWorkflow: false })
+  })
+
+  it("carries the var's verify model beside the error of a file the run ignored, since the defaults applied", () => {
+    expect(runSettings(INVALID, "true", "m")).toStrictEqual({
+      requestChangesWorkflow: true,
+      verifyModel: "m",
+      configError: "/reviews/auto must be boolean",
+    })
+    expect(runSettings(UNREADABLE, "false", "m")).toStrictEqual({
+      requestChangesWorkflow: false,
+      verifyModel: "m",
       configError: "Error: GitHub 502 : boom",
     })
   })

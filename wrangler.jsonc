@@ -35,6 +35,11 @@
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",
+    // Workers AI model for the verify pass (#31), which re-checks each finding
+    // before it posts. Empty keeps verify off everywhere, whatever a
+    // repository's .andabot.yaml says, and stays empty until #31's measurement
+    // picks a default.
+    "VERIFY_MODEL": "",
   },
   // Secrets, set with `wrangler secret put <NAME>` or in .dev.vars locally:
   //   GITHUB_APP_ID          the App's numeric id

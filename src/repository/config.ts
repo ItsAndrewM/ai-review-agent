@@ -20,20 +20,23 @@ const Reviews = Type.Object(
     base_branches: Type.Array(Type.String()),
     ignore_title_keywords: Type.Array(Type.String()),
     request_changes_workflow: Type.Optional(Type.Boolean()),
+    verify: Type.Boolean(),
     path_filters: Type.Array(Type.String({ pattern: "^!" })),
     path_instructions: Type.Array(PathInstructionEntry),
   },
   { additionalProperties: false },
 )
 
-export const AndabotConfig = Type.Object({ reviews: Reviews })
+const Model = Type.Object({ verify: Type.Optional(Type.String({ minLength: 1 })) })
+
+export const AndabotConfig = Type.Object({ reviews: Reviews, model: Type.Optional(Model) })
 
 export type AndabotConfig = Static<typeof AndabotConfig>
 
 const AndabotConfigFile = Type.Object(
   {
     reviews: Type.Optional(Type.Partial(Reviews, { additionalProperties: false })),
-    model: Type.Optional(Type.Object({})),
+    model: Type.Optional(Model),
   },
   { additionalProperties: false },
 )
@@ -86,6 +89,7 @@ export interface ReviewRequest {
 export interface RunSettings {
   requestChangesWorkflow: boolean
   configError?: string
+  verifyModel?: string
 }
 
 type ReportUnreadable = (error: string) => void
@@ -98,6 +102,7 @@ export const DEFAULT_CONFIG: AndabotConfig = {
     drafts: false,
     base_branches: [],
     ignore_title_keywords: [],
+    verify: true,
     path_filters: [],
     path_instructions: [],
   },
@@ -123,9 +128,10 @@ const yamlProblem = (cause: unknown): string =>
 const schemaProblem = ([first]: readonly TLocalizedValidationError[]): string =>
   `${first?.instancePath || "/"} ${first?.message ?? "is invalid"}`
 
-const withDefaults = ({ reviews }: AndabotConfigFile): AndabotConfig => ({
-  reviews: { ...defaults().reviews, ...reviews },
-})
+const withDefaults = ({ reviews, model }: AndabotConfigFile): AndabotConfig => {
+  const config = { reviews: { ...defaults().reviews, ...reviews } }
+  return model?.verify === undefined ? config : { ...config, model: { verify: model.verify } }
+}
 
 export function parseConfig(text: string): ParsedConfig {
   let document: unknown
@@ -213,7 +219,22 @@ export function shouldReview(config: AndabotConfig, pr: PullRequestFacts, trigge
 export const requestChangesWorkflow = (override: boolean | undefined, variable: string | undefined): boolean =>
   override ?? variable === "true"
 
-export function runSettings({ config, error }: ConfigRead, variable: string | undefined): RunSettings {
-  const settings = { requestChangesWorkflow: requestChangesWorkflow(config.reviews.request_changes_workflow, variable) }
+export function verifyModelFor({ reviews, model }: AndabotConfig, variable: string | undefined): string | undefined {
+  if (variable === undefined || variable === "" || !reviews.verify) return undefined
+  return model?.verify ?? variable
+}
+
+const withVerifyModel = (settings: RunSettings, verifyModel: string | undefined): RunSettings =>
+  verifyModel === undefined ? settings : { ...settings, verifyModel }
+
+export function runSettings(
+  { config, error }: ConfigRead,
+  workflowVariable: string | undefined,
+  verifyVariable: string | undefined,
+): RunSettings {
+  const settings = withVerifyModel(
+    { requestChangesWorkflow: requestChangesWorkflow(config.reviews.request_changes_workflow, workflowVariable) },
+    verifyModelFor(config, verifyVariable),
+  )
   return error === undefined ? settings : { ...settings, configError: error }
 }

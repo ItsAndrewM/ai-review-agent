@@ -20,6 +20,7 @@ export const StoredPending = Type.Object({
   repoSkillsFingerprint: Type.Optional(Type.String()),
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
   configError: Type.Optional(Type.String()),
+  verifyModel: Type.Optional(Type.String()),
 })
 
 export type StoredPending = Static<typeof StoredPending>

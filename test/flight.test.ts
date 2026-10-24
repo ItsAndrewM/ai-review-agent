@@ -165,6 +165,13 @@ describe("migratePending", () => {
     expect(Value.Check(StoredPending, { ...pending, configError: 5 })).toBe(false)
   })
 
+  it("keeps the verify model the run resolved when it started, which the verify step reads back", () => {
+    const verified: PendingReview = { ...pending, verifyModel: "@cf/x/y" }
+    expect(Value.Check(StoredPending, verified)).toBe(true)
+    expect(migratePending(verified)).toEqual(verified)
+    expect(Value.Check(StoredPending, { ...pending, verifyModel: 5 })).toBe(false)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)
