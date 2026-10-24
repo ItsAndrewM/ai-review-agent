@@ -13,6 +13,7 @@ import { ownsOperation } from "../src/review/flight.ts"
 import { applyDeltaPolicy, type DeltaScope, type OpenThread, type ScopedReview } from "../src/review/incremental.ts"
 import { chooseReviewEvent, holdsApprovalBack } from "../src/review/render.ts"
 import {
+  answerAfter,
   applyVerdicts,
   attemptOf,
   backstopTimer,
@@ -1152,6 +1153,34 @@ describe("whileUnsettled", () => {
     await expect(failing).rejects.toThrow("model unreachable")
     controller.abort()
     expect(aborted).toEqual([])
+  })
+})
+
+describe("answerAfter", () => {
+  const settled = { operationId: "review:d-1:verify:a1b2c3d4:1", session: "3", status: "done" } as const
+
+  it("reads the verdicts submit_verdicts recorded while the prompt ran, once the prompt has settled", async () => {
+    const recorded = [verdict("F1", "blocking"), verdict("F2", "suggestion", { keep: false })]
+    let submitted: VerdictInput[] | undefined
+    const prompt = async () => {
+      await Promise.resolve()
+      submitted = recorded
+      return settled
+    }
+    expect(await answerAfter(prompt, () => submitted)).toEqual({ kind: "verdicts", verdicts: recorded })
+  })
+
+  it("falls back to the text answer when nothing was recorded by the time the prompt settled", async () => {
+    const text = JSON.stringify({ verdicts: [verdict("F1", "nitpick")] })
+    expect(
+      await answerAfter(
+        async () => ({ ...settled, text }),
+        () => undefined,
+      ),
+    ).toEqual({
+      kind: "verdicts",
+      verdicts: [verdict("F1", "nitpick")],
+    })
   })
 })
 

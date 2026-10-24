@@ -271,7 +271,7 @@ import {
 import { summarizeTranscript, transcriptFields } from "./review/transcript.ts"
 import { createVerifyExtension, verifyHostOf, VerifyPasses, withoutVerifyByDefault } from "./review/verify-tools.ts"
 import {
-  attemptOf,
+  answerAfter,
   attemptOrFailed,
   backstopReason,
   backstopTimer,
@@ -823,7 +823,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       tools: { extensions: [this.#verifyTools] },
       model: this.ai(attempts.run.model),
     })
-    return attemptOf(submitted(), await session.prompt(attempts.prompt, { operationId }))
+    return answerAfter(() => session.prompt(attempts.prompt, { operationId }), submitted)
   }
 
   private async verifyContexts({ pr, pending, candidates }: VerifyRun): Promise<FindingContext[]> {

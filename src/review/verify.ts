@@ -381,6 +381,14 @@ export function attemptOf(submitted: readonly VerdictInput[] | undefined, result
   return { kind: "verdicts", verdicts }
 }
 
+export async function answerAfter(
+  prompt: () => Promise<VerifyResult>,
+  submitted: () => readonly VerdictInput[] | undefined,
+): Promise<VerifyAttempt> {
+  const result = await prompt()
+  return attemptOf(submitted(), result)
+}
+
 function submittedAttempt(submitted: readonly VerdictInput[]): VerifyAttempt {
   if (submitted.length === 0) {
     return { kind: "failed", failure: "answer", reason: "submit_verdicts was called with no verdicts" }
