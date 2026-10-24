@@ -1,6 +1,6 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": { "types": ["node"] },
-  "include": ["*.config.ts", "test/lint"],
+  "include": ["*.config.ts", "test/lint", "tools/verify-replay/**/*.ts"],
   "exclude": []
 }
