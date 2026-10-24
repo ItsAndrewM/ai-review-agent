@@ -1,7 +1,9 @@
 import { Type, type Static } from "typebox"
+import { Value } from "typebox/value"
 import {
   countBySeverity,
   exceedsBasisCap,
+  jsonIn,
   Severity,
   type FindingInput,
   type Rejected,
@@ -9,6 +11,7 @@ import {
   type ValidatedReview,
 } from "./findings.ts"
 import type { ScopedReview } from "./incremental.ts"
+import { dataBlock, fenceFor, MATERIAL_NOTE, neutraliseClosingTag, numberedLine } from "./prompt.ts"
 import { holdsApprovalBack } from "./render.ts"
 
 export const VerdictInput = Type.Object({
@@ -29,6 +32,13 @@ export interface VerifyCandidate {
   id: string
   finding: FindingInput
   held: boolean
+}
+
+export interface FindingContext {
+  candidate: VerifyCandidate
+  window: string | undefined
+  patch: string | undefined
+  issue: string | undefined
 }
 
 export interface Judged {
@@ -156,4 +166,71 @@ function reportOf(decided: readonly Decided[], unknown: string[]): VerifyReport 
       })
   }
   return report
+}
+
+export const VERIFY_RADIUS = 40
+
+const VERIFY_REQUEST = `Judge these draft findings by the verify skill in your instructions, and submit your verdicts with submit_verdicts. ${MATERIAL_NOTE}`
+
+export function citedWindow(content: string, line: number, startLine: number | undefined, radius: number): string {
+  const first = Math.max(1, Math.min(startLine ?? line, line) - radius)
+  return content
+    .split("\n")
+    .slice(first - 1, line + radius)
+    .map((text, index) => numberedLine(first + index, text))
+    .join("\n")
+}
+
+export function verifyPrompt(contexts: readonly FindingContext[]): string {
+  const sections = contexts.map((context) => neutraliseClosingTag(candidateSection(context)))
+  return [VERIFY_REQUEST, dataBlock(sections)].join("\n\n")
+}
+
+function candidateSection({ candidate, window, patch, issue }: FindingContext): string {
+  const { id, finding } = candidate
+  const sections = [
+    `## ${id}\n${findingFields(finding)}`,
+    `basis:\n${finding.basis}`,
+    `body:\n${finding.body}`,
+    windowSection(finding.side, window),
+  ]
+  if (patch !== undefined) sections.push(`patch:\n${fenced(patch, "diff")}`)
+  if (finding.basis_kind === "spec" && issue !== undefined) sections.push(`linked issue:\n${issue}`)
+  return sections.join("\n\n")
+}
+
+function findingFields({ path, line, start_line, side, severity, basis_kind, title, quote }: FindingInput): string {
+  const fields = [`path: ${path}`, `line: ${line}`]
+  if (start_line !== undefined) fields.push(`start_line: ${start_line}`)
+  fields.push(
+    `side: ${side ?? "RIGHT"}`,
+    `severity: ${severity}`,
+    `basis_kind: ${basis_kind}`,
+    `title: ${title}`,
+    `quote: ${quote}`,
+  )
+  return fields.join("\n")
+}
+
+function windowSection(side: FindingInput["side"], window: string | undefined): string {
+  const heading = `window (${side === "LEFT" ? "base" : "head"}):`
+  return window === undefined ? `${heading} file unavailable` : `${heading}\n${fenced(window, "")}`
+}
+
+function fenced(text: string, language: string): string {
+  const fence = fenceFor(text)
+  return `${fence}${language}\n${text}\n${fence}`
+}
+
+export function parseVerdictsText(text: string): VerdictInput[] | undefined {
+  const json = jsonIn(text)
+  if (json === undefined) return undefined
+  let value: unknown
+  try {
+    value = JSON.parse(json)
+  } catch {
+    return undefined
+  }
+  if (!Value.Check(VerdictsSubmission, value)) return undefined
+  return value.verdicts.length === 0 ? undefined : value.verdicts
 }

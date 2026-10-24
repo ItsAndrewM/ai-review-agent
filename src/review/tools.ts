@@ -12,7 +12,7 @@ import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { systemPrompt } from "./prompt.ts"
+import { numberedLine, systemPrompt } from "./prompt.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -150,7 +150,7 @@ export async function readFileText(host: ReviewHost, args: { path: string; ref?:
   if (content === undefined) return `${path} does not exist at ${ref ?? "head"} (${sha.slice(0, 7)}).`
   const out = content
     .split("\n")
-    .map((line, i) => `${String(i + 1).padStart(5)} | ${line}`)
+    .map((line, i) => numberedLine(i + 1, line))
     .join("\n")
   return out.length > MAX_FILE_CHARS
     ? `${out.slice(0, MAX_FILE_CHARS)}\n... (truncated at ${MAX_FILE_CHARS} characters)`
