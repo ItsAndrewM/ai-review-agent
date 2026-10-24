@@ -115,6 +115,7 @@ describe("spendSince", () => {
 describe("neuronsSince", () => {
   const before = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.001 } }
   const glmAfter = { input: 21_304, output: 4_821, cacheRead: 40_050, cacheWrite: 0, usd: 0.0065 }
+  const unpriced = { input: 900, output: 120, cacheRead: 0, cacheWrite: 0, usd: 0 }
 
   it("turns the dollars a model grew by since the baseline into neurons", () => {
     expect(neuronsSince(before, { [GLM]: glmAfter })).toBeCloseTo(500, 6)
@@ -125,9 +126,17 @@ describe("neuronsSince", () => {
     expect(neuronsSince(before, { [GLM]: glmAfter, [KIMI]: kimiAfter })).toBeCloseTo(1_500, 6)
   })
 
-  it("is unknown when a model whose tokens grew has no price, rather than calling the spend small", () => {
-    const unpriced = { input: 900, output: 120, cacheRead: 0, cacheWrite: 0, usd: 0 }
-    expect(neuronsSince(before, { [GLM]: glmAfter, [KIMI]: unpriced })).toBeUndefined()
+  it("still counts a priced model's neurons when another model whose tokens grew has no price", () => {
+    expect(neuronsSince(before, { [GLM]: glmAfter, [KIMI]: unpriced })).toBeCloseTo(500, 6)
+  })
+
+  it("is unknown when every model whose tokens grew has no price, rather than calling the spend small", () => {
+    expect(neuronsSince(before, { ...before, [KIMI]: unpriced })).toBeUndefined()
+  })
+
+  it("doesn't count an unpriced model's earlier tokens as growth, so a priced model's spend still counts", () => {
+    const baseline = { ...before, [KIMI]: unpriced }
+    expect(neuronsSince(baseline, { ...baseline, [GLM]: glmAfter })).toBeCloseTo(500, 6)
   })
 
   it("is nothing when nothing grew", () => {
@@ -139,10 +148,10 @@ describe("neuronsSince", () => {
     expect(neuronsSince(before, { ...before, [KIMI]: idle })).toBe(0)
   })
 
-  it("keeps a model priced when its ledger has dollars, even if the review's share rounds to nothing", () => {
-    const summed = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.1 + 0.2 } }
+  it("is nothing, not unknown, when a priced model's tokens grew but its dollars didn't", () => {
+    const baseline = { [GLM]: { input: 100, output: 10, cacheRead: 50, cacheWrite: 0, usd: 0.3 } }
     const after = { [GLM]: { input: 100, output: 20, cacheRead: 50, cacheWrite: 0, usd: 0.3 } }
-    expect(neuronsSince(summed, after)).toBe(0)
+    expect(neuronsSince(baseline, after)).toBe(0)
   })
 })
 

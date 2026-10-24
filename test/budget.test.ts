@@ -22,13 +22,16 @@ describe("reviewBudgetOf", () => {
     expect(DEFAULT_REVIEW_NEURONS).toBe(10_000)
   })
 
-  it("reads the budget from the MAX_REVIEW_NEURONS var", () => {
+  it("parses the var's text as a whole number of neurons", () => {
     expect(reviewBudgetOf("5000")).toBe(5_000)
   })
 
-  it("falls back to the default when the var is unset or isn't a positive whole number", () => {
-    for (const value of ["", "0", "-1", "1.5", "abc", undefined]) expect(reviewBudgetOf(value)).toBe(10_000)
-  })
+  it.each([undefined, "", "0", "-1", "1.5", "abc"])(
+    "falls back to the default when the var is %j, which isn't a positive whole number",
+    (value) => {
+      expect(reviewBudgetOf(value)).toBe(10_000)
+    },
+  )
 })
 
 describe("budgetStanding", () => {

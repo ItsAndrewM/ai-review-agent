@@ -108,8 +108,9 @@ function modelSpend(model: string, before: UsageTally, after: UsageTally, calls:
 
 export function neuronsSince(before: UsageTotals, after: UsageTotals): number | undefined {
   const grown = spendSince(before, after, new Map<string, number>())
-  if (grown.some(isUnpriced)) return undefined
-  return neuronsOf(sum(grown, (model) => model.usd))
+  const priced = grown.filter((model) => !isUnpriced(model))
+  if (grown.length > 0 && priced.length === 0) return undefined
+  return neuronsOf(sum(priced, (model) => model.usd))
 }
 
 interface SpendTotals {

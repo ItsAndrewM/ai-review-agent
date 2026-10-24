@@ -1,8 +1,8 @@
+import { SUBMIT_REVIEW_TOOL } from "./tools.ts"
+
 export const DEFAULT_REVIEW_NEURONS = 10_000
 
 export const REQUESTS_PAST_BUDGET = 3
-
-const SUBMIT_TOOL = "submit_review"
 
 export type BudgetStanding =
   | { readonly kind: "within" }
@@ -19,8 +19,8 @@ export function budgetStanding(neurons: number | undefined, budget: number): Bud
 }
 
 export function budgetBlock(standing: BudgetStanding, toolName: string): string | undefined {
-  if (standing.kind === "within" || toolName === SUBMIT_TOOL) return undefined
-  return `Budget spent: this review has used ${spentCount(standing.neurons)} of its ${neuronCount(standing.budget)} neurons. Call ${SUBMIT_TOOL} now with the findings and walkthrough you have; a file you didn't get to still needs its walkthrough row, written from the diff.`
+  if (standing.kind === "within" || toolName === SUBMIT_REVIEW_TOOL) return undefined
+  return `Budget spent: this review has used ${spentCount(standing.neurons)} of its ${neuronCount(standing.budget)} neurons. Call ${SUBMIT_REVIEW_TOOL} now with the findings and walkthrough you have; a file you didn't get to still needs its walkthrough row, written from the diff.`
 }
 
 export function refusesRequest(standing: BudgetStanding, requestsPastBudget: number): boolean {
