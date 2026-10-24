@@ -265,6 +265,22 @@ describe("grep", () => {
     )
   })
 
+  it("shortens a long left-out path to its last 200 characters, so the note can't crowd out the matches", () => {
+    const leftOut = Array.from({ length: 10 }, (_, index): LeftOut => ({
+      path: `${"deep/".repeat(600)}${index}.js`,
+      reason: "too_large",
+    }))
+    const hits = Object.fromEntries(
+      Array.from({ length: 100 }, (_, index) => [`f${index}.ts`, `hit ${"y".repeat(90)}\n`]),
+    )
+    const answer = grepOnce(snapshotOf(hits, leftOut), { pattern: "hit" })
+    const note = answer.split("\n").at(-1) ?? ""
+    expect(note).toContain(`too_large: …${"deep/".repeat(40).slice(-195)}0.js, …`)
+    expect(note.length).toBeLessThan(2_200)
+    expect(answer.length).toBeLessThanOrEqual(MAX_GREP_CHARS)
+    expect(answer.split("\n").filter((line) => line.startsWith("f")).length).toBeGreaterThan(80)
+  })
+
   it("only lists left-out paths the path and glob select", () => {
     const files = snapshotOf({ "src/a.ts": "hit\n" }, [
       { path: "dist/app.js", reason: "too_large" },
@@ -330,17 +346,45 @@ describe("grep", () => {
     expect(answer).toContain("The snapshot is incomplete (")
   })
 
+  it("warns that $ can match where a long line was cut", () => {
+    const files = snapshotOf({ "min.js": `${"a".repeat(600)}\n` })
+    expect(grepOnce(files, { pattern: "a$" })).toBe(
+      [
+        `min.js:1: ${"a".repeat(300)}`,
+        "1 long line searched only in its first 500 characters, so `$` and `\\b` can match at the cut.",
+      ].join("\n"),
+    )
+  })
+
+  it("doesn't search the empty line after a file's final newline", () => {
+    expect(grepOnce(snapshotOf({ "a.ts": "a\nb\n" }), { pattern: "^$" })).toBe("No match for /^$/ in 1 file.")
+    expect(grepOnce(snapshotOf({ "a.ts": "a\r\n" }), { pattern: "^$" })).toBe("No match for /^$/ in 1 file.")
+    expect(grepOnce(snapshotOf({ "a.ts": "a\n\nb\n" }), { pattern: "^$" })).toBe("a.ts:2: ")
+    expect(grepOnce(snapshotOf({ "a.ts": "a\nb" }), { pattern: "^b$" })).toBe("a.ts:2: b")
+  })
+
+  it("counts an empty file as searched without finding a line in it", () => {
+    expect(grepOnce(snapshotOf({ "empty.ts": "", "a.ts": "a\n" }), { pattern: "^$" })).toBe(
+      "No match for /^$/ in 2 files.",
+    )
+  })
+
   it("finds a match within the first 500 characters of a very long line", () => {
     const files = snapshotOf({ "min.js": `foo${"x".repeat(50_000)}\n` })
     const answer = grepOnce(files, { pattern: "foo" })
     expect(answer).toContain("min.js:1: foo")
-    expect(answer).toContain("1 long line searched only in its first 500 characters.")
+    expect(answer).toContain(
+      "1 long line searched only in its first 500 characters, so `$` and `\\b` can match at the cut.",
+    )
   })
 
   it("does not find a match that starts after character 500 of a line and says one long line was cut", () => {
     const files = snapshotOf({ "min.js": `${"x".repeat(600)}foo\n` })
     expect(grepOnce(files, { pattern: "foo" })).toBe(
-      ["No match for /foo/ in 1 file.", "1 long line searched only in its first 500 characters."].join("\n"),
+      [
+        "No match for /foo/ in 1 file.",
+        "1 long line searched only in its first 500 characters, so `$` and `\\b` can match at the cut.",
+      ].join("\n"),
     )
   })
 
@@ -348,7 +392,10 @@ describe("grep", () => {
     const long = `${"x".repeat(501)}\n`
     const files = snapshotOf({ "a.js": long.repeat(2), "b.js": long, "c.js": "short\n" })
     expect(grepOnce(files, { pattern: "short" })).toBe(
-      ["c.js:1: short", "3 long lines searched only in their first 500 characters."].join("\n"),
+      [
+        "c.js:1: short",
+        "3 long lines searched only in their first 500 characters, so `$` and `\\b` can match at the cut.",
+      ].join("\n"),
     )
   })
 
@@ -380,7 +427,7 @@ describe("grep", () => {
   it("answers a backtracking-prone pattern over one very long line, searching only its first 500 characters", () => {
     const files = snapshotOf({ "min.js": `${"x".repeat(200_000)}\n` })
     expect(grepOnce(files, { pattern: String.raw`[\s\S]*foo` })).toBe(
-      "No match for /[\\s\\S]*foo/ in 1 file.\n1 long line searched only in its first 500 characters.",
+      "No match for /[\\s\\S]*foo/ in 1 file.\n1 long line searched only in its first 500 characters, so `$` and `\\b` can match at the cut.",
     )
   })
 
