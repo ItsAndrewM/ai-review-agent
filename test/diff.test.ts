@@ -7,9 +7,12 @@ import {
   isFiltered,
   isGenerated,
   markedLines,
+  MAX_PATCH_CHARS,
+  renderChanges,
   renderPatches,
   requiresWalkthrough,
   reviewableFiles,
+  truncateAtLine,
 } from "../src/github/diff.ts"
 
 const patch = [
@@ -101,6 +104,31 @@ describe("renderPatches", () => {
     ])
     expect(text).toContain("### pnpm-lock.yaml (added, +4000 -0)\n(patch omitted")
     expect(text).not.toContain("lockfileVersion")
+  })
+})
+
+describe("truncateAtLine", () => {
+  it("leaves text within the limit as it is", () => {
+    expect(truncateAtLine("one\ntwo", 7)).toBe("one\ntwo")
+  })
+
+  it("cuts at the last line break within the limit and says where it cut", () => {
+    expect(truncateAtLine("one\ntwo\nthree", 9)).toBe("one\ntwo\n... (patch truncated at 9 characters)")
+  })
+
+  it("keeps only the note when the first line is longer than the limit", () => {
+    expect(truncateAtLine("a".repeat(30), 10)).toBe("\n... (patch truncated at 10 characters)")
+  })
+})
+
+describe("MAX_PATCH_CHARS", () => {
+  const long = ["@@ -0,0 +1,6000 @@", ...Array.from({ length: 6000 }, (_, index) => `+line ${index}`)].join("\n")
+  const files = [{ filename: "n.ts", status: "added", additions: 6000, deletions: 0, patch: long }]
+
+  it("is the cut a file's patch gets in renderPatches and renderChanges unless told another", () => {
+    expect(MAX_PATCH_CHARS).toBe(40_000)
+    expect(renderPatches(files)).toContain("patch truncated at 40000 characters")
+    expect(renderChanges(files)).toContain("patch truncated at 40000 characters")
   })
 })
 

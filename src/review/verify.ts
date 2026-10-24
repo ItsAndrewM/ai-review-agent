@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
+import { MAX_PATCH_CHARS, truncateAtLine } from "../github/diff.ts"
 import {
   countBySeverity,
   exceedsBasisCap,
@@ -172,6 +173,9 @@ export const VERIFY_RADIUS = 40
 
 const VERIFY_REQUEST = `Judge these draft findings by the verify skill in your instructions, and submit your verdicts with submit_verdicts. ${MATERIAL_NOTE}`
 
+const HELD_NOTE =
+  "held back: it couldn't be placed inline because its anchor didn't match the diff, so its claim must be judged on the code, not on whether the quote appears."
+
 export function citedWindow(content: string, line: number, startLine: number | undefined, radius: number): string {
   const first = Math.max(1, Math.min(startLine ?? line, line) - radius)
   return content
@@ -182,24 +186,26 @@ export function citedWindow(content: string, line: number, startLine: number | u
 }
 
 export function verifyPrompt(contexts: readonly FindingContext[]): string {
-  const sections = contexts.map((context) => neutraliseClosingTag(candidateSection(context)))
-  return [VERIFY_REQUEST, dataBlock(sections)].join("\n\n")
+  const sections = [...contexts.map(candidateSection), ...patchesSection(contexts)]
+  return [VERIFY_REQUEST, dataBlock(sections.map(neutraliseClosingTag))].join("\n\n")
 }
 
-function candidateSection({ candidate, window, patch, issue }: FindingContext): string {
-  const { id, finding } = candidate
+function candidateSection({ candidate, window, issue }: FindingContext): string {
+  const { id, finding, held } = candidate
   const sections = [
-    `## ${id}\n${findingFields(finding)}`,
+    `## ${id}\n${findingFields(finding, held)}`,
     `basis:\n${finding.basis}`,
     `body:\n${finding.body}`,
     windowSection(finding.side, window),
   ]
-  if (patch !== undefined) sections.push(`patch:\n${fenced(patch, "diff")}`)
   if (finding.basis_kind === "spec" && issue !== undefined) sections.push(`linked issue:\n${issue}`)
   return sections.join("\n\n")
 }
 
-function findingFields({ path, line, start_line, side, severity, basis_kind, title, quote }: FindingInput): string {
+function findingFields(
+  { path, line, start_line, side, severity, basis_kind, title, quote }: FindingInput,
+  held: boolean,
+): string {
   const fields = [`path: ${path}`, `line: ${line}`]
   if (start_line !== undefined) fields.push(`start_line: ${start_line}`)
   fields.push(
@@ -209,7 +215,26 @@ function findingFields({ path, line, start_line, side, severity, basis_kind, tit
     `title: ${title}`,
     `quote: ${quote}`,
   )
+  if (held) fields.push(HELD_NOTE)
   return fields.join("\n")
+}
+
+function patchesSection(contexts: readonly FindingContext[]): string[] {
+  const patches = patchesByPath(contexts)
+  if (patches.size === 0) return []
+  const files = [...patches].map(
+    ([path, patch]) => `### ${path}\n${fenced(truncateAtLine(patch, MAX_PATCH_CHARS), "diff")}`,
+  )
+  return [["## Patches", ...files].join("\n\n")]
+}
+
+function patchesByPath(contexts: readonly FindingContext[]): Map<string, string> {
+  const patches = new Map<string, string>()
+  for (const { candidate, patch } of contexts) {
+    const { path } = candidate.finding
+    if (patch !== undefined && !patches.has(path)) patches.set(path, patch)
+  }
+  return patches
 }
 
 function windowSection(side: FindingInput["side"], window: string | undefined): string {

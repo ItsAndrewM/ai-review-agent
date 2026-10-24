@@ -1,5 +1,6 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
+import { MAX_PATCH_CHARS } from "../src/github/diff.ts"
 import {
   MAX_FINDINGS,
   type FindingInput,
@@ -20,6 +21,7 @@ import {
   VERIFY_RADIUS,
   verifyPrompt,
   type FindingContext,
+  type VerifyCandidate,
   type VerifyReport,
 } from "../src/review/verify.ts"
 
@@ -578,15 +580,17 @@ describe("verifyPrompt", () => {
     quote: "return total / items.length",
   } satisfies Partial<FindingInput>
 
+  const PATCH = "@@ -1,3 +1,3 @@\n two\n-old three\n+three"
+
   function contextOf(
     overrides: Partial<FindingInput> = {},
     extras: Partial<Omit<FindingContext, "candidate">> = {},
-    id = "F1",
+    candidate: Partial<Omit<VerifyCandidate, "finding">> = {},
   ): FindingContext {
     return {
-      candidate: { id, finding: finding(overrides), held: false },
+      candidate: { id: "F1", finding: finding(overrides), held: false, ...candidate },
       window: "    3 | three",
-      patch: "@@ -1,3 +1,3 @@\n two\n-old three\n+three",
+      patch: PATCH,
       issue: undefined,
       ...extras,
     }
@@ -603,7 +607,7 @@ describe("verifyPrompt", () => {
   })
 
   it("lists each candidate under its id with its path, line, side, severity, basis kind, basis, title, body and quote", () => {
-    const text = verifyPrompt([contextOf(cart), contextOf({ path: "src/user.ts", line: 7 }, {}, "F2")])
+    const text = verifyPrompt([contextOf(cart), contextOf({ path: "src/user.ts", line: 7 }, {}, { id: "F2" })])
     for (const field of [
       "## F1\n",
       "path: src/cart.ts",
@@ -631,18 +635,19 @@ describe("verifyPrompt", () => {
     expect(verifyPrompt([contextOf()])).toContain("side: RIGHT")
   })
 
-  it("shows the window and the patch of the candidate, fenced", () => {
+  it("shows the candidate's window, then its file's patch under Patches, both fenced", () => {
     const window = "    2 | two\n    3 | three"
     const patch = "@@ -2,2 +2,2 @@\n two\n-old three\n+three"
     const text = verifyPrompt([contextOf({}, { window, patch })])
     expect(text).toContain(`window (head):\n\`\`\`\n${window}\n\`\`\``)
-    expect(text).toContain(`patch:\n\`\`\`diff\n${patch}\n\`\`\``)
+    expect(text).toContain(`## Patches\n\n### a.ts\n\`\`\`diff\n${patch}\n\`\`\``)
+    expect(text.indexOf("## Patches")).toBeGreaterThan(text.indexOf("## F1"))
     expect(text).not.toContain("file unavailable")
   })
 
   it("fences a window or a patch that holds a code fence with a longer fence", () => {
     const patch = "@@ -1,2 +1,2 @@\n ```ts\n-old\n+new"
-    expect(verifyPrompt([contextOf({}, { patch })])).toContain(`patch:\n\`\`\`\`diff\n${patch}\n\`\`\`\``)
+    expect(verifyPrompt([contextOf({}, { patch })])).toContain(`### a.ts\n\`\`\`\`diff\n${patch}\n\`\`\`\``)
   })
 
   it.each([
@@ -660,12 +665,13 @@ describe("verifyPrompt", () => {
     const text = verifyPrompt([contextOf(cart, { window: undefined })])
     expect(text).toContain("window (base): file unavailable")
     expect(text).toContain("title: Division by zero on an empty cart")
-    expect(text).toContain("patch:\n```diff\n@@ -1,3 +1,3 @@")
+    expect(text).toContain(`### src/cart.ts\n\`\`\`diff\n${PATCH}\n\`\`\``)
   })
 
-  it("leaves the patch out when the file has none", () => {
+  it("leaves Patches out when no candidate's file has a patch", () => {
     const text = verifyPrompt([contextOf({}, { patch: undefined })])
-    expect(text).not.toContain("patch:")
+    expect(text).not.toContain("Patches")
+    expect(text).not.toContain("```diff")
     expect(text).toContain("window (head):")
   })
 
@@ -702,12 +708,92 @@ describe("verifyPrompt", () => {
       contextOf(
         { path: "src/big.ts", line: index + 1 },
         { window: citedWindow(HUNDRED_LINES, index + 1, undefined, VERIFY_RADIUS) },
-        id,
+        { id },
       ),
     )
     const text = verifyPrompt(contexts)
     expect(text.match(/^## F\d+$/gm)).toEqual(ids.map((id) => `## ${id}`))
     expect(text.match(/<pull_request_data>/g)).toHaveLength(1)
+  })
+
+  const longPatch = ["@@ -0,0 +1,6000 @@", ...Array.from({ length: 6000 }, (_, index) => `+line ${index}`)].join("\n")
+
+  it("shows a file's patch once however many candidates cite it, each still naming its file and showing its window", () => {
+    const contexts = Array.from({ length: MAX_FINDINGS }, (_, index) =>
+      contextOf({ path: "src/big.ts", line: index + 1 }, {}, { id: `F${index + 1}` }),
+    )
+    const text = verifyPrompt(contexts)
+    expect(text.split(PATCH)).toHaveLength(2)
+    expect(text.match(/^path: src\/big\.ts$/gm)).toHaveLength(MAX_FINDINGS)
+    expect(text.match(/^window \(head\):$/gm)).toHaveLength(MAX_FINDINGS)
+  })
+
+  it("gives each file its own patch, in the order the files first appear", () => {
+    const patchOfB = "@@ -1 +1 @@\n-old b\n+new b"
+    const patchOfA = "@@ -1 +1 @@\n-old a\n+new a"
+    const text = verifyPrompt([
+      contextOf({ path: "src/b.ts" }, { patch: patchOfB }, { id: "F1" }),
+      contextOf({ path: "src/a.ts" }, { patch: patchOfA }, { id: "F2" }),
+      contextOf({ path: "src/b.ts", line: 9 }, { patch: patchOfB }, { id: "F3" }),
+    ])
+    expect(text.match(/^### .+$/gm)).toEqual(["### src/b.ts", "### src/a.ts"])
+    expect(text).toContain(
+      `### src/b.ts\n\`\`\`diff\n${patchOfB}\n\`\`\`\n\n### src/a.ts\n\`\`\`diff\n${patchOfA}\n\`\`\``,
+    )
+    expect(text.split(patchOfB)).toHaveLength(2)
+    expect(text.split(patchOfA)).toHaveLength(2)
+  })
+
+  it("takes a file's patch from the first of its candidates that has one", () => {
+    const later = "@@ -9 +9 @@\n-old\n+new"
+    const text = verifyPrompt([
+      contextOf({ path: "src/b.ts" }, { patch: undefined }, { id: "F1" }),
+      contextOf({ path: "src/b.ts", line: 9 }, { patch: PATCH }, { id: "F2" }),
+      contextOf({ path: "src/b.ts", line: 12 }, { patch: later }, { id: "F3" }),
+    ])
+    expect(text).toContain(`### src/b.ts\n\`\`\`diff\n${PATCH}\n\`\`\``)
+    expect(text).not.toContain(later)
+  })
+
+  it("cuts a patch over the review's per-file limit at a line, with the review's truncation note, and shows it once", () => {
+    const note = `... (patch truncated at ${MAX_PATCH_CHARS} characters)`
+    const contexts = ["F1", "F2", "F3"].map((id) => contextOf({ path: "src/big.ts" }, { patch: longPatch }, { id }))
+    const text = verifyPrompt(contexts)
+    const [, afterFence = ""] = text.split("### src/big.ts\n```diff\n")
+    const shown = afterFence.split("\n```")[0] ?? ""
+    const shownLines = shown.split("\n")
+    expect(longPatch.length).toBeGreaterThan(MAX_PATCH_CHARS)
+    expect(text).not.toContain(longPatch)
+    expect(shownLines.at(-1)).toBe(note)
+    expect(longPatch.split("\n")).toContain(shownLines.at(-2))
+    expect(shown.length - note.length).toBeLessThanOrEqual(MAX_PATCH_CHARS)
+    expect(text.split("+line 10\n")).toHaveLength(2)
+    expect(text.split(note)).toHaveLength(2)
+  })
+
+  it("leaves a patch within the limit whole", () => {
+    const text = verifyPrompt([contextOf({}, { patch: PATCH })])
+    expect(text).toContain(`\`\`\`diff\n${PATCH}\n\`\`\``)
+    expect(text).not.toContain("patch truncated")
+  })
+
+  const HELD_NOTE =
+    "held back: it couldn't be placed inline because its anchor didn't match the diff, so its claim must be judged on the code, not on whether the quote appears."
+
+  it("tells the model a held-back candidate couldn't be placed inline, so its claim is judged on the code and not on its quote", () => {
+    const text = verifyPrompt([
+      contextOf({ line: 1 }, {}, { id: "F1" }),
+      contextOf({ line: 40 }, {}, { id: "F2", held: true }),
+    ])
+    expect(text.match(/held back/g)).toHaveLength(1)
+    expect(text.slice(0, text.indexOf("## F2"))).not.toContain("held back")
+    expect(text.slice(text.indexOf("## F2"), text.indexOf("basis:", text.indexOf("## F2")))).toContain(HELD_NOTE)
+  })
+
+  it("carries no such line for a candidate that was posted inline", () => {
+    const text = verifyPrompt([contextOf(), contextOf({ line: 4 }, {}, { id: "F2" })])
+    expect(text).not.toContain("held back")
+    expect(text).not.toContain("couldn't be placed inline")
   })
 })
 
