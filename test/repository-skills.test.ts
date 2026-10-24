@@ -795,13 +795,15 @@ describe("the catalog", () => {
       },
     })
 
+  const sdkResource = { isError: false, content: [{ type: "text" as const, text: "Read." }] }
+
   const readSkillResource = () =>
     defineTool({
       name: "read_skill_resource",
       description: "Read a resource of a skill.",
       parameters: Type.Object({ name: Type.String(), path: Type.String() }),
       async execute() {
-        return { output: [{ type: "text" as const, text: "Read." }] }
+        return sdkResource
       },
     })
 
@@ -985,7 +987,7 @@ describe("the catalog", () => {
         name: "lint",
         path: "rules.md",
       })
-      expect(read.output).toEqual([{ type: "text", text: "Read." }])
+      expect(read.output).toEqual(sdkResource.content)
       expect(names).toEqual(["lint"])
     })
   })
