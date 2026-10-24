@@ -39,6 +39,7 @@ export interface Judged {
 export interface Changed extends Judged {
   from: FindingInput["severity"]
   to: FindingInput["severity"]
+  revised: FindingInput
 }
 
 export interface VerifyReport {
@@ -146,7 +147,13 @@ function reportOf(decided: readonly Decided[], unknown: string[]): VerifyReport 
     else if (decision.kind === "capped") report.capped.push({ finding, reason: decision.reason })
     else if (decision.kind === "not_judged") report.notJudged.push(finding)
     else if (decision.kind === "changed")
-      report.changed.push({ finding, reason: decision.reason, from: finding.severity, to: decision.revised.severity })
+      report.changed.push({
+        finding,
+        reason: decision.reason,
+        from: finding.severity,
+        to: decision.revised.severity,
+        revised: decision.revised,
+      })
   }
   return report
 }

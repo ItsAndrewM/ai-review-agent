@@ -198,7 +198,15 @@ describe("applyVerdicts", () => {
     expect(result.validated.accepted).toEqual([{ ...advice, severity: "blocking" }])
     expect(result.report).toEqual({
       ...NOTHING,
-      changed: [{ finding: advice, reason: "it loses data", from: "suggestion", to: "blocking" }],
+      changed: [
+        {
+          finding: advice,
+          reason: "it loses data",
+          from: "suggestion",
+          to: "blocking",
+          revised: { ...advice, severity: "blocking" },
+        },
+      ],
     })
     expect(advice.severity).toBe("suggestion")
   })
@@ -219,7 +227,15 @@ describe("applyVerdicts", () => {
     expect(result.validated.accepted).toEqual([{ ...advice, severity: "nitpick" }])
     expect(result.report).toEqual({
       ...NOTHING,
-      changed: [{ finding: advice, reason: "style only", from: "suggestion", to: "nitpick" }],
+      changed: [
+        {
+          finding: advice,
+          reason: "style only",
+          from: "suggestion",
+          to: "nitpick",
+          revised: { ...advice, severity: "nitpick" },
+        },
+      ],
     })
   })
 
@@ -236,8 +252,17 @@ describe("applyVerdicts", () => {
     expect(result.validated.accepted).toEqual([{ ...blocker, severity: "suggestion" }])
     expect(result.report).toEqual({
       ...NOTHING,
-      changed: [{ finding: blocker, reason: "the caller awaits it", from: "blocking", to: "suggestion" }],
+      changed: [
+        {
+          finding: blocker,
+          reason: "the caller awaits it",
+          from: "blocking",
+          to: "suggestion",
+          revised: { ...blocker, severity: "suggestion" },
+        },
+      ],
     })
+    expect(result.report.changed[0]?.revised).toBe(result.validated.accepted[0])
     expect(blocker.severity).toBe("blocking")
   })
 
@@ -249,8 +274,17 @@ describe("applyVerdicts", () => {
     expect(holdsApprovalBack(anchor)).toBe(true)
     expect(result.report).toEqual({
       ...NOTHING,
-      changed: [{ finding: anchor.finding, reason: "harmless", from: "blocking", to: "suggestion" }],
+      changed: [
+        {
+          finding: anchor.finding,
+          reason: "harmless",
+          from: "blocking",
+          to: "suggestion",
+          revised: { ...anchor.finding, severity: "suggestion" },
+        },
+      ],
     })
+    expect(result.report.changed[0]?.revised).toBe(result.validated.rejected[0]?.finding)
   })
 
   it("leaves a finding without a verdict as drafted, and lists it as not judged", () => {
@@ -356,7 +390,7 @@ describe("applyVerdicts with the delta rules", () => {
     expect(applied.report).toEqual({ ...NOTHING, dropped: [{ finding: onPush, reason: "why F1" }] })
   })
 
-  it("rejects a blocking finding off the push's lines once verify demotes it", () => {
+  it("rejects a blocking finding off the push's lines once verify demotes it, and the report names the rejected finding", () => {
     const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
     const scope: DeltaScope = { mode: "incremental", covered, open: [] }
     const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
@@ -372,9 +406,12 @@ describe("applyVerdicts with the delta rules", () => {
         unfounded: false,
       },
     ])
+    expect(applied.report.changed).toHaveLength(1)
+    expect(applied.report.changed[0]?.finding).toBe(elsewhere)
+    expect(applied.report.changed[0]?.revised).toBe(after.rejected[0]?.finding)
   })
 
-  it("sets a blocking finding on a non-blocking thread's line aside as a duplicate once verify demotes it", () => {
+  it("sets a blocking finding on a non-blocking thread's line aside once verify demotes it, and the report names the duplicate", () => {
     const scope: DeltaScope = { mode: "full", covered: new Map(), open: [thread("T1", { line: 3 })] }
     const onThread = finding({ severity: "blocking", line: 3 })
     const review = validated([onThread])
@@ -385,6 +422,42 @@ describe("applyVerdicts with the delta rules", () => {
     expect(after.duplicates).toEqual([
       { finding: { ...onThread, severity: "suggestion" }, reason: "duplicates open thread T1", unfounded: false },
     ])
+    expect(applied.report.changed).toHaveLength(1)
+    expect(applied.report.changed[0]?.finding).toBe(onThread)
+    expect(applied.report.changed[0]?.revised).toBe(after.duplicates[0]?.finding)
+  })
+
+  const onChangedLine: DeltaScope = {
+    mode: "incremental",
+    covered: new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]]),
+    open: [],
+  }
+
+  it.each([
+    ["a fresh scope", FRESH],
+    ["an incremental scope, on a line the push changed", onChangedLine],
+  ])(
+    "accepts a demoted finding the delta rules still let through in %s, and the report names the accepted finding",
+    (_, scope) => {
+      const blocker = finding({ severity: "blocking", line: 3 })
+      const applied = judge(validated([blocker]), [verdict("F1", "suggestion")], scope)
+      const after = applyDeltaPolicy(applied.validated, scope)
+      expect(after.accepted).toEqual([{ ...blocker, severity: "suggestion" }])
+      expect(after.rejected).toEqual([])
+      expect(after.duplicates).toEqual([])
+      expect(applied.report.changed).toHaveLength(1)
+      expect(applied.report.changed[0]?.revised).toBe(after.accepted[0])
+    },
+  )
+
+  it("leaves a demoted held finding in the rejected list, and the report names that finding", () => {
+    const anchor = rejection({ severity: "blocking", line: 40 })
+    const applied = judge(validated([], [anchor]), [verdict("F1", "suggestion")], onChangedLine)
+    const after = applyDeltaPolicy(applied.validated, onChangedLine)
+    expect(after.rejected.map(holdsApprovalBack)).toEqual([false])
+    expect(after.accepted).toEqual([])
+    expect(applied.report.changed).toHaveLength(1)
+    expect(applied.report.changed[0]?.revised).toBe(after.rejected[0]?.finding)
   })
 })
 
