@@ -106,6 +106,13 @@ function modelSpend(model: string, before: UsageTally, after: UsageTally, calls:
   }
 }
 
+export function neuronsSince(before: UsageTotals, after: UsageTotals): number | undefined {
+  const grown = spendSince(before, after, new Map<string, number>())
+  const priced = grown.filter((model) => !isUnpriced(model))
+  if (grown.length > 0 && priced.length === 0) return undefined
+  return neuronsOf(sum(priced, (model) => model.usd))
+}
+
 interface SpendTotals {
   calls: number
   inputTokens: number
@@ -170,7 +177,8 @@ function neuronsOf(usd: number): number {
 
 function neuronText(neurons: number): string {
   const rounded = Math.round(neurons)
-  return rounded === 0 ? "< 1 neuron" : `≈ ${rounded.toLocaleString("en-US")} neurons`
+  if (rounded === 0) return "< 1 neuron"
+  return `≈ ${rounded.toLocaleString("en-US")} ${rounded === 1 ? "neuron" : "neurons"}`
 }
 
 function dollarText(usd: number): string {

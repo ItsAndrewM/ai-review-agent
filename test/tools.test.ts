@@ -1,9 +1,20 @@
+import { fauxProvider, normalizeContext, type Message } from "@earendil-works/pi-ai"
+import {
+  GenerationTask,
+  ROOT_CONVERSATION_ID,
+  ToolTask,
+  type ConversationId,
+  type Extension,
+} from "@earendil-works/pi-durable"
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
+import { withBudgetRefusal } from "../src/models.ts"
 import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
 import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
+import { BUDGET_REFUSAL, budgetBlock } from "../src/review/budget.ts"
+import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
 import {
   changedFilesText,
   createReviewExtension,
@@ -12,6 +23,7 @@ import {
   readIssue,
   submitResult,
   treeText,
+  type RequestBudget,
   type ReviewHost,
   type SearchAccess,
 } from "../src/review/tools.ts"
@@ -60,6 +72,8 @@ const host = {
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
+  budgetBlockFor: async (): Promise<string | undefined> => undefined,
+  requestBudget: async (): Promise<RequestBudget> => "allow",
 } satisfies ReviewHost
 
 const headSha = pr.head.sha
@@ -177,6 +191,115 @@ describe("createReviewExtension", () => {
     const glob = JSON.stringify(grepTool?.parameters)
     expect(glob).toContain("repository root")
     expect(glob).toContain("*.ts")
+  })
+})
+
+interface HooksCalledWithoutHarness {
+  beforeTool?(call: { name: string }, api: { conversationId: ConversationId }): Promise<{ block: string } | undefined>
+  beforeRequest?(
+    request: { messages: readonly Message[] },
+    api: { conversationId: ConversationId },
+  ): Promise<{ messages: readonly Message[] } | undefined>
+}
+
+function hooksOf(extension: Extension, task: string): HooksCalledWithoutHarness {
+  const registration = extension.hooks?.find((candidate) => candidate.task === task)
+  if (registration === undefined) throw new Error(`the extension should hook ${task}`)
+  return registration.handlers
+}
+
+describe("the budget hooks", () => {
+  const toolTask = ToolTask.definition.name
+  const generationTask = GenerationTask.definition.name
+  const transcript: Message[] = [{ role: "user", content: "Review this pull request.", timestamp: 1 }]
+  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 }
+
+  it("hooks the tool task's beforeTool and the generation task's beforeRequest", () => {
+    const extension = createReviewExtension(host)
+    expect(extension.hooks?.map((registration) => registration.task)).toEqual([toolTask, generationTask])
+    expect(hooksOf(extension, toolTask).beforeTool).toBeDefined()
+    expect(hooksOf(extension, generationTask).beforeRequest).toBeDefined()
+  })
+
+  it("blocks a tool call with the message the host gives for that tool and conversation", async () => {
+    const asked: { tool: string; conversation: ConversationId }[] = []
+    const spent = {
+      ...host,
+      budgetBlockFor: async (tool: string, conversation: ConversationId) => {
+        asked.push({ tool, conversation })
+        return "Budget spent."
+      },
+    }
+    const { beforeTool } = hooksOf(createReviewExtension(spent), toolTask)
+    expect(await beforeTool?.({ name: "grep" }, { conversationId: ROOT_CONVERSATION_ID })).toEqual({
+      block: "Budget spent.",
+    })
+    expect(asked).toEqual([{ tool: "grep", conversation: ROOT_CONVERSATION_ID }])
+  })
+
+  it("registers the review tool under the one name the budget lets through, so it blocks every other tool", () => {
+    const registered = createReviewExtension(host).tools?.map((tool) => tool.name) ?? []
+    const spent = { kind: "spent", neurons: 20, budget: 10 } as const
+    expect(registered.filter((name) => budgetBlock(spent, name) === undefined)).toEqual([SUBMIT_REVIEW_TOOL])
+  })
+
+  it("leaves a tool call alone when the host has no message for it", async () => {
+    const { beforeTool } = hooksOf(createReviewExtension(host), toolTask)
+    expect(await beforeTool?.({ name: "submit_review" }, { conversationId: ROOT_CONVERSATION_ID })).toBeUndefined()
+  })
+
+  it("ends the transcript's request with the marker when the host refuses the request, asking for its conversation", async () => {
+    const asked: ConversationId[] = []
+    const refusing = {
+      ...host,
+      requestBudget: async (conversation: ConversationId): Promise<RequestBudget> => {
+        asked.push(conversation)
+        return "refuse"
+      },
+    }
+    const { beforeRequest } = hooksOf(createReviewExtension(refusing), generationTask)
+    expect(await beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })).toEqual({
+      messages: [...transcript, marker],
+    })
+    expect(asked).toEqual([ROOT_CONVERSATION_ID])
+  })
+
+  it("leaves the request's messages alone when the host allows it", async () => {
+    const { beforeRequest } = hooksOf(createReviewExtension(host), generationTask)
+    expect(await beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })).toBeUndefined()
+  })
+
+  it("lets a failure of the host's budget read reach Pi Durable rather than hiding it", async () => {
+    const failing = {
+      ...host,
+      budgetBlockFor: async (): Promise<string | undefined> => {
+        throw new Error("storage closed")
+      },
+      requestBudget: async (): Promise<RequestBudget> => {
+        throw new Error("storage closed")
+      },
+    }
+    const extension = createReviewExtension(failing)
+    const { beforeTool } = hooksOf(extension, toolTask)
+    const { beforeRequest } = hooksOf(extension, generationTask)
+    await expect(beforeTool?.({ name: "grep" }, { conversationId: ROOT_CONVERSATION_ID })).rejects.toThrow(
+      "storage closed",
+    )
+    await expect(beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })).rejects.toThrow(
+      "storage closed",
+    )
+  })
+
+  it("marks a request in the way the provider wrapper refuses, so the model is never called", async () => {
+    const refusing = { ...host, requestBudget: async (): Promise<RequestBudget> => "refuse" }
+    const { beforeRequest } = hooksOf(createReviewExtension(refusing), generationTask)
+    const marked = await beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })
+    const faux = fauxProvider()
+    const answer = await withBudgetRefusal(faux.provider)
+      .streamSimple(faux.getModel(), normalizeContext({ messages: [...(marked?.messages ?? [])] }))
+      .result()
+    expect(answer).toMatchObject({ stopReason: "error", errorMessage: BUDGET_REFUSAL })
+    expect(faux.state.callCount).toBe(0)
   })
 })
 

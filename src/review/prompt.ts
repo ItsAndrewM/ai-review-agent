@@ -31,6 +31,8 @@ const ZERO_WIDTH_SPACE = String.fromCodePoint(0x200b)
 const INERT_CLOSING_TAG = `</pull_request_data${ZERO_WIDTH_SPACE}>`
 const CUT_NOTE = "(cut; get_issue has the full body)"
 export const ACTIVATE_SKILL_TOOL = "activate_skill"
+export const SUBMIT_REVIEW_TOOL = "submit_review"
+export const BUDGET_REFUSAL_MARKER = "andabot:review-budget-refused"
 const CATALOG_TOOLS_NOTE = `${ACTIVATE_SKILL_TOOL} opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files.`
 
 export function systemPrompt(botLogin: string, offered: readonly string[]): string {
