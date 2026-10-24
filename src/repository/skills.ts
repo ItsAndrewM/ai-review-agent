@@ -2,7 +2,7 @@ import type { Extension, Registry, ToolExecutionResult, ToolRegistration } from 
 import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
-import type { TreeEntry } from "../github/client.ts"
+import { isSymlink, type TreeEntry } from "../github/client.ts"
 import { BUNDLED_SKILL_NAMES } from "../review/bundled-skills.ts"
 import { ACTIVATE_SKILL_TOOL } from "../review/prompt.ts"
 import { describedSkillEntry, manifestSource, sha256Hex, type SkillFile } from "../review/skills.ts"
@@ -19,7 +19,7 @@ export interface SkillAt {
   readonly path: string
 }
 
-export type SkillCap = "file" | "base" | "description" | "listing"
+export type SkillCap = "file" | "base" | "description" | "listing" | "symlink"
 
 export interface CappedSkill extends SkillAt {
   readonly cap: SkillCap
@@ -80,8 +80,10 @@ type CachedFiles = Readonly<Record<string, string>>
 interface SkillPlan {
   readonly skills: RepositorySkillFiles[]
   readonly oversized: ReadonlySet<string>
+  readonly symlinked: ReadonlySet<string>
   readonly loadable: ReadonlySet<string>
   readonly overFileCap: ReadonlyMap<string, number>
+  readonly symlinkedResources: ReadonlyMap<string, number>
 }
 
 interface SkillSurvey {
@@ -153,8 +155,12 @@ const skillNameAt = (root: string, path: string): string[] => {
   return match?.[1] === undefined ? [] : [match[1]]
 }
 
+const isServableResource = (entry: TreeEntry): boolean => !isSymlink(entry) && sizeOf(entry) <= MAX_SKILL_FILE_BYTES
+
+const isOversizedResource = (entry: TreeEntry): boolean => !isSymlink(entry) && sizeOf(entry) > MAX_SKILL_FILE_BYTES
+
 const isFileOf = (dir: string, entry: TreeEntry): boolean =>
-  entry.path.startsWith(`${dir}/`) && (entry.path === `${dir}/${SKILL_FILE}` || sizeOf(entry) <= MAX_SKILL_FILE_BYTES)
+  entry.path.startsWith(`${dir}/`) && (entry.path === `${dir}/${SKILL_FILE}` || isServableResource(entry))
 
 const skillsUnder = (root: string, blobs: readonly TreeEntry[]): RepositorySkillFiles[] =>
   blobs
@@ -184,7 +190,9 @@ export function shadowedSkillFiles(entries: readonly TreeEntry[]): RepositorySki
 
 export async function repositorySkillFingerprint(entries: readonly TreeEntry[]): Promise<string> {
   const files = new Set(repositorySkillFiles(entries).flatMap(({ files }) => files))
-  const pairs = entries.filter(({ path }) => files.has(path)).map(({ path, sha }) => `${path}:${sha}`)
+  const pairs = entries
+    .filter((entry) => files.has(entry.path) && !isSymlink(entry))
+    .map(({ path, sha }) => `${path}:${sha}`)
   return sha256Hex(pairs.sort(compareText).join("\n"))
 }
 
@@ -204,27 +212,42 @@ const withinSkillBytes = (order: readonly string[], sizes: ReadonlyMap<string, n
   return within
 }
 
+const isResourceOf = (skill: RepositorySkillFiles, { path }: TreeEntry): boolean =>
+  path.startsWith(`${skill.dir}/`) && path !== bodyPathOf(skill)
+
 const overFileCapOf = (skill: RepositorySkillFiles, blobs: readonly TreeEntry[]): number =>
-  blobs.filter(
-    (entry) =>
-      entry.path.startsWith(`${skill.dir}/`) &&
-      entry.path !== bodyPathOf(skill) &&
-      sizeOf(entry) > MAX_SKILL_FILE_BYTES,
-  ).length
+  blobs.filter((entry) => isResourceOf(skill, entry) && isOversizedResource(entry)).length
+
+const symlinkedResourcesOf = (skill: RepositorySkillFiles, blobs: readonly TreeEntry[]): number =>
+  blobs.filter((entry) => isResourceOf(skill, entry) && isSymlink(entry)).length
+
+const symlinkedBodiesOf = (skills: readonly RepositorySkillFiles[], entries: readonly TreeEntry[]): Set<string> => {
+  const symlinks = new Set(entries.filter(isSymlink).map(({ path }) => path))
+  return new Set(skills.map(bodyPathOf).filter((path) => symlinks.has(path)))
+}
+
+const countsBySkill = (
+  skills: readonly RepositorySkillFiles[],
+  count: (skill: RepositorySkillFiles) => number,
+): Map<string, number> => new Map(skills.map((skill): [string, number] => [skill.name, count(skill)]))
 
 const planOf = (entries: readonly TreeEntry[]): SkillPlan => {
   const skills = repositorySkillFiles(entries)
   const sizes = new Map(entries.map((entry): [string, number] => [entry.path, sizeOf(entry)]))
   const tooLarge = (path: string): boolean => (sizes.get(path) ?? Number.POSITIVE_INFINITY) > MAX_SKILL_FILE_BYTES
   const oversized = new Set(skills.map(bodyPathOf).filter(tooLarge))
-  const servable = skills.filter((skill) => !oversized.has(bodyPathOf(skill)))
+  const symlinked = symlinkedBodiesOf(skills, entries)
+  const leftOutBodies = new Set([...oversized, ...symlinked])
+  const servable = skills.filter((skill) => !leftOutBodies.has(bodyPathOf(skill)))
   const order = [...servable.map(bodyPathOf), ...servable.flatMap(resourcePathsOf)]
   const blobs = safeBlobs(entries)
   return {
     skills,
     oversized,
+    symlinked,
     loadable: withinSkillBytes(order, sizes),
-    overFileCap: new Map(skills.map((skill): [string, number] => [skill.name, overFileCapOf(skill, blobs)])),
+    overFileCap: countsBySkill(skills, (skill) => overFileCapOf(skill, blobs)),
+    symlinkedResources: countsBySkill(skills, (skill) => symlinkedResourcesOf(skill, blobs)),
   }
 }
 
@@ -240,6 +263,7 @@ const loadedResources = (skill: RepositorySkillFiles, files: CachedFiles, loadab
 const stateOf = (skill: RepositorySkillFiles, files: CachedFiles, plan: SkillPlan): SkillState => {
   const bodyPath = bodyPathOf(skill)
   const at = { name: skill.name, path: bodyPath }
+  if (plan.symlinked.has(bodyPath)) return { kind: "capped", at, cap: "symlink" }
   if (plan.oversized.has(bodyPath)) return { kind: "capped", at, cap: "file" }
   if (!plan.loadable.has(bodyPath)) return { kind: "capped", at, cap: "base" }
   const body = cachedText(files, bodyPath)
@@ -317,7 +341,11 @@ const resourceCapsOf = (skill: RepositorySkillFiles, plan: SkillPlan): CappedSki
   const leftOut = (cap: SkillCap, resources: number): CappedSkill[] =>
     resources === 0 ? [] : [{ ...at, cap, resources }]
   const pastBase = resourcePathsOf(skill).filter((path) => !plan.loadable.has(path)).length
-  return [...leftOut("file", plan.overFileCap.get(skill.name) ?? 0), ...leftOut("base", pastBase)]
+  return [
+    ...leftOut("file", plan.overFileCap.get(skill.name) ?? 0),
+    ...leftOut("base", pastBase),
+    ...leftOut("symlink", plan.symlinkedResources.get(skill.name) ?? 0),
+  ]
 }
 
 const cappedResourcesOf = (survey: SkillSurvey): CappedSkill[] =>
