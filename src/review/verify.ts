@@ -268,21 +268,29 @@ export const VERIFY_BACKSTOP_MS = 900_000
 const MS_PER_MINUTE = 60_000
 
 export async function verifyWithRetry(
-  attempt: (n: 1 | 2) => Promise<VerifyAttempt>,
+  attempt: (n: 1 | 2, signal: AbortSignal) => Promise<VerifyAttempt>,
   backstopMs: number,
   timer: (ms: number, signal: AbortSignal) => Promise<void>,
 ): Promise<VerifyAttempt & { attempts: number }> {
-  const stop = new AbortController()
-  const backstop = timer(backstopMs, stop.signal).then(() => "backstop" as const)
+  const first = await withinBackstop((signal) => attempt(1, signal), backstopMs, timer)
+  if (first.kind === "verdicts") return { ...first, attempts: 1 }
+  const second = await withinBackstop((signal) => attempt(2, signal), backstopMs, timer)
+  return { ...second, attempts: 2 }
+}
+
+async function withinBackstop(
+  run: (signal: AbortSignal) => Promise<VerifyAttempt>,
+  backstopMs: number,
+  timer: (ms: number, signal: AbortSignal) => Promise<void>,
+): Promise<VerifyAttempt> {
+  const clock = new AbortController()
+  const work = new AbortController()
+  const backstop = timer(backstopMs, clock.signal).then(() => backstopFailure(backstopMs))
   try {
-    const first = await Promise.race([attemptOrFailed(() => attempt(1)), backstop])
-    if (first === "backstop") return backstopFailure(backstopMs, 1)
-    if (first.kind === "verdicts") return { ...first, attempts: 1 }
-    const second = await Promise.race([attemptOrFailed(() => attempt(2)), backstop])
-    if (second === "backstop") return backstopFailure(backstopMs, 2)
-    return { ...second, attempts: 2 }
+    return await Promise.race([attemptOrFailed(() => run(work.signal)), backstop])
   } finally {
-    stop.abort()
+    clock.abort()
+    work.abort()
   }
 }
 
@@ -294,6 +302,6 @@ async function attemptOrFailed(run: () => Promise<VerifyAttempt>): Promise<Verif
   }
 }
 
-function backstopFailure(backstopMs: number, attempts: number): VerifyAttempt & { attempts: number } {
-  return { kind: "failed", reason: `backstop: no answer in ${backstopMs / MS_PER_MINUTE} minutes`, attempts }
+function backstopFailure(backstopMs: number): VerifyAttempt {
+  return { kind: "failed", reason: `backstop: no answer in ${backstopMs / MS_PER_MINUTE} minutes` }
 }
