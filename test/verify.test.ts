@@ -34,7 +34,6 @@ import {
   VERIFY_RADIUS,
   verifyPrompt,
   verifyRunId,
-  VerifySessionId,
   verifyWithRetry,
   whileUnsettled,
   type FindingContext,
@@ -135,13 +134,6 @@ describe("VerdictInput", () => {
   it("refuses a reason over 300 characters, so 25 reasons stay well inside the summary comment", () => {
     expect(Value.Check(VerdictInput, { ...good, reason: "x".repeat(300) })).toBe(true)
     expect(Value.Check(VerdictInput, { ...good, reason: "x".repeat(301) })).toBe(false)
-  })
-})
-
-describe("VerifySessionId", () => {
-  it("reads the verify session's id as a string", () => {
-    expect(Value.Check(VerifySessionId, "3")).toBe(true)
-    expect(Value.Check(VerifySessionId, 3)).toBe(false)
   })
 })
 

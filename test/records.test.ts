@@ -1,6 +1,6 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { PostedReview, PullRequestKey, SummaryCommentId } from "../src/records.ts"
+import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from "../src/records.ts"
 
 describe("PullRequestKey", () => {
   it("accepts the key the object stores on its first event", () => {
@@ -11,6 +11,13 @@ describe("PullRequestKey", () => {
 
   it("rejects a key without the installation its token is minted for", () => {
     expect(Value.Check(PullRequestKey, { owner: "ItsAndrewM", repo: "ai-review-agent", number: 44 })).toBe(false)
+  })
+})
+
+describe("StoredSessionId", () => {
+  it("reads a stored Pi session's id, the summary's or verify's, as a string", () => {
+    expect(Value.Check(StoredSessionId, "2")).toBe(true)
+    expect(Value.Check(StoredSessionId, 2)).toBe(false)
   })
 })
 

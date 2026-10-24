@@ -3,6 +3,7 @@ import { createModels } from "@earendil-works/pi-ai/models"
 import {
   createRegistry,
   Harness,
+  type AgentChange,
   type ConversationId,
   type EntryRecord,
   type Extension,
@@ -11,6 +12,7 @@ import {
   PiHarness,
   ROOT_SESSION,
   skills as skillsExtension,
+  type PiModel,
   type PiPendingOperation,
   type PiPromptResponse,
   type PiSession,
@@ -42,7 +44,7 @@ import {
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
-import { PostedReview, PullRequestKey, SummaryCommentId } from "./records.ts"
+import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from "./records.ts"
 import {
   CONFIG_PREFIX,
   configKey,
@@ -254,7 +256,6 @@ import {
   summarizedRecord,
   summaryLive,
   summaryReply,
-  SummarySessionId,
   type SummaryOutcome,
   type WrittenSummary,
 } from "./review/summary.ts"
@@ -285,7 +286,6 @@ import {
   verifyOperationId,
   verifyPrompt,
   verifyRunId,
-  VerifySessionId,
   verifyWithRetry,
   whileUnsettled,
   type FindingContext,
@@ -387,6 +387,15 @@ interface VerifyAttempts {
   runId: string
   prompt: string
   aborting: Promise<void>
+}
+
+type SessionKey = "summarySession" | "verifySession"
+
+interface SkillSetup {
+  skill: string
+  reference: string
+  tools: Pick<AgentChange, "extensions" | "modelTools">
+  model: PiModel
 }
 
 interface ReviewRun {
@@ -788,7 +797,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (!(await this.ownsPending(run.pending.deliveryId))) return REPLACED_BEFORE_ATTEMPT
     await this.restartGrace(run.pending.deliveryId)
     log("verify.start", { ...verifyFields(run), candidates: run.candidates.length, attempt: n })
-    const session = await this.verifySession()
+    const session = await this.sessionAt("verifySession")
     const operationId = verifyOperationId(run.pending.operationId, attempts.runId, n)
     const onBackstop = () => {
       logError("verify.attempt_failed", {
@@ -808,25 +817,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<VerifyAttempt> {
     const { id } = await this.harness.conversation(session.id)
     const submitted = this.#verifyPasses.open(id, attempts.runId, operationId)
-    await this.configureVerify(session, attempts.run.model)
+    await this.configureSkillSession(session, {
+      skill: "verify",
+      reference: SEVERITY_REFERENCE,
+      tools: { extensions: [this.#verifyTools] },
+      model: this.ai(attempts.run.model),
+    })
     return attemptOf(submitted(), await session.prompt(attempts.prompt, { operationId }))
-  }
-
-  private async configureVerify(session: PiSession, model: string): Promise<void> {
-    const { source } = await bundledSkills()
-    const skill = await loadSkill(source, "verify")
-    const severity = await loadReference(source, "review", SEVERITY_REFERENCE)
-    await session.reset()
-    const conversation = await this.harness.conversation(session.id)
-    await conversation.configure(
-      {
-        instructions: renderSkillWithResources(skill, [severity]),
-        thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
-        extensions: [this.#verifyTools],
-      },
-      BACKGROUND_CONTEXT,
-    )
-    await session.setModel(this.ai(model))
   }
 
   private async verifyContexts({ pr, pending, candidates }: VerifyRun): Promise<FindingContext[]> {
@@ -855,21 +852,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return linkedIssueText(linkedIssuesFrom(reads))
   }
 
-  private async verifySession(): Promise<PiSession> {
-    const stored = await this.storedVerifySession()
-    if (stored !== undefined) return this.harness.session(stored)
-    const session = await this.harness.sessions.create()
-    await this.ctx.storage.put("verifySession", session.id)
-    return session
-  }
-
-  private async storedVerifySession(): Promise<string | undefined> {
-    const stored = await this.ctx.storage.get("verifySession")
-    return Value.Check(VerifySessionId, stored) ? stored : undefined
-  }
-
   private async resetVerifySession(): Promise<void> {
-    const stored = await this.storedVerifySession()
+    const stored = await this.storedSessionId("verifySession")
     if (stored !== undefined) await this.harness.session(stored).reset()
   }
 
@@ -1166,7 +1150,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async operationsOf(pending: PendingReview | undefined): Promise<PiPendingOperation[]> {
     if (pending === undefined) return []
-    const verify = await this.storedVerifySession()
+    const verify = await this.storedSessionId("verifySession")
     return reviewOperations(
       pending,
       await this.harness.pending({ session: ROOT_SESSION }),
@@ -1683,7 +1667,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async verifyMessages(): Promise<EntryRecord[]> {
-    const stored = await this.storedVerifySession()
+    const stored = await this.storedSessionId("verifySession")
     return stored === undefined ? [] : this.harness.session(stored).messages()
   }
 
@@ -2050,7 +2034,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async summaryOperationListed(operationId: string): Promise<boolean> {
-    const session = await this.storedSummarySession()
+    const session = await this.storedSessionId("summarySession")
     if (session === undefined) return false
     const operations = await this.harness.pending({ session })
     return operations.some((operation) => operation.operationId === operationId)
@@ -2117,42 +2101,46 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     issues: readonly LinkedIssue[],
     operationId: string,
   ): Promise<WrittenSummary> {
-    const session = await this.summarySession()
-    await this.configureSummary(session)
+    const session = await this.sessionAt("summarySession")
+    await this.configureSkillSession(session, {
+      skill: "summary",
+      reference: MERGE_DANGER_REFERENCE,
+      tools: { extensions: [], modelTools: [] },
+      model: this.reviewModel(),
+    })
     const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
     if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
     return parseWrittenSummary(result.text ?? "")
   }
 
-  private async summarySession(): Promise<PiSession> {
-    const stored = await this.storedSummarySession()
+  private async sessionAt(key: SessionKey): Promise<PiSession> {
+    const stored = await this.storedSessionId(key)
     if (stored !== undefined) return this.harness.session(stored)
     const session = await this.harness.sessions.create()
-    await this.ctx.storage.put("summarySession", session.id)
+    await this.ctx.storage.put(key, session.id)
     return session
   }
 
-  private async storedSummarySession(): Promise<string | undefined> {
-    const stored = await this.ctx.storage.get("summarySession")
-    return Value.Check(SummarySessionId, stored) ? stored : undefined
+  private async storedSessionId(key: SessionKey): Promise<string | undefined> {
+    const stored = await this.ctx.storage.get(key)
+    return Value.Check(StoredSessionId, stored) ? stored : undefined
   }
 
-  private async configureSummary(session: PiSession): Promise<void> {
+  private async configureSkillSession(session: PiSession, setup: SkillSetup): Promise<void> {
     const { source } = await bundledSkills()
-    const skill = await loadSkill(source, "summary")
-    const mergeDanger = await loadReference(source, "review", MERGE_DANGER_REFERENCE)
+    const skill = await loadSkill(source, setup.skill)
+    const reference = await loadReference(source, "review", setup.reference)
     await session.reset()
     const conversation = await this.harness.conversation(session.id)
     await conversation.configure(
       {
-        instructions: renderSkillWithResources(skill, [mergeDanger]),
+        instructions: renderSkillWithResources(skill, [reference]),
         thinkingLevel: reviewThinkingLevel(this.env.REVIEW_THINKING_LEVEL),
-        extensions: [],
-        modelTools: [],
+        ...setup.tools,
       },
       BACKGROUND_CONTEXT,
     )
-    await session.setModel(this.reviewModel())
+    await session.setModel(setup.model)
   }
 
   private async postSummary(

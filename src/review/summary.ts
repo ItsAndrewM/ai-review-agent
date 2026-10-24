@@ -24,8 +24,6 @@ export const Summarizing = Type.Object({
 
 export type Summarizing = Static<typeof Summarizing>
 
-export const SummarySessionId = Type.String()
-
 export type WrittenSummary = { kind: "summary"; summary: SummarySubmissionInput } | { kind: "unusable"; reason: string }
 
 export type SummaryOutcome =

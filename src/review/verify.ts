@@ -35,8 +35,6 @@ export type VerdictInput = Static<typeof VerdictInput>
 
 export const VerdictsSubmission = Type.Object({ verdicts: Type.Array(VerdictInput) })
 
-export const VerifySessionId = Type.String()
-
 export interface VerifyCandidate {
   id: string
   finding: FindingInput

@@ -14,7 +14,6 @@ import {
   summarizedRecord,
   summaryLive,
   summaryReply,
-  SummarySessionId,
 } from "../src/review/summary.ts"
 
 const answer = {
@@ -321,11 +320,6 @@ describe("the stored summary records", () => {
     expect(Value.Check(Summarizing, { ...record, started: undefined })).toBe(false)
     expect(Value.Check(Summarizing, { ...record, started: 1.5 })).toBe(false)
     expect(Value.Check(Summarizing, { ...record, operationId: 7 })).toBe(false)
-  })
-
-  it("reads the summary session's id as a string", () => {
-    expect(Value.Check(SummarySessionId, "2")).toBe(true)
-    expect(Value.Check(SummarySessionId, 2)).toBe(false)
   })
 })
 

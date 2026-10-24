@@ -12,6 +12,8 @@ export type PullRequestKey = Static<typeof PullRequestKey>
 
 export const SummaryCommentId = Type.Integer()
 
+export const StoredSessionId = Type.String()
+
 export const SeverityCounts = Type.Object({
   blocking: Type.Integer(),
   suggestion: Type.Integer(),
