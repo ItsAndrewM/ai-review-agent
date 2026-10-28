@@ -1075,7 +1075,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return
       case "closed":
         this.#runs.dropIdle(incoming.key.number, "closed")
-        await this.#sandbox.end("closed")
+        await this.#sandbox.dropIdle("closed")
         return
     }
   }
@@ -1392,6 +1392,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#requestsPastBudget = 0
     this.#activated = []
     this.#runs.start()
+    this.#sandbox.start()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)

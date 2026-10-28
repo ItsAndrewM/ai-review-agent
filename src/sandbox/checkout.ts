@@ -27,10 +27,14 @@ export type CheckoutResult =
   | { readonly kind: "ok"; readonly kib: number }
   | { readonly kind: "failed"; readonly reason: string }
 
+export function lastLine(text: string): string {
+  const lines = text.trim().split("\n")
+  return lines[lines.length - 1] ?? ""
+}
+
 export function parseCheckout(outcome: RunOutcome): CheckoutResult {
   if (outcome.outcome === "timeout") return { kind: "failed", reason: "checkout timed out" }
-  const lines = outcome.tail.trim().split("\n")
-  const last = lines[lines.length - 1] ?? ""
+  const last = lastLine(outcome.tail)
   if (outcome.exitCode !== 0) return { kind: "failed", reason: last || `checkout exited ${outcome.exitCode}` }
   const size = /^kib=(\d+)$/.exec(last)
   if (size === null) return { kind: "failed", reason: "checkout reported no size" }

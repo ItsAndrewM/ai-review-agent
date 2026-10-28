@@ -23,6 +23,7 @@ class FakeSandbox implements SandboxCalls {
   calls: string[] = []
   tokens: (string | undefined)[] = []
   destroyThrows = false
+  rejects: string | undefined
   constructor(private readonly scripted: Scripted) {}
 
   async start(token: string | undefined): Promise<void> {
@@ -33,6 +34,7 @@ class FakeSandbox implements SandboxCalls {
   async run(command: readonly string[], _options: RunOptions): Promise<RunOutcome> {
     const name = (command[0] === "/bin/sh" ? command[3] : command[0]) ?? ""
     this.calls.push(`run:${name}`)
+    if (name === this.rejects) throw new Error("container gone")
     const outcome =
       this.scripted[
         name === "andabot-checkout" || name === "andabot-detect" || name === "pnpm" || name === "npm" ? name : "pnpm"
@@ -51,6 +53,9 @@ class FakeHost implements SandboxHost {
   grant = true
   leases: number[] = []
   unleased = 0
+  unleaseThrows = false
+  headThrows = false
+  sha = "abc123"
   clock = 1_000_000
   readonly box: FakeSandbox
   constructor(scripted: Scripted) {
@@ -65,6 +70,7 @@ class FakeHost implements SandboxHost {
   }
   async unlease(): Promise<void> {
     this.unleased += 1
+    if (this.unleaseThrows) throw new Error("leases object unreachable")
   }
   async token(): Promise<string> {
     return "scoped-token"
@@ -73,7 +79,8 @@ class FakeHost implements SandboxHost {
     return this.box
   }
   async head(): Promise<{ number: number; key: PullRequestKey; sha: string }> {
-    return { number: 7, key: KEY, sha: "abc123" }
+    if (this.headThrows) throw new Error("GitHub 502")
+    return { number: 7, key: KEY, sha: this.sha }
   }
   now(): number {
     return this.clock
@@ -202,5 +209,85 @@ describe("sandboxBudgetOf and sandboxOn", () => {
     expect(sandboxOn("true")).toBe(true)
     expect(sandboxOn("TRUE")).toBe(false)
     expect(sandboxOn(undefined)).toBe(false)
+  })
+})
+
+describe("SandboxRuns when a step throws", () => {
+  it("answers unavailable, destroys and unleases once, remembers it, and lets end resolve", async () => {
+    const host = new FakeHost(READY)
+    host.box.rejects = "andabot-checkout"
+    const runs = new SandboxRuns(host, 900)
+    runs.start()
+    expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
+    expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "destroy"])
+    expect(host.unleased).toBe(1)
+    expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
+    expect(host.box.calls).toHaveLength(3)
+    await expect(runs.end("review_end")).resolves.toBeUndefined()
+    expect(host.box.calls.filter((call) => call === "destroy")).toHaveLength(1)
+  })
+
+  it("answers unavailable for a head it can't read, before any lease", async () => {
+    const host = new FakeHost(READY)
+    host.headThrows = true
+    const runs = new SandboxRuns(host, 900)
+    expect(await runs.access()).toEqual({ kind: "unavailable", reason: "head" })
+    expect(host.leases).toEqual([])
+    await expect(runs.end("review_end")).resolves.toBeUndefined()
+  })
+
+  it("never lets a throwing unlease out of access or end", async () => {
+    const host = new FakeHost(READY)
+    host.unleaseThrows = true
+    host.box.rejects = "andabot-checkout"
+    const runs = new SandboxRuns(host, 900)
+    expect((await runs.access()).kind).toBe("unavailable")
+    await expect(runs.end("review_end")).resolves.toBeUndefined()
+  })
+})
+
+describe("SandboxRuns across reviews", () => {
+  it("keeps the sandbox for an active review when a closed event arrives, and ends it when nothing is active", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    runs.start()
+    await runs.access()
+    await runs.dropIdle("closed")
+    expect(host.box.calls).not.toContain("destroy")
+    await runs.end("review_end")
+    expect(host.box.calls.at(-1)).toBe("destroy")
+    await runs.dropIdle("closed")
+    expect(host.box.calls.filter((call) => call === "destroy")).toHaveLength(1)
+  })
+
+  it("lets a replacing review keep the sandbox when the replaced one ends", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    runs.start()
+    await runs.access()
+    runs.start()
+    await runs.end("review_end")
+    expect(host.box.calls).not.toContain("destroy")
+    expect((await runs.access()).kind).toBe("ready")
+    expect(host.box.calls.filter((call) => call === "start")).toHaveLength(1)
+    await runs.end("review_end")
+    expect(host.box.calls.at(-1)).toBe("destroy")
+  })
+
+  it("prepares afresh for a new head, ending the old head's sandbox first", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    runs.start()
+    await runs.access()
+    host.sha = "def456"
+    host.clock += 60_000
+    expect((await runs.access()).kind).toBe("ready")
+    const calls = host.box.calls
+    expect(calls.filter((call) => call === "start")).toHaveLength(2)
+    expect(calls.filter((call) => call === "destroy")).toHaveLength(1)
+    expect(calls.indexOf("destroy")).toBeLessThan(calls.lastIndexOf("start"))
+    expect(host.leases).toHaveLength(2)
+    expect(host.unleased).toBe(1)
+    expect(runs.seconds()).toBe(0)
   })
 })

@@ -59,7 +59,7 @@ export class ReviewSandbox extends DurableObject<Env> {
     try {
       return await this.#execute(command, options)
     } finally {
-      this.#inFlight -= 1
+      this.#inFlight = Math.max(0, this.#inFlight - 1)
     }
   }
 
