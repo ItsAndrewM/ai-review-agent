@@ -59,7 +59,7 @@ describe("parseResult", () => {
 
   it("decodes a tail cut mid-character with a replacement character rather than throwing", () => {
     const euro = bytes("€")
-    const result = parseResult(new Uint8Array([...bytes("0\n4\n"), ...euro.slice(1)]), 2)
+    const result = parseResult(new Uint8Array([...bytes("0\n4\n"), ...euro.slice(1)]), 3)
     expect(result.outcome).toBe("exited")
     expect(result.tail).toContain("�")
     expect(result.cut).toBe(true)
@@ -72,6 +72,17 @@ describe("parseResult", () => {
     expect(new TextEncoder().encode(result.tail).length).toBeLessThanOrEqual(10)
     expect(result.tail).toContain("�")
     expect(result.cut).toBe(true)
+  })
+
+  it("keeps the decoded tail within the byte limit for every run of invalid bytes and every small cap", () => {
+    const encoder = new TextEncoder()
+    for (let length = 1; length <= 40; length += 1) {
+      for (let cap = 1; cap <= 12; cap += 1) {
+        const invalid = new Uint8Array(length).fill(0xff)
+        const result = parseResult(new Uint8Array([...bytes(`0\n${length}\n`), ...invalid]), cap)
+        expect(encoder.encode(result.tail).length, `length ${length} cap ${cap}`).toBeLessThanOrEqual(cap)
+      }
+    }
   })
 
   it("reads an empty output", () => {

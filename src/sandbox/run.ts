@@ -68,10 +68,16 @@ export function parseResult(output: Uint8Array, tailBytes: number): RunOutcome {
 }
 
 function fitTail(decoded: string, tailBytes: number) {
-  const encoded = new TextEncoder().encode(decoded)
-  if (encoded.length <= tailBytes) return { tail: decoded, cut: false }
-  const tail = new TextDecoder().decode(encoded.subarray(encoded.length - tailBytes)).replace(/^�/, "")
-  return { tail, cut: true }
+  const encoder = new TextEncoder()
+  if (encoder.encode(decoded).length <= tailBytes) return { tail: decoded, cut: false }
+  const kept: string[] = []
+  let used = 0
+  for (const character of Array.from(decoded).reverse()) {
+    used += encoder.encode(character).length
+    if (used > tailBytes) break
+    kept.push(character)
+  }
+  return { tail: kept.reverse().join(""), cut: true }
 }
 
 function splitLine(bytes: Uint8Array): [string, Uint8Array] {
