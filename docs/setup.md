@@ -126,6 +126,7 @@ A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pu
 | `reviews.sandbox` | `true` | `false` keeps this repository's reviews out of the sandbox tier (#132): no container is started and `run_check` answers that the sandbox is off. The tier runs only while the Worker's `SANDBOX` is `true`, so this changes nothing while it is `false`. |
 | `model.verify` | unset: the Worker's `VERIFY_MODEL` | The Workers AI model verify uses for this repository, instead of `VERIFY_MODEL`. A non-empty string. It never turns verify on: while `VERIFY_MODEL` is empty, verify stays off. |
 | `model` | none | A mapping only: `model: {}` or keys under `model:`, never `model: <name>`. Every key but `verify` is accepted and ignored, `model.draft` included. |
+| `checks` | none | The commands `run_check` (#133) runs in the sandbox, under the keys `lint`, `typecheck` and `test`, each a command line split on whitespace; a standalone `{paths}` token becomes the paths the model names, one argument each, and a template without it ignores them. A key left out falls back to a runner `package.json` names (oxlint or eslint, tsc, vitest or jest); any other key, or an empty template, makes the file invalid. |
 
 ```yaml
 reviews:

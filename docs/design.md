@@ -303,6 +303,10 @@ reviews:
   path_filters: ["!pnpm-lock.yaml", "!**/*.snap"]
 model:
   verify: "@cf/moonshotai/kimi-k2.7-code"
+checks:
+  lint: "pnpm oxlint {paths}"
+  typecheck: "pnpm tsc --noEmit"
+  test: "pnpm vitest run {paths}"
 ```
 
 `src/repository/config.ts` parses it with `yaml` and a TypeBox schema. A missing file gives the defaults. An invalid one, whether YAML that doesn't parse, a key the schema doesn't know, a value of the wrong type or a `path_filters` entry without its `!`, gives the defaults with none of its settings applied, and the summary comment ends with `_.andabot.yaml was ignored: <the first problem>; the defaults applied._`, the problem flattened onto one line, cut at 300 characters and set as code, wrapped like the Standards line's paths, so a glob's stars in a YAML error can't turn into emphasis. A file GitHub fails to serve for any reason but a 404 gives the defaults and the same note, logs `config.unreadable` with the base, and is not cached, so the next review reads it again and a passing 5xx doesn't pin the defaults until the base moves. Every other read is cached under `config:<baseSha>`, and storing it is best effort, logging `config.uncached` when it fails. A review keeps the request-changes workflow, the verify model and the error it started with in `pending`, so the summary it posts describes the settings its prompt was built with. `review.start` logs `config` as `missing`, `file`, `invalid` or `unreadable`.
