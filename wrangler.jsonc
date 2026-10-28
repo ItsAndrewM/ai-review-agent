@@ -63,11 +63,13 @@
     "bindings": [
       { "name": "PULL_REQUEST", "class_name": "PullRequest" },
       { "name": "REVIEW_SANDBOX", "class_name": "ReviewSandbox" },
+      { "name": "SANDBOX_LEASES", "class_name": "SandboxLeases" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PullRequest"] },
     { "tag": "v2", "new_sqlite_classes": ["ReviewSandbox"] },
+    { "tag": "v3", "new_sqlite_classes": ["SandboxLeases"] },
   ],
   // The sandbox tier's container (#131). The build context is the container
   // folder alone, so node_modules never enters the image build. Under the

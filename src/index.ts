@@ -7,6 +7,7 @@ import { versionOf } from "./version.ts"
 export { PullRequest } from "./pull-request.ts"
 export { Outbound } from "./sandbox/outbound.ts"
 export { ReviewSandbox } from "./sandbox/review-sandbox.ts"
+export { SandboxLeases } from "./sandbox/sandbox-leases.ts"
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
