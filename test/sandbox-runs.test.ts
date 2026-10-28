@@ -69,7 +69,7 @@ class FakeHost implements SandboxHost {
   async token(): Promise<string> {
     return "scoped-token"
   }
-  sandbox(): SandboxCalls {
+  async sandbox(): Promise<SandboxCalls> {
     return this.box
   }
   async head(): Promise<{ number: number; key: PullRequestKey; sha: string }> {

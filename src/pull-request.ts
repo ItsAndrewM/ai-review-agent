@@ -292,6 +292,18 @@ import {
   type VerifyAttempt,
   type VerifyCandidate,
 } from "./review/verify.ts"
+import { objectName } from "./route.ts"
+import { sandboxTokenScope } from "./sandbox/probe.ts"
+import {
+  accessSummary,
+  sandboxBudgetOf,
+  sandboxOn,
+  SandboxRuns,
+  type AccessSummary,
+  type SandboxCalls,
+  type SandboxHead,
+  type SandboxHost,
+} from "./sandbox/runs.ts"
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
@@ -474,6 +486,34 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     () => this.#snapshotFiles(),
     async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
   )
+  #sandbox = new SandboxRuns(this.#sandboxHost(), sandboxBudgetOf(this.env.MAX_SANDBOX_SECONDS))
+
+  #sandboxHost(): SandboxHost {
+    const leases = () => this.env.SANDBOX_LEASES.getByName("leases")
+    return {
+      enabled: async () =>
+        sandboxOn(this.env.SANDBOX) && (await this.repositoryConfig(await this.pullRequest())).config.reviews.sandbox,
+      lease: async (ttlMs) => leases().acquire(objectName(await this.key()), ttlMs),
+      unlease: async () => leases().release(objectName(await this.key())),
+      token: async () => this.sandboxToken(),
+      sandbox: async (): Promise<SandboxCalls> => this.env.REVIEW_SANDBOX.getByName(objectName(await this.key())),
+      head: async (): Promise<SandboxHead> => {
+        const pr = await this.pullRequest()
+        return { number: pr.number, key: await this.key(), sha: pr.head.sha }
+      },
+      now: () => Date.now(),
+    }
+  }
+
+  private async sandboxToken(): Promise<string> {
+    const key = await this.key()
+    const jwt = await createAppJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_PRIVATE_KEY)
+    return (await fetchInstallationToken(jwt, key.installationId, sandboxTokenScope(key))).token
+  }
+
+  async prepareSandbox(): Promise<AccessSummary> {
+    return accessSummary(await this.#sandbox.access())
+  }
 
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
@@ -1034,6 +1074,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return
       case "closed":
         this.#runs.dropIdle(incoming.key.number, "closed")
+        await this.#sandbox.end("closed")
         return
     }
   }
@@ -1414,6 +1455,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
           ...this.#runs.usage(),
+          sandboxSeconds: this.#sandbox.seconds(),
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -1423,6 +1465,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       throw error
     } finally {
       await this.#runs.end(pr.number, "review_end")
+      await this.#sandbox.end("review_end")
     }
   }
 

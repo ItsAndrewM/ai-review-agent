@@ -19,6 +19,8 @@ export const INACTIVITY_TIMEOUT_MS = 30 * 60_000
 
 const KILL_GRACE_MS = 5_000
 
+const AWAKE_ALARM_MS = 60_000
+
 export interface RunOptions {
   readonly cwd: string
   readonly env?: Record<string, string>
@@ -28,6 +30,7 @@ export interface RunOptions {
 
 export class ReviewSandbox extends DurableObject<Env> {
   readonly #container: Container
+  #inFlight = 0
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env)
@@ -51,6 +54,24 @@ export class ReviewSandbox extends DurableObject<Env> {
   }
 
   async run(command: readonly string[], options: RunOptions): Promise<RunOutcome> {
+    this.#inFlight += 1
+    await this.#stayAwake()
+    try {
+      return await this.#execute(command, options)
+    } finally {
+      this.#inFlight -= 1
+    }
+  }
+
+  async alarm(): Promise<void> {
+    if (this.#inFlight > 0) await this.ctx.storage.setAlarm(Date.now() + AWAKE_ALARM_MS)
+  }
+
+  async #stayAwake(): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) === null) await this.ctx.storage.setAlarm(Date.now() + AWAKE_ALARM_MS)
+  }
+
+  async #execute(command: readonly string[], options: RunOptions): Promise<RunOutcome> {
     const began = Date.now()
     const dir = runDir(crypto.randomUUID())
     const tailBytes = tailBytesOf(options.tailBytes)
@@ -80,6 +101,8 @@ export class ReviewSandbox extends DurableObject<Env> {
   }
 
   async destroy(): Promise<void> {
+    this.#inFlight = 0
+    await this.ctx.storage.deleteAlarm()
     await this.#container.destroy()
     log("sandbox.destroy")
   }

@@ -44,7 +44,7 @@ export interface SandboxHost {
   lease(ttlMs: number): Promise<boolean>
   unlease(): Promise<void>
   token(): Promise<string>
-  sandbox(): SandboxCalls
+  sandbox(): Promise<SandboxCalls>
   head(): Promise<SandboxHead>
   now(): number
 }
@@ -58,6 +58,14 @@ export type SandboxAccess =
   | { readonly kind: "unavailable"; readonly reason: UnavailableReason }
 
 export type SandboxEnd = "review_end" | "closed"
+
+export type AccessSummary =
+  | { readonly kind: "ready"; readonly dir: string; readonly manager: Manager }
+  | Exclude<SandboxAccess, { kind: "ready" }>
+
+export function accessSummary(access: SandboxAccess): AccessSummary {
+  return access.kind === "ready" ? { kind: "ready", dir: access.dir, manager: access.manager } : access
+}
 
 type Settled = Extract<SandboxAccess, { kind: "ready" | "unavailable" }>
 
@@ -117,7 +125,7 @@ export class SandboxRuns {
       return { kind: "unavailable", reason: "lease" }
     }
     this.#leased = true
-    const sandbox = this.host.sandbox()
+    const sandbox = await this.host.sandbox()
     const started = await this.#start(sandbox, head)
     if (started) return started
     const checkedOut = await this.#checkout(sandbox, head)
@@ -178,7 +186,7 @@ export class SandboxRuns {
 
   async #destroy(): Promise<void> {
     try {
-      await this.host.sandbox().destroy()
+      await (await this.host.sandbox()).destroy()
     } catch (cause) {
       logError("sandbox.destroy_failed", { error: errorText(cause) })
     }
