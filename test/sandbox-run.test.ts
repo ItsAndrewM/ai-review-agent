@@ -71,10 +71,11 @@ describe("parseResult", () => {
 })
 
 describe("killArgv", () => {
-  it("sends the named signal to the run's process group, and nothing when the run never started", () => {
+  it("sends the named signal to the run's process group in the -s form dash accepts before a negative pid, and nothing when the run never started", () => {
     const term = killArgv("/workspace/runs/a", "TERM")[2] ?? ""
-    expect(term).toContain('kill -TERM -- "-$pid"')
+    expect(term).toContain('kill -s TERM -- "-$pid"')
+    expect(term).not.toContain("kill -TERM")
     expect(term).toContain('[ -f "$1/pid" ] || exit 0')
-    expect(killArgv("/workspace/runs/a", "KILL")[2]).toContain('kill -KILL -- "-$pid"')
+    expect(killArgv("/workspace/runs/a", "KILL")[2]).toContain('kill -s KILL -- "-$pid"')
   })
 })

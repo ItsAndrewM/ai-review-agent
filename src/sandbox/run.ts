@@ -19,7 +19,7 @@ setsid sh -c 'echo "$$" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/output" 2>&1
 echo "$?" >"$dir/exit-code.tmp" && mv "$dir/exit-code.tmp" "$dir/exit-code"`
 
 const killScript = (signal: KillSignal) => `[ -f "$1/pid" ] || exit 0
-read -r pid <"$1/pid" && kill -${signal} -- "-$pid"`
+read -r pid <"$1/pid" && kill -s ${signal} -- "-$pid"`
 
 export type KillSignal = "TERM" | "KILL"
 
