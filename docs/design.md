@@ -354,7 +354,7 @@ The sandbox tier uses the runtime's `ctx.container` API alone, not `@cloudflare/
 
 ## Tests
 
-`pnpm test` runs unit tests of the pure modules in Node, whose WebCrypto is the one the Worker uses, and `test/lint` checks that every folder gets the lint rules. Tests against the Durable Object itself are phase 2.
+`pnpm test` runs unit tests of the pure modules in Node, whose WebCrypto is the one the Worker uses, and `test/lint` checks that every folder gets the lint rules. Tests against the Durable Object itself aren't written yet.
 
 ## Phases
 
@@ -364,7 +364,7 @@ The sandbox tier uses the runtime's `ctx.container` API alone, not `@cloudflare/
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
    - **Slice 3: repository context.** The repository's instruction files as standards (#29), `.andabot.yaml` (#28) and its own skills through the catalog (#75), measured on the fixtures #68, #72 and #77; its follow-ups (#78 to #81, #83, #100, #103) are closed.
-   - **Verify pass.** A second pass over each blocking finding and suggestion before it posts, in a session of its own with `read_file`, `grep` and `tree` (#31). Built, but off after neither model cleared the replay bar; the 24 Oct measurement is recorded under "Verify".
+   - **Verify pass.** A second pass over each blocking finding and suggestion before it posts, in a session of its own with `read_file`, `grep` and `tree` (#31). Built, but off after neither model cleared the replay bar; the 24 Oct measurement is recorded under "Verify", and #129 tracks turning it on.
 3. **Sandbox tier.** Targeted checks the model picks, run on the head in a container (`docs/superpowers/specs/2026-10-28-sandbox-design.md`): the image, the `ReviewSandbox` object and the outbound allowlist (#131, shipped); the checkout, the install, the lifetime and the lease (#132); `run_check(name, paths)` (#133); the summary's Checks line and the cost line (#134); the measurement and the abuse ceiling (#135). Verify's use of the results waits on #129.
 4. **Extras.** Sequence diagram, docstrings, unit test generation.
 
