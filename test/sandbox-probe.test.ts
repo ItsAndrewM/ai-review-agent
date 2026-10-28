@@ -29,6 +29,10 @@ describe("parseProbe", () => {
     expect(parseProbe(JSON.stringify({ key, action: "destroy" }))).toEqual({ key, action: "destroy" })
   })
 
+  it("accepts a prepare without one, which drives the pull request object's sandbox", () => {
+    expect(parseProbe(JSON.stringify({ key, action: "prepare" }))).toEqual({ key, action: "prepare" })
+  })
+
   it("refuses a run without a command", () => {
     expect(parseProbe(JSON.stringify({ key, action: "run" }))).toBeUndefined()
     expect(parseProbe(JSON.stringify({ key, action: "run", command: [] }))).toBeUndefined()

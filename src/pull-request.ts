@@ -511,7 +511,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return (await fetchInstallationToken(jwt, key.installationId, sandboxTokenScope(key))).token
   }
 
-  async prepareSandbox(): Promise<AccessSummary> {
+  async prepareSandbox(key: PullRequestKey): Promise<AccessSummary> {
+    await this.ctx.storage.put("key", key)
     return accessSummary(await this.#sandbox.access())
   }
 
