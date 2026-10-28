@@ -68,6 +68,13 @@ describe("parseResult", () => {
   it("reads an empty output", () => {
     expect(parseResult(bytes("0\n0\n"), 8192)).toEqual({ outcome: "exited", exitCode: 0, tail: "", cut: false })
   })
+
+  it("throws on a result it can't read, so a dead sandbox never reports a clean pass", () => {
+    expect(() => parseResult(new Uint8Array(), 8192)).toThrow("unreadable")
+    expect(() => parseResult(bytes("\n0\n"), 8192)).toThrow("unreadable")
+    expect(() => parseResult(bytes("0x10\n0\n"), 8192)).toThrow("unreadable")
+    expect(() => parseResult(bytes(" 0\n0\n"), 8192)).toThrow("unreadable")
+  })
 })
 
 describe("killArgv", () => {

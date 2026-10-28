@@ -61,9 +61,9 @@ export function parseResult(output: Uint8Array, tailBytes: number): RunOutcome {
   const [sizeLine, tailBytesOut] = splitLine(rest)
   const tail = new TextDecoder().decode(tailBytesOut)
   const cut = Number(sizeLine) > tailBytes
-  const exitCode = Number(exitLine)
-  if (exitLine === "none" || !Number.isInteger(exitCode)) return { outcome: "timeout", tail, cut }
-  return { outcome: "exited", exitCode, tail, cut }
+  if (exitLine === "none") return { outcome: "timeout", tail, cut }
+  if (!/^\d+$/.test(exitLine)) throw new Error(`sandbox result unreadable: ${JSON.stringify(exitLine)}`)
+  return { outcome: "exited", exitCode: Number(exitLine), tail, cut }
 }
 
 function splitLine(bytes: Uint8Array): [string, Uint8Array] {

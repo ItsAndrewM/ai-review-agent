@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { decideOutbound, forwardedHeaders } from "../src/sandbox/policy.ts"
+import { decideOutbound, forwardedHeaders, forwardedRequest } from "../src/sandbox/policy.ts"
 
 const basic = (token: string) => `Basic ${btoa(`x-access-token:${token}`)}`
 
@@ -71,5 +71,17 @@ describe("forwardedHeaders", () => {
     const headers = forwardedHeaders(new Headers({ accept: "*/*", "user-agent": "git/2.39" }), undefined)
     expect(headers.get("accept")).toBe("*/*")
     expect(headers.get("user-agent")).toBe("git/2.39")
+  })
+})
+
+describe("forwardedRequest", () => {
+  it("returns a redirect to the container instead of following it, so every hop is decided by the policy", () => {
+    const sent = new Request("https://github.com/o/r/archive/main.tar.gz", {
+      headers: { authorization: "Bearer leaked" },
+    })
+    const request = forwardedRequest(sent, basic("tok"))
+    expect(request.redirect).toBe("manual")
+    expect(request.url).toBe("https://github.com/o/r/archive/main.tar.gz")
+    expect(request.headers.get("authorization")).toBe(basic("tok"))
   })
 })

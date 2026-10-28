@@ -22,6 +22,10 @@ export function forwardedHeaders(sent: Headers, authorization: string | undefine
   return headers
 }
 
+export function forwardedRequest(sent: Request, authorization: string | undefined): Request {
+  return new Request(sent, { headers: forwardedHeaders(sent.headers, authorization), redirect: "manual" })
+}
+
 function basicAccessToken(token: string): string {
   return `Basic ${btoa(`x-access-token:${token}`)}`
 }
