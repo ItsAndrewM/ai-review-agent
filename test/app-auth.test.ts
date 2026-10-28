@@ -4,9 +4,19 @@ import {
   createAppJwt,
   fromBase64,
   InstallationToken,
+  tokenRequestBody,
   unwrapPkcs8ToPkcs1,
   wrapPkcs1InPkcs8,
 } from "../src/github/app-auth.ts"
+
+describe("tokenRequestBody", () => {
+  it("sends no body for the App's full token, and the scope as JSON for a narrowed one", () => {
+    expect(tokenRequestBody(undefined)).toBeUndefined()
+    expect(tokenRequestBody({ repositories: ["r"], permissions: { contents: "read" } })).toBe(
+      '{"repositories":["r"],"permissions":{"contents":"read"}}',
+    )
+  })
+})
 
 describe("InstallationToken", () => {
   it("accepts the token the object caches and rejects one without its expiry, which would never be refreshed", () => {

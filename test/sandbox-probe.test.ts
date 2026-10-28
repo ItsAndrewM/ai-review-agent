@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { parseProbe, probeEnabled } from "../src/sandbox/probe.ts"
+import { parseProbe, probeEnabled, sandboxTokenScope } from "../src/sandbox/probe.ts"
 
 const key = { installationId: 1, owner: "o", repo: "r", number: 7 }
+
+describe("sandboxTokenScope", () => {
+  it("asks for a token that reads one repository's contents and nothing else, so sandboxed code can't push with it", () => {
+    expect(sandboxTokenScope(key)).toEqual({ repositories: ["r"], permissions: { contents: "read" } })
+  })
+})
 
 describe("probeEnabled", () => {
   it("is on only for the exact string true", () => {

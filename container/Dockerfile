@@ -8,4 +8,4 @@ RUN npm install --global pnpm@10.0.0
 
 WORKDIR /workspace
 
-CMD ["sleep", "infinity"]
+CMD ["sh", "-c", "while :; do sleep 3600 & wait; done"]

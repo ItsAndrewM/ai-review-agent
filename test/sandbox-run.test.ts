@@ -65,6 +65,15 @@ describe("parseResult", () => {
     expect(result.cut).toBe(true)
   })
 
+  it("keeps the decoded tail within the byte limit when replacement characters inflate it", () => {
+    const invalid = new Uint8Array(10).fill(0xff)
+    const result = parseResult(new Uint8Array([...bytes("0\n10\n"), ...invalid]), 10)
+    expect(result.outcome).toBe("exited")
+    expect(new TextEncoder().encode(result.tail).length).toBeLessThanOrEqual(10)
+    expect(result.tail).toContain("�")
+    expect(result.cut).toBe(true)
+  })
+
   it("reads an empty output", () => {
     expect(parseResult(bytes("0\n0\n"), 8192)).toEqual({ outcome: "exited", exitCode: 0, tail: "", cut: false })
   })

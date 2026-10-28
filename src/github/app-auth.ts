@@ -21,19 +21,32 @@ export async function createAppJwt(appId: string, privateKeyPem: string, now = D
   return `${signingInput}.${base64Url(signature)}`
 }
 
+export interface TokenScope {
+  readonly repositories: readonly string[]
+  readonly permissions: Readonly<Record<string, "read" | "write">>
+}
+
+export function tokenRequestBody(scope: TokenScope | undefined): string | undefined {
+  return scope === undefined ? undefined : JSON.stringify(scope)
+}
+
 export async function fetchInstallationToken(
   jwt: string,
   installationId: number,
+  scope?: TokenScope,
   apiBase = "https://api.github.com",
 ): Promise<InstallationToken> {
+  const body = tokenRequestBody(scope)
   const response = await fetch(`${apiBase}/app/installations/${installationId}/access_tokens`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
       accept: "application/vnd.github+json",
+      "content-type": "application/json",
       "x-github-api-version": "2022-11-28",
       "user-agent": "andabot",
     },
+    body: body ?? null,
   })
   if (!response.ok) {
     throw new Error(`installation token: ${response.status} ${await response.text()}`)

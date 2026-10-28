@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
-import { createAppJwt, fetchInstallationToken } from "../github/app-auth.ts"
+import { createAppJwt, fetchInstallationToken, type TokenScope } from "../github/app-auth.ts"
 import { verifyWebhookSignature } from "../github/webhook.ts"
 import { log } from "../log.ts"
 import { PullRequestKey } from "../records.ts"
@@ -21,6 +21,10 @@ export const ProbeRequest = Type.Object(
 )
 
 export type ProbeRequest = Static<typeof ProbeRequest>
+
+export function sandboxTokenScope(key: PullRequestKey): TokenScope {
+  return { repositories: [key.repo], permissions: { contents: "read" } }
+}
 
 export function probeEnabled(value: string | undefined): boolean {
   return value === "true"
@@ -55,7 +59,7 @@ export async function serveProbe(request: Request, env: Env): Promise<Response> 
     return Response.json({ destroyed: true })
   }
   const jwt = await createAppJwt(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY)
-  const token = await fetchInstallationToken(jwt, probe.key.installationId)
+  const token = await fetchInstallationToken(jwt, probe.key.installationId, sandboxTokenScope(probe.key))
   await sandbox.start(token.token)
   const outcome = await sandbox.run(probe.command ?? [], {
     cwd: probe.cwd ?? "/workspace",

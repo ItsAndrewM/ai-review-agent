@@ -59,11 +59,19 @@ export type RunOutcome =
 export function parseResult(output: Uint8Array, tailBytes: number): RunOutcome {
   const [exitLine, rest] = splitLine(output)
   const [sizeLine, tailBytesOut] = splitLine(rest)
-  const tail = new TextDecoder().decode(tailBytesOut)
-  const cut = Number(sizeLine) > tailBytes
+  const fitted = fitTail(new TextDecoder().decode(tailBytesOut), tailBytes)
+  const tail = fitted.tail
+  const cut = fitted.cut || Number(sizeLine) > tailBytes
   if (exitLine === "none") return { outcome: "timeout", tail, cut }
   if (!/^\d+$/.test(exitLine)) throw new Error(`sandbox result unreadable: ${JSON.stringify(exitLine)}`)
   return { outcome: "exited", exitCode: Number(exitLine), tail, cut }
+}
+
+function fitTail(decoded: string, tailBytes: number) {
+  const encoded = new TextEncoder().encode(decoded)
+  if (encoded.length <= tailBytes) return { tail: decoded, cut: false }
+  const tail = new TextDecoder().decode(encoded.subarray(encoded.length - tailBytes)).replace(/^�/, "")
+  return { tail, cut: true }
 }
 
 function splitLine(bytes: Uint8Array): [string, Uint8Array] {

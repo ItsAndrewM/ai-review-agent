@@ -100,7 +100,9 @@ export class ReviewSandbox extends DurableObject<Env> {
   async #waitOrKill(exit: Promise<number>, timeoutMs: number, dir: string): Promise<boolean> {
     if (await settles(exit, timeoutMs)) return true
     await this.#kill(dir, "TERM")
-    if (!(await settles(exit, KILL_GRACE_MS))) await this.#kill(dir, "KILL")
+    await settles(exit, KILL_GRACE_MS)
+    await this.#kill(dir, "KILL")
+    await settles(exit, KILL_GRACE_MS)
     return false
   }
 
