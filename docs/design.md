@@ -363,7 +363,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
    - **Slice 1: the review procedure as skills.** The review and answer skills, bundled and activated by the host; a system prompt of identity and tools; the model and the skill fingerprint in the summary footer, the logs and the posted review's record (#11).
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
    - **Slice 3: repository context.** The repository's instruction files as standards (#29), `.andabot.yaml` (#28) and its own skills through the catalog (#75), measured on the fixtures #68, #72 and #77; its follow-ups (#78 to #81, #83, #100, #103) are closed.
-   - **Verify pass.** A second pass over each blocking finding and suggestion before it posts, in a session of its own with `read_file`, `grep` and `tree` (#31). Built, but off after neither model cleared the replay bar; the 24 Oct measurement is recorded under "Verify".
+   - **Verify pass.** A second pass over each blocking finding and suggestion before it posts, in a session of its own with `read_file`, `grep` and `tree` (#31). Built, but off after neither model cleared the replay bar; the 24 Oct measurement is recorded under "Verify", and #129 tracks turning it on.
 3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
 4. **Extras.** Sequence diagram, docstrings, unit test generation.
 
