@@ -18,8 +18,10 @@ mkdir -p "$dir"
 setsid sh -c 'echo "$$" >"$0/pid"; exec "$@"' "$dir" "$@" >"$dir/output" 2>&1
 echo "$?" >"$dir/exit-code.tmp" && mv "$dir/exit-code.tmp" "$dir/exit-code"`
 
-const KILL_SCRIPT = `[ -f "$1/pid" ] || exit 0
-read -r pid <"$1/pid" && kill -TERM -- "-$pid"`
+const killScript = (signal: KillSignal) => `[ -f "$1/pid" ] || exit 0
+read -r pid <"$1/pid" && kill -${signal} -- "-$pid"`
+
+export type KillSignal = "TERM" | "KILL"
 
 const RESULT_SCRIPT = `cat "$1/exit-code" 2>/dev/null || echo none
 stat -c %s "$1/output" 2>/dev/null || echo 0
@@ -33,8 +35,8 @@ export function runArgv(dir: string, command: readonly string[]): string[] {
   return ["/bin/sh", "-c", RUN_SCRIPT, "andabot-run", dir, ...command]
 }
 
-export function killArgv(dir: string): string[] {
-  return ["/bin/sh", "-c", KILL_SCRIPT, "andabot-kill", dir]
+export function killArgv(dir: string, signal: KillSignal): string[] {
+  return ["/bin/sh", "-c", killScript(signal), "andabot-kill", dir]
 }
 
 export function resultArgv(dir: string, tailBytes: number): string[] {

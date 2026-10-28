@@ -4,6 +4,8 @@ import { objectName, routeWebhook, WebhookPayload } from "./route.ts"
 import { versionOf } from "./version.ts"
 
 export { PullRequest } from "./pull-request.ts"
+export { Outbound } from "./sandbox/outbound.ts"
+export { ReviewSandbox } from "./sandbox/review-sandbox.ts"
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

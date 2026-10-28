@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { parseResult, runArgv, tailBytesOf } from "../src/sandbox/run.ts"
+import { killArgv, parseResult, runArgv, tailBytesOf } from "../src/sandbox/run.ts"
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 
@@ -67,5 +67,14 @@ describe("parseResult", () => {
 
   it("reads an empty output", () => {
     expect(parseResult(bytes("0\n0\n"), 8192)).toEqual({ outcome: "exited", exitCode: 0, tail: "", cut: false })
+  })
+})
+
+describe("killArgv", () => {
+  it("sends the named signal to the run's process group, and nothing when the run never started", () => {
+    const term = killArgv("/workspace/runs/a", "TERM")[2] ?? ""
+    expect(term).toContain('kill -TERM -- "-$pid"')
+    expect(term).toContain('[ -f "$1/pid" ] || exit 0')
+    expect(killArgv("/workspace/runs/a", "KILL")[2]).toContain('kill -KILL -- "-$pid"')
   })
 })
