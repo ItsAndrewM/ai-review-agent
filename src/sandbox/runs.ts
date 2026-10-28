@@ -58,7 +58,7 @@ export type SandboxAccess =
   | { readonly kind: "spent"; readonly seconds: number; readonly budget: number }
   | { readonly kind: "unavailable"; readonly reason: UnavailableReason }
 
-export type SandboxEnd = "review_end" | "closed"
+export type SandboxEnd = "review_end" | "closed" | "new_head"
 
 export type AccessSummary =
   | { readonly kind: "ready"; readonly dir: string; readonly manager: Manager }
@@ -124,8 +124,8 @@ export class SandboxRuns {
   #spent(): SandboxAccess | undefined {
     const seconds = this.seconds()
     if (seconds === undefined || seconds < this.budgetSeconds) return undefined
-    if (!this.#spentLogged && this.#head) {
-      log("sandbox.spent", { number: this.#head.number, seconds, budget: this.budgetSeconds })
+    if (!this.#spentLogged) {
+      log("sandbox.spent", { number: this.#head?.number, seconds, budget: this.budgetSeconds })
       this.#spentLogged = true
     }
     return { kind: "spent", seconds, budget: this.budgetSeconds }
@@ -135,7 +135,7 @@ export class SandboxRuns {
     if (this.#head === undefined) return
     const now = await this.host.head().catch(() => undefined)
     if (now === undefined || now.sha === this.#head.sha) return
-    await this.#teardown("review_end")
+    await this.#teardown("new_head")
   }
 
   async #teardown(reason: SandboxEnd): Promise<void> {
