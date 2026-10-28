@@ -166,3 +166,33 @@ The probe gains `prepare`, which drives `SandboxRuns.access()` on the pull reque
 ### Logs
 
 `sandbox.checkout` (`number`, `sha`, `kib`, `ms`), `sandbox.install` (`number`, `manager`, `exitCode`, `ms`), `sandbox.failed` (`number`, `step`, `reason`), `sandbox.unavailable` (`number`, `reason`), `sandbox.spent` (`number`, `seconds`, `budget`), and `sandbox.destroy` gains `number` and `seconds`. `review.done` gains `sandboxSeconds` when the sandbox ran.
+
+## Slice 3, #133: `run_check(name, paths)`
+
+The tool the model calls, on top of slice 2's `SandboxRuns.access()`.
+
+### The tool
+
+`run_check(name, paths?)` is offered to the review's root session beside `grep` and `tree`, `replay: "unsafe"`. `name` is `lint`, `typecheck` or `test`. `paths` is an optional list of repository paths; each must match `^[A-Za-z0-9_@+./-]+$`, hold no `..` segment and not start with `/` or `-`, and must exist in the checkout, which one `test -e` run confirms before the command runs. The tool answers in text: the command's exit code and the last 8 KiB of its combined output, cut and marked when longer; `timeout` after `SANDBOX_CHECK_TIMEOUT` (300,000 ms by default); and a sentence when the sandbox is `off`, `spent` or `unavailable`, with the reason, so the model goes on without it.
+
+_Ruling:_ the tool is offered whether or not the tier is on, since the extension's tool list is fixed per object and the preamble can't read the base config; an `off` answer costs one call. The preamble names `run_check` beside the other tools.
+
+### Commands
+
+A `checks` map in `.andabot.yaml`, read at the base commit, gives each name a template with a `{paths}` slot, as the spec's Q2 says; the template is split on whitespace into argv and the slot becomes the paths, each its own argument, so the model's paths are never shell text. A template without the slot ignores paths. With no entry for the name, the host reads `package.json` at the base and picks a runner it knows, run through the manager slice 2 detected (`pnpm exec` or `npx --no-install`): `lint` → `oxlint {paths}` or `eslint {paths}`; `typecheck` → `tsc --noEmit`; `test` → `vitest run {paths}` or `jest {paths}`. A name with neither answers that the repository has no such check. Every check runs in `/workspace/repo` with `NO_COLOR=1`, `FORCE_COLOR=0` and `CI=1`, so the tail is plain text.
+
+### Runs
+
+A run is cached per head, name and paths for the length of the review: a repeated call answers the stored result and logs `check.cached`. One check runs at a time on a pull request. Each run counts against the sandbox budget through `access()`'s clock, and the review's neuron budget blocks the tool as it blocks every other past the budget.
+
+### The finding's reference
+
+A finding may carry `check: { name, paths?, exit_code }`. `validateFindings` takes the keys of the review's runs and rejects, as unfounded, a finding whose reference names a run that didn't happen or an exit code it didn't have, so a `defect` finding that rests on a failing test names a run that is on record. The summary's use of the reference is #134.
+
+### Logs
+
+`check.run` (`number`, `name`, `paths`, `outcome`, `exitCode`, `ms`, `bytes`, `cut`), `check.cached` (`number`, `name`, `paths`), `check.refused` (`number`, `name`, `reason`: `off`, `spent`, `unavailable`, `no_command`, `bad_path`, `missing_path`).
+
+### Access order
+
+`access()` answers from its memo before it asks whether the tier is on, since the second live-checked `prepare` spent 6.7 s in that check; the tier is read once per preparation.
