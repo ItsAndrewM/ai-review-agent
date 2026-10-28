@@ -353,7 +353,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 
 ## Tests
 
-`pnpm test` runs unit tests of the pure modules in Node, whose WebCrypto is the one the Worker uses, and `test/lint` checks that every folder gets the lint rules. Tests against the Durable Object itself are phase 2.
+`pnpm test` runs unit tests of the pure modules in Node, whose WebCrypto is the one the Worker uses, and `test/lint` checks that every folder gets the lint rules. Tests against the Durable Object itself aren't written yet.
 
 ## Phases
 
