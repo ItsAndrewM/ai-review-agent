@@ -38,6 +38,8 @@ pnpm run deploy                 # `pnpm run`, since pnpm has a built-in `deploy`
 scripts/set-secrets.sh ~/andabot-app.json
 ```
 
+`pnpm run deploy` and `pnpm dev` need Docker running: wrangler builds `container/Dockerfile`, the sandbox tier's image (#131), and uploads it with the Worker. CI needs none, since `pnpm check` builds no image.
+
 The Worker is at `https://andabot.dinocode.workers.dev`. `GET /health` answers `{"name":"andabot","ok":true}`; a webhook with a bad signature answers `401`, and a signed `ping` answers `200 {"ignored":"no installation or repository"}`. The App's **Advanced** tab lists every delivery and can redeliver one.
 
 Variables in `wrangler.jsonc`:
@@ -50,6 +52,7 @@ Variables in `wrangler.jsonc`:
 | `MAX_REVIEW_NEURONS` | `10000` | Neurons after which the model is told to submit; if it still hasn't three model requests later, the review fails. The request that crosses it and those three are spent past it. 10,000 is one day of Workers AI's free allowance. Anything but a positive whole number falls back to 10,000, and spend on a model without a price isn't counted. `review.budget_spent` and `review.budget_refused` log the two stops. |
 | `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. A repository's `.andabot.yaml` overrides it with `reviews.request_changes_workflow` (section 6). |
 | `VERIFY_MODEL` | empty | Workers AI model for the verify pass (#31), a second pass that keeps or drops each blocking finding and suggestion, and sets its severity, before a review posts. Empty turns verify off for every repository, whatever its `.andabot.yaml` says; it remains empty because neither model passed the [24 Oct replay](https://github.com/ItsAndrewM/ai-review-agent/issues/31#issuecomment-6389469628). Set it in `wrangler.jsonc`, or with `--var VERIFY_MODEL:<model id>` on deploy, to turn verify on after a model clears the bar; a repository's `model.verify` then overrides it and `reviews.verify: false` opts the repository out (section 6). A model id Workers AI doesn't serve fails verify, so each review posts unverified. A review that has reached `MAX_REVIEW_NEURONS` skips verify and posts unverified too, and verify's spend is in the cost line. |
+| `SANDBOX_PROBE` | `false` | `true` turns on `POST /sandbox-probe`, which drives a pull request's sandbox by hand for #131's live check (section 3). Set it with `--var SANDBOX_PROBE:true` on deploy, or in `.dev.vars`, never in `wrangler.jsonc`. It goes once `run_check` (#133) uses the sandbox. |
 
 ## 3. Local development
 
@@ -61,6 +64,14 @@ A webhook can also be replayed by hand. Sign the body with the secret and post i
 BODY='{"zen":"hi"}'
 SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | sed 's/^.* //')"
 curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-delivery: test-1" -H "x-hub-signature-256: $SIG" -d "$BODY"
+```
+
+**Probing the sandbox.** With `SANDBOX_PROBE=true` in `.dev.vars` (or `--var SANDBOX_PROBE:true` on a deploy), `POST /sandbox-probe` takes a body signed the same way: a pull request key, an `action` of `run` or `destroy`, and for a run the `command` as an argv array, with optional `cwd` (default `/workspace`), `timeoutMs` (default 60,000) and `tailBytes` (default 8 KiB, 50 KiB at most). A run starts the pull request's sandbox with its installation token, runs the command and answers `{ outcome: "exited", exitCode, tail, cut }` or `{ outcome: "timeout", tail, cut }`; a destroy stops the container. The sandbox reaches only `github.com` and `registry.npmjs.org`, over HTTPS; a `fetch` to any other host from inside answers 403.
+
+```sh
+BODY='{"key":{"installationId":1,"owner":"ItsAndrewM","repo":"ai-review-agent","number":1},"action":"run","command":["node","--version"]}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | sed 's/^.* //')"
+curl -s -X POST localhost:8787/sandbox-probe -H "x-hub-signature-256: $SIG" -d "$BODY"
 ```
 
 ## 4. What happens on a pull request

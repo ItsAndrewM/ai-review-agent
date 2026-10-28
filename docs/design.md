@@ -30,7 +30,7 @@ GitHub ──webhook──▶ Worker (router)
             │     tools: pr, diff, read_file, tree, grep
             │     hooks: validate findings against diff hunks before posting
             ├─ Snapshot: the head's text files in SQLite, searched by grep and tree
-            └─ Sandbox (Containers, later): lint, typecheck, tests on the head
+            └─ ReviewSandbox (Containers, #131): a command on the head, egress through Outbound
                       │
                       ▼
             GitHub REST: reviews, review comments, issue comments, checks
@@ -116,7 +116,7 @@ Tools offered to the model, all read only and `replay: "safe"` except `tree` and
 | `get_issue(number)` | `GET /issues/{n}`: title, state and full body |
 | `tree(path, depth)` | the head's snapshot |
 | `grep(pattern, glob, path)` | the head's snapshot |
-| `run_check(name)` | phase 3: Sandbox runs lint, typecheck or tests, returns the tail |
+| `run_check(name, paths)` | phase 3 (#133): the sandbox runs a repository's lint, typecheck or test command on the named paths and returns the exit code and the tail |
 
 Posting is not a model tool. The model fills a structured findings document, defined with Pi Durable's `defineDoc`, and host code validates each finding against the diff hunks before anything reaches GitHub: the path must be in the PR, the line must be in a hunk on the right side and hold the text the finding quotes, severity must be one of the known values, and a suggestion must be a replacement for the lines it names. A finding that fails validation goes back to the model once, then is dropped and logged. This is the same shape the Agents docs recommend: the model proposes, your code decides.
 
@@ -335,7 +335,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 
 1. **API only.** PR files and patches, file contents at a ref, trees, code search. Enough for diff review. Phase 1.
 2. **Tarball snapshot, no container.** The head commit's text files, streamed from GitHub's tarball into the object's SQLite, so `grep` and `tree` work without a container (#30). Phase 2.
-3. **Sandbox.** A Container per review run, started from the PR object with the Durable Object scheduling policy, outbound HTTP intercepted so it reaches only `github.com` and the model gateway, a one-minute alarm that keeps it alive while a check runs, and a 30-minute inactivity timeout. Runs lint, typecheck and the test suite on the head and feeds the tail to the verify pass. Phase 3.
+3. **Sandbox.** A `ReviewSandbox` Durable Object per pull request, a class of its own on the runtime's `ctx.container` under the `durable_object` scheduling policy, so the object picks the image (`container/Dockerfile`: Node 22, pnpm 10, git) and the instance (`standard-1`) when it starts, with `enableInternet` off and a 30-minute inactivity timeout as the backstop. Every HTTP and HTTPS request the container makes goes through the `Outbound` entrypoint, whose allowlist is `github.com`, where it adds the installation token it holds as props (`Basic` with the user `x-access-token`, dropping any `Authorization` the container sent), and `registry.npmjs.org`; plain HTTP and any other host get a 403, and the container trusts the interception CA through the environment of every command (`NODE_EXTRA_CA_CERTS`, `GIT_SSL_CAINFO`, `CURL_CA_BUNDLE`, `SSL_CERT_FILE`). A command is an argv array, never a shell string, run under a wrapper that puts it in its own process group and writes its output and exit code to files, so a timeout sends the group `TERM`, then `KILL` five seconds later, and the result is read with one more command: the exit code, the output's size and its last `tailBytes` (8 KiB by default, 50 KiB at most, Pi Durable's tool-result cap), with `cut` when the output was longer. A run the object killed is reported as `timeout` whatever the wrapper recorded. The logs are `sandbox.start` (`started`, whether this call started the container, and `ms`), `sandbox.run` (`command`, the argv's first word, `outcome`, `exitCode`, `ms`, `bytes` and `cut`), `sandbox.destroy` and `sandbox.probe`. Under the `durable_object` policy wrangler rejects `max_instances`, so the cap of three running containers is a lease the host hands out (#132). Until `run_check` exists, `POST /sandbox-probe`, on only while `SANDBOX_PROBE` is `true` and signed like a delivery, drives a sandbox by hand (`docs/setup.md`). The design of the phase is `docs/superpowers/specs/2026-10-28-sandbox-design.md`: targeted runs the model picks (#133), the checkout and the lifetime (#132), the summary and the cost line (#134), the measurement (#135). Phase 3, #131 shipped.
 
 ## Package pins (as of 17 Oct 2026)
 
@@ -345,11 +345,12 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
 | `@earendil-works/pi-durable` | 1.3.0 | the harness |
 | `@earendil-works/pi-ai` | 1.3.0 | model provider interface |
 | `@earendil-works/chord` | 1.3.0 | contexts and documents, peer of pi-durable |
-| `@cloudflare/sandbox` | 1.0.1 | Containers tier |
-| `wrangler` | 4.151.1 | |
+| `wrangler` | 4.151.1 | builds and uploads the sandbox image with the Worker |
 | `re2js` | 2.9.0 | linear-time regular expressions for `grep` |
 | `@octokit/webhooks-methods` | 6.0.0 | HMAC verification (WebCrypto) |
 | `@octokit/auth-app` | 8.3.1 | App JWT and installation tokens, or a hand-rolled RS256 if the dependency is heavy on Workers |
+
+The sandbox tier uses the runtime's `ctx.container` API alone, not `@cloudflare/sandbox`, which the table pinned at 1.0.1 until #131: `exec` returns the exit code and both streams, and the package's `Files` only streams files through a shim the image would have to carry.
 
 ## Tests
 
@@ -364,7 +365,7 @@ The Pi AI provider's `fallback` option gives a chain per model, but only on a mo
    - **Slice 2: basis, coverage and the spec axis.** Basis, merge danger, walkthrough coverage, the submit loop's outcome type and linked issues, on top of the anchors #12 shipped for #4.
    - **Slice 3: repository context.** The repository's instruction files as standards (#29), `.andabot.yaml` (#28) and its own skills through the catalog (#75), measured on the fixtures #68, #72 and #77; its follow-ups (#78 to #81, #83, #100, #103) are closed.
    - **Verify pass.** A second pass over each blocking finding and suggestion before it posts, in a session of its own with `read_file`, `grep` and `tree` (#31). Built, but off after neither model cleared the replay bar; the 24 Oct measurement is recorded under "Verify".
-3. **Sandbox tier.** Container image, lint, typecheck and tests on the head, results into the verify pass.
+3. **Sandbox tier.** Targeted checks the model picks, run on the head in a container (`docs/superpowers/specs/2026-10-28-sandbox-design.md`): the image, the `ReviewSandbox` object and the outbound allowlist (#131, shipped); the checkout, the install, the lifetime and the lease (#132); `run_check(name, paths)` (#133); the summary's Checks line and the cost line (#134); the measurement and the abuse ceiling (#135). Verify's use of the results waits on #129.
 4. **Extras.** Sequence diagram, docstrings, unit test generation.
 
 ## Open questions
