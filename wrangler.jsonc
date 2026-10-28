@@ -46,11 +46,13 @@
     // repository's .andabot.yaml says, and stays empty until #31's measurement
     // picks a default.
     "VERIFY_MODEL": "",
-    // "true" turns on POST /sandbox-probe, which drives a sandbox by hand
-    // for #131's live check: signed with the webhook secret like a delivery,
-    // it starts a pull request's sandbox, runs one command and answers the
-    // outcome. Set it with `wrangler deploy --var SANDBOX_PROBE:true` or in
-    // .dev.vars, never here. It goes once run_check (#133) uses the sandbox.
+    // Off by default. "true" turns on POST /sandbox-probe, which drives a
+    // sandbox by hand for #131's live check: signed with the webhook secret
+    // like a delivery, it starts a pull request's sandbox, runs one command
+    // and answers the outcome. Turn it on for one deploy with
+    // `wrangler deploy --var SANDBOX_PROBE:true`, or locally in .dev.vars,
+    // and leave this default alone. It goes once run_check (#133) uses the
+    // sandbox.
     "SANDBOX_PROBE": "false",
   },
   // Secrets, set with `wrangler secret put <NAME>` or in .dev.vars locally:

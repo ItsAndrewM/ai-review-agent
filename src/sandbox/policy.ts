@@ -8,8 +8,8 @@ export type OutboundDecision =
 
 export function decideOutbound(url: URL, token: string | undefined): OutboundDecision {
   if (url.protocol !== "https:") return { kind: "refuse", reason: `${url.hostname} is reachable only over HTTPS` }
-  if (!ALLOWED_HOSTS.some((host) => host === url.hostname)) {
-    return { kind: "refuse", reason: `${url.hostname} is not reachable from this sandbox` }
+  if (url.port !== "" || !ALLOWED_HOSTS.some((host) => host === url.hostname)) {
+    return { kind: "refuse", reason: `${url.host} is not reachable from this sandbox` }
   }
   const authorization = url.hostname === TOKEN_HOST && token !== undefined ? basicAccessToken(token) : undefined
   return { kind: "forward", authorization }

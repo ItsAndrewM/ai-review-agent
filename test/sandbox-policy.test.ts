@@ -46,6 +46,14 @@ describe("decideOutbound", () => {
     })
   })
 
+  it("refuses a port other than 443, which the platform never routes to the handler but the policy refuses all the same", () => {
+    expect(decideOutbound(new URL("https://github.com:8443/"), "tok")).toEqual({
+      kind: "refuse",
+      reason: "github.com:8443 is not reachable from this sandbox",
+    })
+    expect(decideOutbound(new URL("https://github.com:443/"), "tok").kind).toBe("forward")
+  })
+
   it("matches the host exactly, so a subdomain of github.com is off the allowlist", () => {
     expect(decideOutbound(new URL("https://api.github.com/"), "tok")).toEqual({
       kind: "refuse",
