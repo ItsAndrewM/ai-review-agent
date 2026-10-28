@@ -1496,3 +1496,31 @@ describe("incompleteNote", () => {
     )
   })
 })
+
+describe("a finding's check reference", () => {
+  const CHECK_NOT_RUN = "check names a run that didn't happen: run_check first and copy its answer"
+  const known = new Map([["test:test/x.test.ts", 1]])
+  const withCheck = (exit_code: number) => finding({ check: { name: "test", paths: ["test/x.test.ts"], exit_code } })
+
+  it("accepts a finding whose check names a run the review made, with its exit code", () => {
+    const result = validateFindings([withCheck(1)], commentable, true, known)
+    expect(result.accepted).toHaveLength(1)
+    expect(result.accepted[0]?.check).toEqual({ name: "test", paths: ["test/x.test.ts"], exit_code: 1 })
+  })
+
+  it("rejects, as unfounded, a check that didn't run or an exit code the run didn't have", () => {
+    const unknown = validateFindings([finding({ check: { name: "lint", exit_code: 1 } })], commentable, true, known)
+    expect(unknown.rejected.map((r) => [r.reason, r.unfounded])).toEqual([[CHECK_NOT_RUN, true]])
+    const wrongCode = validateFindings([withCheck(0)], commentable, true, known)
+    expect(wrongCode.rejected.map((r) => r.reason)).toEqual([CHECK_NOT_RUN])
+    expect(validateFindings([withCheck(1)], commentable, true).rejected.map((r) => r.reason)).toEqual([CHECK_NOT_RUN])
+  })
+
+  it("leaves a finding without a check alone, and the schema refuses a check it can't read", () => {
+    expect(validateFindings([finding()], commentable, true, known).accepted).toHaveLength(1)
+    const submission: unknown = JSON.parse(
+      JSON.stringify({ ...base, findings: [{ ...finding(), check: { name: "build", exit_code: 1 } }] }),
+    )
+    expect(Value.Check(ReviewSubmission, submission)).toBe(false)
+  })
+})
