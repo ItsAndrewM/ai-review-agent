@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  accessRefusal,
   argvFromTemplate,
   CHECK_ENV,
   checkKey,
@@ -8,6 +9,7 @@ import {
   DEFAULT_CHECK_TIMEOUT_MS,
   existsArgv,
   fallbackArgv,
+  knownChecksOf,
   MAX_CHECK_PATHS,
   missingPath,
   pathProblem,
@@ -145,5 +147,29 @@ describe("checkText and refusalText", () => {
 describe("CHECK_ENV", () => {
   it("turns colour off and says it's CI", () => {
     expect(CHECK_ENV).toEqual({ NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" })
+  })
+})
+
+describe("accessRefusal and knownChecksOf", () => {
+  it("turns a sandbox access that isn't ready into the tool's refusal", () => {
+    expect(accessRefusal({ kind: "off" })).toEqual({ kind: "off" })
+    expect(accessRefusal({ kind: "spent", seconds: 901, budget: 900 })).toEqual({
+      kind: "spent",
+      seconds: 901,
+      budget: 900,
+    })
+    expect(accessRefusal({ kind: "unavailable", reason: "install" })).toEqual({
+      kind: "unavailable",
+      reason: "install",
+    })
+  })
+
+  it("maps the head's exited runs to the keys a finding's check uses, leaving other heads and timeouts out", () => {
+    const runs = new Map([
+      [checkKey("abc", "test", ["a.ts"]), { name: "test", paths: ["a.ts"], outcome: exited(1, ""), ms: 1 }],
+      [checkKey("abc", "lint", []), { name: "lint", paths: [], outcome: timedOut, ms: 1 }],
+      [checkKey("old", "test", ["a.ts"]), { name: "test", paths: ["a.ts"], outcome: exited(0, ""), ms: 1 }],
+    ] as const)
+    expect(knownChecksOf(runs, "abc")).toEqual(new Map([["test:a.ts", 1]]))
   })
 })

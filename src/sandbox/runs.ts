@@ -12,8 +12,7 @@ import {
   STEP_TIMEOUT_MS,
   type Manager,
 } from "./checkout.ts"
-import type { RunOptions } from "./review-sandbox.ts"
-import type { RunOutcome } from "./run.ts"
+import type { RunOptions, RunOutcome } from "./run.ts"
 
 export const DEFAULT_SANDBOX_SECONDS = 900
 
@@ -103,11 +102,12 @@ export class SandboxRuns {
   }
 
   async access(): Promise<SandboxAccess> {
-    if (!(await this.host.enabled())) return { kind: "off" }
     await this.#forgetOtherHead()
     const spent = this.#spent()
     if (spent) return spent
     if (this.#settled) return this.#settled
+    if (this.#preparing) return this.#preparing
+    if (!(await this.host.enabled())) return { kind: "off" }
     this.#preparing ??= this.#prepare()
     return this.#preparing
   }

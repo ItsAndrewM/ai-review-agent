@@ -15,7 +15,7 @@ A list headed `Available skills` in your prompt names the repository's own skill
 
 ## 2. Examine each changed file in turn
 
-Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question. When a change alters a function's signature, an export or a type that other code uses, `grep` for its callers and read them before judging. Run four checks on each hunk:
+Take the files in the diff's order and read every hunk. Call `read_file` when a hunk alone cannot settle a question. When a change alters a function's signature, an export or a type that other code uses, `grep` for its callers and read them before judging. When the repository has a sandbox, `run_check` runs its lint, typecheck or test on the paths you name: use it to confirm a failure you believe the change causes, on the test file or package it touches, never the whole suite, and name the run in the finding's `check`. Run four checks on each hunk:
 
 - **Defects**: logic errors, broken edge cases, ordering and concurrency, security, swallowed errors, data loss, and behaviour against the stated intent. A suspicion is a defect once you can state its failure scenario. Before writing a failure scenario that depends on another function, read that function.
 - **Spec**: what the linked issues ask for. A departure is a spec finding once you can name the issue line it rests on; that line is the finding's `basis`, and `quote` stays the diff line. When the prompt says no issue is linked, this check passes: requirements come only from linked issues.

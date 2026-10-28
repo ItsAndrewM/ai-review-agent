@@ -3,6 +3,7 @@ import { Value } from "typebox/value"
 import type { Manager } from "./checkout.ts"
 import { lastLine } from "./checkout.ts"
 import type { RunOutcome } from "./run.ts"
+import type { SandboxAccess } from "./runs.ts"
 
 export const CHECK_NAMES = ["lint", "typecheck", "test"] as const
 
@@ -98,6 +99,19 @@ function dependencyNames(packageJson: string | undefined): Set<string> {
 
 export function checkKey(sha: string, name: CheckName, paths: readonly string[]): string {
   return `${sha}:${name}:${paths.join(" ")}`
+}
+
+export function knownChecksOf(runs: ReadonlyMap<string, CheckRun>, sha: string): Map<string, number> {
+  const known = new Map<string, number>()
+  for (const [key, run] of runs) {
+    if (!key.startsWith(`${sha}:`) || run.outcome.outcome !== "exited") continue
+    known.set(`${run.name}:${run.paths.join(" ")}`, run.outcome.exitCode)
+  }
+  return known
+}
+
+export function accessRefusal(access: Exclude<SandboxAccess, { kind: "ready" }>): CheckRefusal {
+  return access
 }
 
 export function existsArgv(paths: readonly string[]): string[] {

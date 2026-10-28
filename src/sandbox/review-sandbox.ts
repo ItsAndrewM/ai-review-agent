@@ -10,6 +10,7 @@ import {
   tailBytesOf,
   TRUST_ENV,
   type KillSignal,
+  type RunOptions,
   type RunOutcome,
 } from "./run.ts"
 
@@ -20,13 +21,6 @@ export const INACTIVITY_TIMEOUT_MS = 30 * 60_000
 const KILL_GRACE_MS = 5_000
 
 const AWAKE_ALARM_MS = 60_000
-
-export interface RunOptions {
-  readonly cwd: string
-  readonly env?: Record<string, string>
-  readonly timeoutMs: number
-  readonly tailBytes?: number | undefined
-}
 
 export class ReviewSandbox extends DurableObject<Env> {
   readonly #container: Container

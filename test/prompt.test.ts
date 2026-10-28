@@ -228,9 +228,9 @@ describe("fullPrompt", () => {
 })
 
 describe("systemPrompt", () => {
-  const SIX = ["read_file", "grep", "tree", "list_changed_files", "get_issue", "submit_review"]
+  const SIX = ["read_file", "grep", "tree", "list_changed_files", "get_issue", "run_check", "submit_review"]
   const WITH_CATALOG = [...SIX, "activate_skill", "read_skill_resource"]
-  const MAX_PREAMBLE_LENGTH = 900
+  const MAX_PREAMBLE_LENGTH = 1000
   const CATALOG_SENTENCE =
     "activate_skill opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files."
 
@@ -241,6 +241,7 @@ describe("systemPrompt", () => {
     expect(text).toContain("grep searches the head's files by regular expression; tree lists its directories")
     expect(text).toContain("list_changed_files")
     expect(text).toContain("get_issue reads an issue of the repository by number")
+    expect(text).toContain("run_check runs the repository's lint, typecheck or test on named paths in a sandbox")
     expect(text).toContain("submit_review")
     expect(text).not.toContain("activate_skill")
     expect(text).not.toContain("read_skill_resource")
