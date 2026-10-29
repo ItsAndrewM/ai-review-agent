@@ -38,6 +38,14 @@
     // tool but submit_review is blocked. 10,000 is one day of Workers AI's
     // free allowance. A model without a price counts for nothing.
     "MAX_REVIEW_NEURONS": "10000",
+    // The sandbox tier (#132): "true" lets a review start a container on
+    // its first run_check call. Off until #135's measurement sets the
+    // default; a repository can opt out with reviews.sandbox: false.
+    "SANDBOX": "false",
+    // Wall seconds a review may spend in its sandbox, checkout and install
+    // included, after which run_check answers that the budget is spent.
+    // Separate from MAX_REVIEW_NEURONS: the sandbox costs instance time.
+    "MAX_SANDBOX_SECONDS": "900",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",
@@ -63,11 +71,13 @@
     "bindings": [
       { "name": "PULL_REQUEST", "class_name": "PullRequest" },
       { "name": "REVIEW_SANDBOX", "class_name": "ReviewSandbox" },
+      { "name": "SANDBOX_LEASES", "class_name": "SandboxLeases" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PullRequest"] },
     { "tag": "v2", "new_sqlite_classes": ["ReviewSandbox"] },
+    { "tag": "v3", "new_sqlite_classes": ["SandboxLeases"] },
   ],
   // The sandbox tier's container (#131). The build context is the container
   // folder alone, so node_modules never enters the image build. Under the

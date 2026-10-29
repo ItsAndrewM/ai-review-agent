@@ -134,3 +134,35 @@ Pure modules, no container: the policy's decisions (allowed host, other host, HT
 ### Docs
 
 `docs/setup.md`: `pnpm run deploy` needs Docker running, since `wrangler deploy` builds the image; CI is unchanged. `docs/design.md`: the package table row, the execution tiers' phase 3 sentence, and the sandbox events. The README status line waits for the slice that turns the tier on.
+
+## Slice 2, #132: checkout, install, lifetime, lease
+
+What #131's live check settled is carried in: the kill signal's form, a PID 1 that reaps, a token minted for the sandbox alone with `contents: read` on the reviewed repository, redirects handed back to the container, and `max_instances` being unavailable under the `durable_object` policy.
+
+### Access
+
+`SandboxRuns`, beside `SnapshotRuns`, is the host's view of the sandbox for one pull request: `start()` and `end()` bracket a review as the snapshot's do, and `access()` is what `run_check` (#133) calls. On the first call it takes a lease, mints the scoped token, starts the container, checks out the head and installs, and answers `ready` with the sandbox stub and the repository directory; a later call answers from memory; a failure answers `unavailable` with its reason for the rest of the review (`head`, `lease`, `start`, `checkout`, `install`), whether the step reported a failure or threw, and a spent budget answers `spent`. The runs count the reviews active on the object, as the snapshot's do: a replaced review's end destroys nothing while its replacement is active, a `closed` event destroys only when no review is active, and a call for a head other than the one prepared ends the old sandbox first. The tier is off when the Worker var `SANDBOX` isn't `true` or the base's `.andabot.yaml` sets `reviews.sandbox: false`.
+
+### Checkout and install
+
+The checkout fetches the head commit by its sha, shallow, into `/workspace/repo`: GitHub serves a reachable commit by sha, which covers a fork's head through the base repository without naming a ref that may have moved since the review started. The script fails if `HEAD` after checkout isn't the sha. The working tree is capped at 512 MiB (`du -sk` after the fetch); over the cap, the sandbox is destroyed and the review goes on without it.
+
+The install detects the package manager from the lockfile in the checkout: `pnpm-lock.yaml` runs `pnpm install --frozen-lockfile --ignore-scripts`, `package-lock.json` runs `npm ci --ignore-scripts`. A repository with no lockfile gets no install and the checks run against what is there. _Builder's call:_ `yarn.lock` is treated as no install, since the image carries pnpm and npm only; a repository on yarn is a follow-up with the image change it needs. Checkout and install each get a timeout of 5 minutes, and all of it counts against the review's sandbox budget.
+
+### Lifetime and lease
+
+The review that started the sandbox destroys it in the same `finally` that ends the snapshot run, and a closed pull request destroys it too. A newer head that replaces a review ends through the same path when the replaced review exits. On the container object, every `run` sets a one-minute alarm that reschedules itself while a run is in flight and clears when none is, so a container doing work is never idle to the platform.
+
+`SandboxLeases` is one Durable Object instance, named `leases`, that caps the running sandboxes at three across every pull request: `acquire(holder, ttlMs)` grants a slot when fewer than three live leases exist, dropping expired ones first, and `release(holder)` frees it. The ttl is the sandbox budget plus a two-minute grace, so a review that dies holding a lease frees its slot on its own. The decisions are a pure module; the object stores the map.
+
+### Budget
+
+`MAX_SANDBOX_SECONDS`, 900 by default, parsed as the other vars are: wall time since the sandbox's first call. Past it, `access()` answers `spent`, which `run_check` turns into its answer that the sandbox budget is spent.
+
+### Probe
+
+The probe gains `prepare`, which drives `SandboxRuns.access()` on the pull request object, so the live check exercises the real path: the lease, the scoped token, the checkout and the install, with their timings in the logs. The review that follows a push then destroys the sandbox at its end, which is the lifetime's live evidence.
+
+### Logs
+
+`sandbox.checkout` (`number`, `sha`, `kib`, `ms`), `sandbox.install` (`number`, `manager`, `exitCode`, `ms`), `sandbox.failed` (`number`, `step`, `reason`), `sandbox.unavailable` (`number`, `reason`), `sandbox.spent` (`number`, `seconds`, `budget`), and `sandbox.destroy` gains `number` and `seconds`. `review.done` gains `sandboxSeconds` when the sandbox ran.

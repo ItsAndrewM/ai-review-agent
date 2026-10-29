@@ -40,6 +40,7 @@ const FULL_FILE = [
   "    - '[skip review]'",
   "  request_changes_workflow: true",
   "  verify: false",
+  "  sandbox: false",
   "  path_filters:",
   "    - '!**/*.snap'",
   "    - '!pnpm-lock.yaml'",
@@ -64,6 +65,7 @@ const FULL_CONFIG = {
     ignore_title_keywords: ["WIP", "[skip review]"],
     request_changes_workflow: true,
     verify: false,
+    sandbox: false,
     path_filters: ["!**/*.snap", "!pnpm-lock.yaml"],
     path_instructions: [
       { path: "apps/web/**", instructions: "Use the design tokens, not raw colors." },
@@ -80,6 +82,7 @@ const LITERAL_DEFAULTS = {
     base_branches: [],
     ignore_title_keywords: [],
     verify: true,
+    sandbox: true,
     path_filters: [],
     path_instructions: [],
   },
@@ -119,7 +122,7 @@ const failOnUnreadable = (error: string): void => {
 const served = (body: string) => () => new Response(body, { status: 200 })
 
 describe("DEFAULT_CONFIG", () => {
-  it("reviews on every push, waits on drafts, restricts no base branch, ignores no title, filters no path, adds no instructions and verifies", () => {
+  it("reviews on every push, waits on drafts, restricts no base branch, ignores no title, filters no path, adds no instructions, verifies and allows the sandbox", () => {
     expect(DEFAULT_CONFIG).toEqual(LITERAL_DEFAULTS)
   })
 
@@ -181,6 +184,7 @@ describe("parseConfig", () => {
           base_branches: [],
           ignore_title_keywords: [],
           verify: true,
+          sandbox: true,
           path_filters: ["!**/*.snap"],
           path_instructions: [],
         },

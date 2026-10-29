@@ -11,7 +11,7 @@ const DEFAULT_PROBE_TIMEOUT_MS = 60_000
 export const ProbeRequest = Type.Object(
   {
     key: PullRequestKey,
-    action: Type.Union([Type.Literal("run"), Type.Literal("destroy")]),
+    action: Type.Union([Type.Literal("run"), Type.Literal("destroy"), Type.Literal("prepare")]),
     command: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
     cwd: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
@@ -53,6 +53,9 @@ export async function serveProbe(request: Request, env: Env): Promise<Response> 
   const probe = parseProbe(body)
   if (probe === undefined) return new Response("Bad probe", { status: 400 })
   log("sandbox.probe", { action: probe.action, number: probe.key.number })
+  if (probe.action === "prepare") {
+    return Response.json(await env.PULL_REQUEST.getByName(objectName(probe.key)).prepareSandbox(probe.key))
+  }
   const sandbox = env.REVIEW_SANDBOX.getByName(objectName(probe.key))
   if (probe.action === "destroy") {
     await sandbox.destroy()
