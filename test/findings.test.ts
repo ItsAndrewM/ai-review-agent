@@ -27,6 +27,7 @@ import {
   reviewEventOf,
   SUMMARY_MARKER,
   withApprovedVerdict,
+  type ChecksDisplay,
   type VerifyDisplay,
 } from "../src/review/render.ts"
 import type { Changed, VerifyReport } from "../src/review/verify.ts"
@@ -916,6 +917,7 @@ describe("renderSummaryComment", () => {
     instructionFiles?: string[]
     configError?: string
     verify?: VerifyDisplay
+    checks?: ChecksDisplay
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -1494,6 +1496,97 @@ describe("incompleteNote", () => {
     expect(incompleteNote(twelve)).toBe(
       "_The review did not complete: no walkthrough row for `a`, `b`, `c`, `d`, `e`, `f`, `g`, `h`, `i`, `j` and 2 more._",
     )
+  })
+})
+
+describe("the Checks line", () => {
+  const run = (over: Partial<ChecksDisplay["runs"][number]> = {}): ChecksDisplay["runs"][number] => ({
+    name: "test",
+    paths: ["test/x.test.ts"],
+    outcome: "exited",
+    exitCode: 0,
+    ms: 3_100,
+    tail: "",
+    ...over,
+  })
+  const summary = (checks: ChecksDisplay) =>
+    renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "COMMENT",
+      submission: { ...base, walkthrough: [{ path: "src/x.ts", summary: "b" }], verdict: "comment" },
+      accepted: [],
+      droppedCount: 1,
+      linkedIssues: [],
+      instructionFiles: [],
+      checks,
+    })
+
+  it("says none, off, spent, or the step that failed, when no check ran", () => {
+    expect(summary({ status: "none", runs: [] })).toContain("**Checks:** none")
+    expect(summary({ status: "off", runs: [] })).toContain("**Checks:** off")
+    expect(summary({ status: "spent", runs: [] })).toContain("**Checks:** spent")
+    expect(summary({ status: "unavailable", reason: "install", runs: [] })).toContain(
+      "**Checks:** unavailable (install failed)",
+    )
+    expect(summary({ status: "ready", runs: [] })).toContain("**Checks:** none")
+  })
+
+  it("lists each run with how it ended and its seconds, and sits after the dropped line and before Verify", () => {
+    const text = summary({
+      status: "ready",
+      runs: [
+        run(),
+        run({ name: "lint", paths: [], exitCode: 1, ms: 2_100 }),
+        { name: "typecheck", paths: [], outcome: "timeout", ms: 300_000, tail: "" },
+      ],
+    })
+    expect(text).toContain(
+      "**Checks:**\n- test on `test/x.test.ts`: passed in 3.1s\n- lint: failed (exit 1) in 2.1s\n- typecheck: timed out after 300s",
+    )
+    expect(text.indexOf("were dropped")).toBeLessThan(text.indexOf("**Checks:**"))
+    expect(text.indexOf("**Checks:**")).toBeLessThan(text.indexOf("<sub>Linked issues"))
+  })
+
+  it("collapses a failed run's tail, cut to its last 2,000 characters, in a fence longer than any it holds", () => {
+    const tail = `${"x".repeat(2_500)}\n\`\`\`\nFAIL test/x.test.ts\n</details>`
+    const text = summary({ status: "ready", runs: [run({ exitCode: 1, tail })] })
+    expect(text).toContain("<details><summary>test on test/x.test.ts, exit 1</summary>")
+    expect(text).toContain("````\n…")
+    expect(text).not.toContain("x".repeat(2_001))
+    expect(text).toContain("FAIL test/x.test.ts\n</details>\n````\n\n</details>")
+    expect(summary({ status: "ready", runs: [run()] })).not.toContain("<details>")
+  })
+
+  it("keeps a path with a backtick inside its code span", () => {
+    const text = summary({ status: "ready", runs: [run({ paths: ["a`b.ts"] })] })
+    expect(text).toContain("- test on `` a`b.ts ``: passed in 3.1s")
+  })
+
+  it("says nothing when the review never asked", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "COMMENT",
+      submission: { ...base, verdict: "comment" },
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+    })
+    expect(text).not.toContain("Checks:")
+  })
+})
+
+describe("a finding's check line", () => {
+  it("names the run the finding rests on after its basis, with and without paths", () => {
+    const withPaths = toReviewComment(finding({ check: { name: "test", paths: ["test/x.test.ts"], exit_code: 1 } }))
+    expect(withPaths.body).toContain(
+      "_Basis (defect): with an empty cart the total is NaN_\n\n_Check: test on `test/x.test.ts` exited 1_",
+    )
+    const noPaths = toReviewComment(finding({ check: { name: "lint", exit_code: 2 } }))
+    expect(noPaths.body).toContain("_Check: lint exited 2_")
+    expect(toReviewComment(finding()).body).not.toContain("_Check:")
   })
 })
 

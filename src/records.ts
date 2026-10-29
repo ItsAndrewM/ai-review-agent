@@ -22,6 +22,17 @@ export const SeverityCounts = Type.Object({
 
 export type SeverityCounts = Static<typeof SeverityCounts>
 
+export const CheckRecord = Type.Object({
+  name: Type.String(),
+  paths: Type.Array(Type.String()),
+  outcome: Type.Union([Type.Literal("exited"), Type.Literal("timeout")]),
+  exitCode: Type.Optional(Type.Integer()),
+  ms: Type.Integer(),
+  tail: Type.String(),
+})
+
+export type CheckRecord = Static<typeof CheckRecord>
+
 export const PostedReview = Type.Object({
   reviewId: Type.Integer(),
   event: Type.Union([Type.Literal("APPROVE"), Type.Literal("REQUEST_CHANGES"), Type.Literal("COMMENT")]),

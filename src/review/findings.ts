@@ -78,6 +78,12 @@ export function findingCheckKey(check: { name: CheckName; paths?: readonly strin
   return `${check.name}:${(check.paths ?? []).join(" ")}`
 }
 
+export function checkLabel(check: { name: string; paths?: readonly string[] }): string {
+  const paths = check.paths ?? []
+  if (paths.length === 0) return check.name
+  return `${check.name} on ${paths.map((path) => (path.includes("`") ? `\`\` ${path} \`\`` : `\`${path}\``)).join(", ")}`
+}
+
 export const Walkthrough = Type.Object({
   path: Type.String({ description: "Path of the changed file, exactly as listed." }),
   summary: Type.String({ description: "One sentence on what changed in this file." }),
@@ -449,6 +455,7 @@ export function toReviewComment(finding: FindingInput): ReviewComment {
   const side = finding.side ?? "RIGHT"
   let body = `**${SEVERITY_LABEL[finding.severity]}: ${finding.title.trim()}**\n\n${finding.body.trim()}`
   body += `\n\n_Basis (${finding.basis_kind}): ${finding.basis.trim()}_`
+  if (finding.check !== undefined) body += `\n\n_Check: ${checkLabel(finding.check)} exited ${finding.check.exit_code}_`
   if (finding.suggestion !== undefined) {
     body += `\n\n\`\`\`suggestion\n${finding.suggestion.replace(/\n$/, "")}\n\`\`\``
   }

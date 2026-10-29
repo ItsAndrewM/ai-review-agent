@@ -1,8 +1,10 @@
 import type { ReviewEvent } from "../github/client.ts"
-import type { SeverityCounts } from "../records.ts"
+import type { CheckRecord, SeverityCounts } from "../records.ts"
 import { CONFIG_FILE } from "../repository/config.ts"
+import type { SandboxStatus } from "../sandbox/runs.ts"
 import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
+  checkLabel,
   countBySeverity,
   type FindingInput,
   type Rejected,
@@ -78,12 +80,18 @@ export function renderSummaryComment(input: {
   since?: SinceSection | undefined
   verify?: VerifyDisplay | undefined
   configError?: string | undefined
+  checks?: ChecksDisplay | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
     status: statusLine(input.headSha, { label: VERDICT_LABEL[input.event], counts: countBySeverity(input.accepted) }),
     content: input.submission,
-    afterWalkthrough: [droppedLine(input.droppedCount), ...verifyLines(input.verify), ...sinceLines(input.since)],
+    afterWalkthrough: [
+      droppedLine(input.droppedCount),
+      ...checksLines(input.checks),
+      ...verifyLines(input.verify),
+      ...sinceLines(input.since),
+    ],
     footer: [
       ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify),
       ...unverifiedLines(input.verify),
@@ -202,6 +210,56 @@ function sinceLines(since: SinceSection | undefined): string[] {
     "",
     `Files: ${files}. Resolved ${since.resolved} thread(s).`,
   ]
+}
+
+export const MOST_CHECK_TAIL_CHARS = 2000
+
+export interface ChecksDisplay {
+  readonly status: SandboxStatus["kind"]
+  readonly reason?: string | undefined
+  readonly runs: readonly CheckRecord[]
+}
+
+function checksLines(checks: ChecksDisplay | undefined): string[] {
+  if (checks === undefined) return []
+  if (checks.runs.length === 0) return ["", `**Checks:** ${noRunsText(checks)}`]
+  return ["", "**Checks:**", ...checks.runs.map(runLine), ...checks.runs.flatMap(tailBlock)]
+}
+
+function noRunsText(checks: ChecksDisplay): string {
+  switch (checks.status) {
+    case "off":
+      return "off"
+    case "spent":
+      return "spent"
+    case "unavailable":
+      return `unavailable (${checks.reason ?? "preparation"} failed)`
+    default:
+      return "none"
+  }
+}
+
+function runLine(run: CheckRecord): string {
+  return `- ${checkLabel(run)}: ${runEnding(run)}`
+}
+
+function runEnding(run: CheckRecord): string {
+  const seconds = `${(run.ms / 1000).toFixed(1).replace(/\.0$/, "")}s`
+  if (run.outcome === "timeout") return `timed out after ${seconds}`
+  return run.exitCode === 0 ? `passed in ${seconds}` : `failed (exit ${run.exitCode}) in ${seconds}`
+}
+
+function tailBlock(run: CheckRecord): string[] {
+  if (run.outcome === "exited" && run.exitCode === 0) return []
+  const ending = run.outcome === "timeout" ? "timed out" : `exit ${run.exitCode}`
+  const paths = run.paths.length === 0 ? "" : ` on ${run.paths.join(", ")}`
+  const tail = run.tail.length > MOST_CHECK_TAIL_CHARS ? `…${run.tail.slice(-MOST_CHECK_TAIL_CHARS)}` : run.tail
+  const fence = "`".repeat(Math.max(4, longestBacktickRun(tail) + 1))
+  return ["", `<details><summary>${run.name}${paths}, ${ending}</summary>`, "", fence, tail, fence, "", "</details>"]
+}
+
+function longestBacktickRun(text: string): number {
+  return Math.max(0, ...(text.match(/`+/g) ?? []).map((run) => run.length))
 }
 
 function verifyLines(verify: VerifyDisplay | undefined): string[] {
