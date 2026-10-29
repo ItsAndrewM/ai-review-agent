@@ -44,7 +44,9 @@ export function parseCheckout(outcome: RunOutcome): CheckoutResult {
   return { kind: "ok", kib }
 }
 
-export type Manager = "pnpm" | "npm" | "none"
+export const MANAGERS = ["pnpm", "npm", "none"] as const
+
+export type Manager = (typeof MANAGERS)[number]
 
 export function detectArgv(): string[] {
   return ["/bin/sh", "-c", DETECT_SCRIPT, "andabot-detect"]

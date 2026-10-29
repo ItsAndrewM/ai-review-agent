@@ -12,6 +12,7 @@ import {
   STEP_TIMEOUT_MS,
   type Manager,
 } from "./checkout.ts"
+import type { UnavailableReason } from "./record.ts"
 import type { RunOptions, RunOutcome } from "./run.ts"
 
 export const DEFAULT_SANDBOX_SECONDS = 900
@@ -49,7 +50,7 @@ export interface SandboxHost {
   now(): number
 }
 
-export type UnavailableReason = "head" | "lease" | "start" | "checkout" | "install"
+export type { UnavailableReason } from "./record.ts"
 
 export type SandboxAccess =
   | { readonly kind: "ready"; readonly sandbox: SandboxCalls; readonly dir: string; readonly manager: Manager }
