@@ -41,7 +41,7 @@ import {
   type ChangedFile,
   type MarkedLines,
 } from "./github/diff.ts"
-import { errorOf } from "./github/errors.ts"
+import { errorOf, isTransient, softenUnlessTransient, TransientFailure } from "./github/errors.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -104,11 +104,13 @@ import {
   LastReview,
   lastReviewOf,
   nextRecheck,
+  retriesAtDoor,
   openBlockingIn,
   ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
   type ApprovalOutcome,
+  type Recheck,
   type ApprovalState,
   type ApprovalTrigger,
   type ChecksState,
@@ -1275,9 +1277,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return this.comment(incoming, callerVersion)
       case "reaction":
         return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
-      case "approval":
-        await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
+      case "approval": {
+        const { outcome, recheck } = await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
+        if (retriesAtDoor(outcome, recheck)) throw new TransientFailure(`approval after ${incoming.trigger}`)
         return
+      }
       case "closed":
         this.#runs.dropIdle(incoming.key.number, "closed")
         await this.#sandbox.dropIdle("closed")
@@ -1751,6 +1755,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       return await (await this.github()).compareCommits(key, since, pr.head.sha)
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.compare_failed", { number: pr.number, since: shortSha(since), error: errorText(error) })
       return undefined
     }
@@ -1768,6 +1773,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const findings = await this.storedFindings(threads.map((thread) => thread.firstCommentId))
       return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered, since })
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.threads_failed", { number: pr.number, error: errorText(error) })
       return undefined
     }
@@ -1906,6 +1912,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return (await this.freshPullRequest()).head.sha
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.head_unreadable", { number: pr.number, error: errorText(error) })
       return undefined
     }
@@ -2224,6 +2231,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return { where: "conversation", threads: await github.listReviewThreads(key, key.number) }
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("command.resolve_failed", { number: key.number, step: "read", error: errorText(error) })
       return undefined
     }
@@ -2466,13 +2474,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return Value.Check(Summarizing, stored) ? stored : undefined
   }
 
-  private async evaluateWithRecheck(trigger: ApprovalTrigger, deliveryId: string, attempt: number): Promise<void> {
-    const recheck = nextRecheck(trigger, await this.evaluateApproval(trigger, deliveryId), attempt)
-    if (recheck === undefined) return
+  private async evaluateWithRecheck(
+    trigger: ApprovalTrigger,
+    deliveryId: string,
+    attempt: number,
+  ): Promise<{ outcome: ApprovalOutcome; recheck: Recheck | undefined }> {
+    const outcome = await this.evaluateApproval(trigger, deliveryId)
+    const recheck = nextRecheck(trigger, outcome, attempt)
+    if (recheck === undefined) return { outcome, recheck }
     const scheduled = this.scheduledRecheck()
     if (!ownsRecheck(trigger, deliveryId, scheduled)) {
       log("approval.recheck_yielded", { delivery: deliveryId, to: scheduled?.delivery })
-      return
+      return { outcome, recheck }
     }
     await this.lifecycle.jobs.push({
       id: RECHECK_JOB,
@@ -2486,6 +2499,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       attempt: recheck.attempt,
       inMs: recheck.inMs,
     })
+    return { outcome, recheck }
   }
 
   private scheduledRecheck(): RecheckJob | undefined {
@@ -2506,7 +2520,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return await this.approve(pr.head.sha, context)
     } catch (error) {
       logError("approval.failed", { trigger, delivery: deliveryId, error: errorText(error) })
-      return { kind: "failed" }
+      return { kind: "failed", transient: isTransient(errorOf(error)) }
     }
   }
 
@@ -2612,6 +2626,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return threadOf(await github.listReviewThreads(key, key.number), context.rootId)
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("thread.lookup_failed", { number: key.number, root: context.rootId, error: errorText(error) })
       return undefined
     }

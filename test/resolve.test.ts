@@ -83,7 +83,9 @@ describe("approvalNote", () => {
     )
     expect(waiting("review_stands", 0)).toBe("Approval waits for my next review, since my last one only commented.")
     expect(waiting("workflow_off")).toBeUndefined()
-    expect(approvalNote({ kind: "failed" }, 0, "andabot")).toBe("I couldn't check approval this time.")
+    expect(approvalNote({ kind: "failed", transient: false }, 0, "andabot")).toBe(
+      "I couldn't check approval this time.",
+    )
   })
 
   it("names the bot that has to resume", () => {
