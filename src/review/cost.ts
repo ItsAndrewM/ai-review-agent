@@ -133,13 +133,39 @@ function totalsOf(spend: ReviewSpend): SpendTotals {
   }
 }
 
-export function spendLine(spend: ReviewSpend): string | undefined {
+export const SANDBOX_USD_PER_SECOND = 0.00002056
+
+export function sandboxUsd(seconds: number): number {
+  return seconds * SANDBOX_USD_PER_SECOND
+}
+
+export function sandboxFields(seconds: number | undefined): LogFields {
+  if (seconds === undefined || seconds <= 0) return {}
+  return { sandboxSeconds: seconds, sandboxUsd: sandboxUsd(seconds) }
+}
+
+export function spendLine(spend: ReviewSpend, sandboxSeconds?: number): string | undefined {
   if (spend.length === 0) return undefined
   const totals = totalsOf(spend)
   const calls = `${totals.calls} model call${totals.calls === 1 ? "" : "s"}`
   if (tokensOf(totals) === 0) return `${calls} · usage not reported`
   const tokens = `${tokenCount(totals.inputTokens)} in / ${tokenCount(totals.outputTokens)} out tokens`
-  return [calls, tokens, priceText(totals, spend.filter((model) => tokensOf(model) > 0).length)].join(" · ")
+  const price = priceText(totals, spend.filter((model) => tokensOf(model) > 0).length)
+  return [calls, tokens, price, ...sandboxPart(sandboxSeconds)].join(" · ")
+}
+
+function sandboxPart(seconds: number | undefined): string[] {
+  if (seconds === undefined || seconds <= 0) return []
+  return [`sandbox ${durationText(seconds)} (${dollarText(sandboxUsd(seconds))})`]
+}
+
+function durationText(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const rest = seconds % 60
+  return [hours > 0 ? `${hours}h` : "", minutes > 0 || hours > 0 ? `${minutes}m` : "", `${rest}s`]
+    .filter((part) => part !== "")
+    .join(" ")
 }
 
 function priceText(totals: SpendTotals, modelsWithTokens: number): string {
