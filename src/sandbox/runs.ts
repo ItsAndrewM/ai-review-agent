@@ -12,7 +12,8 @@ import {
   STEP_TIMEOUT_MS,
   type Manager,
 } from "./checkout.ts"
-import type { SandboxRecord, UnavailableReason } from "./record.ts"
+import { checkKey, type CheckRun } from "./checks.ts"
+import { checkRunOf, storedCheckOf, type SandboxRecord, type UnavailableReason } from "./record.ts"
 import type { RunOptions, RunOutcome } from "./run.ts"
 
 export type { UnavailableReason } from "./record.ts"
@@ -102,6 +103,7 @@ export class SandboxRuns {
   #answeredOff = false
   #settled: Settled | undefined
   #preparing: Promise<Settled> | undefined
+  #checks = new Map<string, CheckRun>()
 
   constructor(
     private readonly host: SandboxHost,
@@ -111,6 +113,19 @@ export class SandboxRuns {
   async start(): Promise<void> {
     await this.#restore()
     this.#active += 1
+    this.#checks.clear()
+    await this.#save()
+  }
+
+  async checks(): Promise<ReadonlyMap<string, CheckRun>> {
+    await this.#restore()
+    return this.#checks
+  }
+
+  async remember(key: string, run: CheckRun): Promise<void> {
+    await this.#restore()
+    this.#checks.set(key, run)
+    await this.#save()
   }
 
   async seconds(): Promise<number | undefined> {
@@ -173,6 +188,10 @@ export class SandboxRuns {
     this.#leased = record.leased
     this.#running = record.running
     if (record.settled?.kind === "unavailable") this.#settled = { kind: "unavailable", reason: record.settled.reason }
+    for (const stored of record.checks) {
+      const run = checkRunOf(stored)
+      this.#checks.set(checkKey(record.head.sha, run.name, run.paths), run)
+    }
   }
 
   async #reattach(record: SandboxRecord): Promise<void> {
@@ -204,7 +223,7 @@ export class SandboxRuns {
       number: this.#head?.number,
       sha: this.#shortSha(),
       kind,
-      checks: 0,
+      checks: this.#checks.size,
       seconds: this.#seconds(),
     })
   }
@@ -229,7 +248,7 @@ export class SandboxRuns {
       started: this.#started ?? this.host.now(),
       leased: this.#leased,
       running: this.#running,
-      checks: [],
+      checks: [...this.#checks.values()].map(storedCheckOf),
     }
     const settled = this.#settledRecord()
     if (settled !== undefined) record.settled = settled
@@ -281,6 +300,7 @@ export class SandboxRuns {
     this.#answeredOff = false
     this.#settled = undefined
     this.#preparing = undefined
+    this.#checks.clear()
     if (head) await this.#persist(undefined)
   }
 

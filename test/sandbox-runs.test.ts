@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest"
 import type { PullRequestKey } from "../src/records.ts"
 import { MAX_CHECKOUT_KIB } from "../src/sandbox/checkout.ts"
-import type { SandboxRecord } from "../src/sandbox/record.ts"
+import { checkKey, knownChecksOf, type CheckRun } from "../src/sandbox/checks.ts"
+import { storedCheckOf, type SandboxRecord } from "../src/sandbox/record.ts"
 import type { RunOptions, RunOutcome } from "../src/sandbox/run.ts"
 import {
   DEFAULT_SANDBOX_SECONDS,
@@ -491,5 +492,52 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.saveThrows = true
     expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+  })
+})
+
+const failedTest: CheckRun = {
+  name: "test",
+  paths: ["test/a.test.ts"],
+  outcome: { outcome: "exited", exitCode: 1, tail: "FAIL\n", cut: false },
+  ms: 4_400,
+}
+
+describe("SandboxRuns check cache", () => {
+  it("remembers a run, answers it from checks, and saves it as a stored check", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    await runs.access()
+    await runs.remember(checkKey("abc123", "test", failedTest.paths), failedTest)
+    expect((await runs.checks()).get(checkKey("abc123", "test", failedTest.paths))).toEqual(failedTest)
+    expect(host.saved.at(-1)?.checks).toEqual([storedCheckOf(failedTest)])
+  })
+
+  it("answers a stored run after a restart, under the key a finding's check uses", async () => {
+    const host = new FakeHost(READY)
+    host.stored = { ...readyRecord(), checks: [storedCheckOf(failedTest)] }
+    const runs = new SandboxRuns(host, 900)
+    const checks = await runs.checks()
+    expect(checks.get(checkKey("abc123", "test", failedTest.paths))).toEqual(failedTest)
+    expect(knownChecksOf(checks, "abc123")).toEqual(new Map([["test:test/a.test.ts", 1]]))
+  })
+
+  it("lets a review that starts on a fresh instance inherit a same-head sandbox, with an empty cache of its own", async () => {
+    const host = new FakeHost(READY)
+    host.stored = { ...readyRecord(), checks: [storedCheckOf(failedTest)] }
+    const runs = new SandboxRuns(host, 900)
+    await runs.start()
+    expect((await runs.checks()).size).toBe(0)
+    expect(host.saved.at(-1)?.checks).toEqual([])
+    expect((await runs.access()).kind).toBe("ready")
+    expect(host.box.calls).not.toContain("start")
+  })
+
+  it("forgets the runs when the sandbox ends", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    await runs.access()
+    await runs.remember(checkKey("abc123", "test", []), failedTest)
+    await runs.end("review_end")
+    expect((await runs.checks()).size).toBe(0)
   })
 })
