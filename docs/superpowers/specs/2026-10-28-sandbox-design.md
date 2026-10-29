@@ -226,3 +226,22 @@ The footer's cost line gains the sandbox's wall time when the review asked for t
 ### Logs
 
 `review.done` gains `sandboxUsd` and `checks` (the count of runs). No new events.
+
+## Slice 5, #135: the measurement, the abuse ceiling and the default
+
+Measured on 29 Oct 2026 on build 44c8aedb (main 0139fec with `--var SANDBOX:true`), on three fixture pull requests from the base `main-with-checks`, which adds `.andabot.yaml` with `checks.typecheck: pnpm typecheck` (this repository's typecheck needs `wrangler types` first, seen on #133's live check) and a test pinning the zero parts of the duration text: #142 (a refactor that drops those parts, a test failure the diff doesn't show), #143 (a widened return type whose one caller needs a number, a type error outside the diff) and #144 (docs only). The tables are on #135; `docs/design.md` carries the summary and the ceiling.
+
+### Rulings
+
+- **`SANDBOX` defaults to `true`.** GLM-5.3 Flash found both plants with the tier off, so the sandbox's value is the evidence, not the catch: with the tier on it ran the one test file and the typecheck, cited the runs, and spent $0.002 to $0.003 of container time a review, with the model's spend in the same range as before (337 against 430 neurons on #142, 949 against 646 on #143). The docs-only review never asked for the sandbox either way.
+- **Every pull request runs checks**, a stranger's included, as Q3 ruled; the bound is the caps. One review spends at most about 1,200 s of `standard-1` ($0.025), or $0.037 if it dies and the 30-minute backstop ends the container (#140); three leases across pull requests cap the account at $0.22 an hour. The included 25 GiB-hours cover 22,500 s a month, which the earlier "roughly 90 such reviews" in `docs/setup.md` overstated: 25 full budgets, or about 300 reviews like #142's.
+- **The lazy start stays** (Q3). `run_check` was called on 2 of 3 reviews, the two with a suspected failure; the install is 38 s of #142's 77-second sandbox, which an eager start would spend on every review.
+- **Targeted runs, not the suite**, recorded in `docs/design.md` as the reason: CI already runs `pnpm check` on every pull request and andabot waits on it for approval.
+
+### Seen and left
+
+- #143's finding quoted the TS2322 line in its basis but set no `check`, so no `_Check:` line rendered; the reference is optional and nothing was rejected.
+- The Checks line shows the paths the model named for `typecheck` although the template has no `{paths}` slot and the command ignored them.
+- The install took 38 s in production against 16 s in #132's local live check.
+- Kimi K2.7 Code's run (build 3ba59b79, 19:25Z, Andrew ran the deploy): same recall as GLM, a matching `check` on both findings, no false positive on #144, but every check it could run on each code change (three each, a typecheck of #142 included), so 244 s and 255 s of sandbox time against GLM's 77 s and 141 s, still half a cent beside Kimi's $0.036 and $0.125 of model cost. #143 ended at 11,401 neurons with `budgetBlocked: 0`: the budget was passed on the last call, so there was nothing to stop.
+- `oxlint` 1.88.0 panics in the container (`crates/oxc_allocator/src/pool/fixed_size.rs:112:67: called Result::unwrap() on an Err value: ()`, then `SIGABRT`) on `pnpm exec oxlint <paths>`, both times Kimi ran `lint`. The `lint` check is unusable on this repository in the sandbox until that is understood; neither review cited the crash as a defect. Follow-up issue filed from #135.
