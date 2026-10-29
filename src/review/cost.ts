@@ -160,11 +160,14 @@ function sandboxPart(seconds: number | undefined): string[] {
 }
 
 function durationText(seconds: number): string {
-  const hours = Math.floor(seconds / 3600)
-  const minutes = Math.floor((seconds % 3600) / 60)
-  const rest = seconds % 60
-  return [hours > 0 ? `${hours}h` : "", minutes > 0 || hours > 0 ? `${minutes}m` : "", `${rest}s`]
-    .filter((part) => part !== "")
+  const parts = [
+    [Math.floor(seconds / 3600), "h"],
+    [Math.floor((seconds % 3600) / 60), "m"],
+    [seconds % 60, "s"],
+  ] as const
+  return parts
+    .filter(([count]) => count > 0)
+    .map(([count, unit]) => `${count}${unit}`)
     .join(" ")
 }
 
