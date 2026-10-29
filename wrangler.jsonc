@@ -39,9 +39,14 @@
     // free allowance. A model without a price counts for nothing.
     "MAX_REVIEW_NEURONS": "10000",
     // The sandbox tier (#132): "true" lets a review start a container on
-    // its first run_check call. Off until #135's measurement sets the
-    // default; a repository can opt out with reviews.sandbox: false.
-    "SANDBOX": "false",
+    // its first run_check call. On since #135's measurement (29 Oct 2026):
+    // GLM-5.3 Flash confirmed a planted test failure and a planted type
+    // error with run_check and cited the runs, for $0.002 to $0.003 of
+    // standard-1 time a review, and never asked on a docs-only change. A
+    // hostile pull request is capped at about 1,200 s ($0.025) and three
+    // containers run at once (docs/setup.md). A repository opts out with
+    // reviews.sandbox: false.
+    "SANDBOX": "true",
     // Wall seconds a review may spend in its sandbox, checkout and install
     // included, after which run_check answers that the budget is spent.
     // Separate from MAX_REVIEW_NEURONS: the sandbox costs instance time.
