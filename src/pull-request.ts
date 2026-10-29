@@ -17,7 +17,7 @@ import {
   type PiPromptResponse,
   type PiSession,
 } from "agents/harness/pi"
-import { Lifecycle, type LifecycleJobContext } from "agents/lifecycle"
+import { Lifecycle, type LifecycleJobContext, type LifecycleJobOutcome } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
@@ -316,9 +316,11 @@ import {
   type CheckRun,
 } from "./sandbox/checks.ts"
 import { sandboxTokenScope } from "./sandbox/probe.ts"
+import { SandboxRecord } from "./sandbox/record.ts"
 import { DEFAULT_TAIL_BYTES } from "./sandbox/run.ts"
 import {
   accessSummary,
+  LEASE_GRACE_MS,
   sandboxBudgetOf,
   sandboxOn,
   SandboxRuns,
@@ -526,6 +528,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return { number: pr.number, key: await this.key(), sha: pr.head.sha }
       },
       now: () => Date.now(),
+      load: async () => {
+        const stored = await this.ctx.storage.get("sandbox")
+        return Value.Check(SandboxRecord, stored) ? stored : undefined
+      },
+      save: async (record) => {
+        if (record === undefined) await this.ctx.storage.delete("sandbox")
+        else await this.ctx.storage.put<SandboxRecord>("sandbox", record)
+      },
+      scheduleDrop: async (time) => {
+        await this.lifecycle.jobs.push({ id: SANDBOX_DROP_JOB, fn: SANDBOX_DROP_JOB, time })
+      },
+      cancelDrop: async () => {
+        await this.lifecycle.jobs.cancel(SANDBOX_DROP_JOB)
+      },
     }
   }
 
@@ -542,37 +558,48 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async probeCheck(key: PullRequestKey, name: CheckName, paths: readonly string[]): Promise<string> {
     await this.ctx.storage.put("key", key)
-    return this.runCheck({ name, paths: [...paths] })
+    return this.#check({ name, paths: [...paths] })
   }
 
-  #checks = new Map<string, CheckRun>()
+  async endSandbox(key: PullRequestKey): Promise<{ ended: true }> {
+    await this.ctx.storage.put("key", key)
+    await this.#sandbox.dropIdle("review_end")
+    return { ended: true }
+  }
+
   #checkQueue: Promise<void> = Promise.resolve()
   #packageJson: { base: string; text: string | undefined } | undefined
 
   async runCheck(args: RunCheckArgs): Promise<string> {
+    if ((await this.readPending()) === undefined) return this.#checkRefused(args.name, { kind: "ended" })
+    return this.#check(args)
+  }
+
+  async #check(args: RunCheckArgs): Promise<string> {
     const paths = args.paths ?? []
     const problem = pathProblem(paths)
     if (problem !== undefined) return this.#checkRefused(args.name, { kind: "bad_path", problem })
     const pr = await this.pullRequest()
     const key = checkKey(pr.head.sha, args.name, paths)
-    const cached = this.#cachedCheck(pr, key)
+    const cached = await this.#cachedCheck(pr, key)
     if (cached !== undefined) return cached
     const access = await this.#sandbox.access()
     if (access.kind !== "ready") return this.#checkRefused(args.name, accessRefusal(access))
     return this.#queuedCheck(
-      async () => this.#cachedCheck(pr, key) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
+      async () => (await this.#cachedCheck(pr, key)) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
     )
   }
 
-  #checksDisplay(): ChecksDisplay | undefined {
-    const status = this.#sandbox.status()
-    if (status.kind === "none" && this.#checks.size === 0) return undefined
-    const runs = [...this.#checks.values()].map(checkRecordOf)
+  async #checksDisplay(): Promise<ChecksDisplay | undefined> {
+    const status = await this.#sandbox.status()
+    const checks = await this.#sandbox.checks()
+    if (status.kind === "none" && checks.size === 0) return undefined
+    const runs = [...checks.values()].map(checkRecordOf)
     return { status: status.kind, reason: status.kind === "unavailable" ? status.reason : undefined, runs }
   }
 
-  #cachedCheck(pr: PullRequestInfo, key: string): string | undefined {
-    const cached = this.#checks.get(key)
+  async #cachedCheck(pr: PullRequestInfo, key: string): Promise<string | undefined> {
+    const cached = (await this.#sandbox.checks()).get(key)
     if (cached === undefined) return undefined
     log("check.cached", { number: pr.number, name: cached.name, paths: cached.paths.join(" ") })
     return checkText(cached)
@@ -607,7 +634,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       tailBytes: DEFAULT_TAIL_BYTES,
     })
     const run: CheckRun = { name, paths, outcome, ms: Date.now() - began }
-    this.#checks.set(key, run)
+    await this.#sandbox.remember(key, run)
     log("check.run", {
       number: pr.number,
       name,
@@ -671,12 +698,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return "accepted"
   }
 
-  async onJob({ job }: LifecycleJobContext): Promise<void> {
+  async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
+    if (job.fn === SANDBOX_DROP_JOB) return this.#dropJob()
     if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
       logError("job.unreadable", { id: job.id, fn: job.fn })
       return
     }
     await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
+  }
+
+  async #dropJob(): Promise<LifecycleJobOutcome> {
+    const active = await this.#sandbox.dropIdle("review_end")
+    return active ? { rescheduleAt: Date.now() + LEASE_GRACE_MS } : undefined
   }
 
   botLogin(): string {
@@ -833,7 +866,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         submission.findings,
         indexCommentableLines(scopedFiles(scope, files)),
         hasLinkedIssues,
-        knownChecksOf(this.#checks, pr.head.sha),
+        knownChecksOf(await this.#sandbox.checks(), pr.head.sha),
       ),
       scope,
     )
@@ -1056,8 +1089,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const attribution = attributionOf(pending)
     const spend = await this.spendOf(pending)
-    const sandboxSeconds = this.#sandbox.seconds()
-    const checks = this.#checksDisplay()
+    const sandboxSeconds = await this.#sandbox.seconds()
+    const checks = await this.#checksDisplay()
     const reviewed = nextReviewed({
       previous: await this.readReviewed(),
       scope,
@@ -1321,6 +1354,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.delete("pending")
     for (const operation of operations) await this.abortOperation(operation)
     await this.endReplacedRun(decision, headSha)
+    if (decision.because === "superseded") await this.#sandbox.dropIdle("new_head")
     return decision
   }
 
@@ -1537,8 +1571,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#requestsPastBudget = 0
     this.#activated = []
     this.#runs.start()
-    this.#sandbox.start()
-    this.#checks.clear()
+    await this.#sandbox.start()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
@@ -1603,8 +1636,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
           ...this.#runs.usage(),
-          ...sandboxFields(this.#sandbox.seconds()),
-          checks: this.#checks.size,
+          ...sandboxFields(await this.#sandbox.seconds()),
+          checks: (await this.#sandbox.checks()).size,
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -2679,6 +2712,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const pending = await this.pendingFor(deliveryId)
     if (pending === undefined) return
     await this.ctx.storage.delete(["pending", "scope"])
+    await this.#sandbox.dropIdle("review_end")
     if (pending.checkRunId !== undefined) await this.completeCheckRun(pending.checkRunId, pending, update)
   }
 
@@ -2728,7 +2762,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async releasePending(deliveryId: string): Promise<void> {
-    if (await this.ownsPending(deliveryId)) await this.ctx.storage.delete(["pending", "scope"])
+    if (!(await this.ownsPending(deliveryId))) return
+    await this.ctx.storage.delete(["pending", "scope"])
+    await this.#sandbox.dropIdle("review_end")
   }
 
   private async restartGrace(deliveryId: string): Promise<void> {
@@ -2752,6 +2788,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const RECHECK_JOB = "approval.recheck"
+
+const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128

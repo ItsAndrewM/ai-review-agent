@@ -166,6 +166,7 @@ export type CheckRefusal =
   | { readonly kind: "no_command" }
   | { readonly kind: "bad_path"; readonly problem: string }
   | { readonly kind: "missing_path"; readonly path: string }
+  | { readonly kind: "ended" }
 
 export function refusalText(name: CheckName, refusal: CheckRefusal): string {
   switch (refusal.kind) {
@@ -181,5 +182,7 @@ export function refusalText(name: CheckName, refusal: CheckRefusal): string {
       return `${name} did not run: ${refusal.problem}.`
     case "missing_path":
       return `${name} did not run: ${refusal.path} does not exist at the pull request's head.`
+    case "ended":
+      return `No review is in flight for this pull request, so ${name} did not run.`
   }
 }
