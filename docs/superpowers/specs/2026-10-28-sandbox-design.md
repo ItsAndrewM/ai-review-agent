@@ -205,13 +205,13 @@ What the reader of a review sees of the sandbox. Verify's half stays deferred to
 
 A `Checks` line under the walkthrough, after the dropped-findings line and before the Verify section, from what the review's `SandboxRuns` and its run cache hold when the review posts:
 
-- `**Checks:** none` when the review never asked for the sandbox;
+- no line at all when the review never asked for the sandbox, since with the tier off by default a `none` would sit on every review everywhere (ruled in the build; `none` is what a review that asked and ran nothing shows);
 - `**Checks:** off` when the tier was off for the repository or the Worker;
 - `**Checks:** unavailable (install failed)` when preparation failed, with the step;
 - `**Checks:** spent` when the budget was spent before any run;
 - otherwise one entry per run, in the order they ran: `test on \`test/x.test.ts\`: passed in 3.1s`, `lint: failed (exit 1) in 2.1s`, `typecheck: timed out after 300s`; a run with no paths names only the check.
 
-Each failed or timed-out run gets a collapsed `<details>` block headed `test on test/x.test.ts, exit 1` holding its tail, cut to its last 2,000 characters and fenced, so the reader sees what the model saw without the comment growing past GitHub's limit.
+Each failed or timed-out run gets a collapsed `<details>` block headed `test on test/x.test.ts, exit 1` holding its tail, cut to its last 2,000 characters and fenced; at most five such blocks are embedded, the first five failures, and a line counts the rest, so the reader sees what the model saw without the comment growing past GitHub's 65,536-character limit.
 
 A finding that carries a `check` reference renders one more line in its inline comment, after the basis: `_Check: test on \`test/x.test.ts\` exited 1_`, so the thread shows the run the finding rests on.
 

@@ -221,10 +221,17 @@ export interface ChecksDisplay {
   readonly runs: readonly CheckRecord[]
 }
 
+export const MOST_CHECK_TAIL_BLOCKS = 5
+
 function checksLines(checks: ChecksDisplay | undefined): string[] {
   if (checks === undefined) return []
   if (checks.runs.length === 0) return ["", `**Checks:** ${noRunsText(checks)}`]
-  return ["", "**Checks:**", ...checks.runs.map(runLine), ...checks.runs.flatMap(tailBlock)]
+  const failed = checks.runs.filter((run) => run.outcome === "timeout" || run.exitCode !== 0)
+  const shown = failed.slice(0, MOST_CHECK_TAIL_BLOCKS)
+  const leftOut = failed.length - shown.length
+  const note =
+    leftOut > 0 ? ["", `_The output of ${leftOut} more failed run${leftOut === 1 ? "" : "s"} is left out._`] : []
+  return ["", "**Checks:**", ...checks.runs.map(runLine), ...shown.flatMap(tailBlock), ...note]
 }
 
 function noRunsText(checks: ChecksDisplay): string {
@@ -251,7 +258,6 @@ function runEnding(run: CheckRecord): string {
 }
 
 function tailBlock(run: CheckRecord): string[] {
-  if (run.outcome === "exited" && run.exitCode === 0) return []
   const ending = run.outcome === "timeout" ? "timed out" : `exit ${run.exitCode}`
   const paths = run.paths.length === 0 ? "" : ` on ${run.paths.join(", ")}`
   const tail = run.tail.length > MOST_CHECK_TAIL_CHARS ? `…${run.tail.slice(-MOST_CHECK_TAIL_CHARS)}` : run.tail

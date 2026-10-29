@@ -148,7 +148,7 @@ export function spendLine(spend: ReviewSpend, sandboxSeconds?: number): string |
   if (spend.length === 0) return undefined
   const totals = totalsOf(spend)
   const calls = `${totals.calls} model call${totals.calls === 1 ? "" : "s"}`
-  if (tokensOf(totals) === 0) return `${calls} · usage not reported`
+  if (tokensOf(totals) === 0) return [calls, "usage not reported", ...sandboxPart(sandboxSeconds)].join(" · ")
   const tokens = `${tokenCount(totals.inputTokens)} in / ${tokenCount(totals.outputTokens)} out tokens`
   const price = priceText(totals, spend.filter((model) => tokensOf(model) > 0).length)
   return [calls, tokens, price, ...sandboxPart(sandboxSeconds)].join(" · ")

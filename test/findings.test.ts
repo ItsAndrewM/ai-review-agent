@@ -27,6 +27,7 @@ import {
   reviewEventOf,
   SUMMARY_MARKER,
   withApprovedVerdict,
+  MOST_CHECK_TAIL_BLOCKS,
   type ChecksDisplay,
   type VerifyDisplay,
 } from "../src/review/render.ts"
@@ -1556,6 +1557,16 @@ describe("the Checks line", () => {
     expect(text).not.toContain("x".repeat(2_001))
     expect(text).toContain("FAIL test/x.test.ts\n</details>\n````\n\n</details>")
     expect(summary({ status: "ready", runs: [run()] })).not.toContain("<details>")
+  })
+
+  it("embeds at most five failed tails and counts the rest, so the comment stays under GitHub's limit", () => {
+    const failed = Array.from({ length: 8 }, (_, i) =>
+      run({ paths: [`test/${i}.test.ts`], exitCode: 1, tail: "x".repeat(2_000) }),
+    )
+    const text = summary({ status: "ready", runs: failed })
+    expect(text.match(/<details><summary>test on /g)).toHaveLength(MOST_CHECK_TAIL_BLOCKS)
+    expect(text).toContain("_The output of 3 more failed runs is left out._")
+    expect(text.length).toBeLessThan(MOST_CHECK_TAIL_BLOCKS * 2_200 + 2_000)
   })
 
   it("keeps a path with a backtick inside its code span", () => {
