@@ -206,6 +206,34 @@ describe("SandboxRuns.end", () => {
   })
 })
 
+describe("SandboxRuns.status", () => {
+  it("says none before any call, then what the sandbox answered, and none again after end", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 10)
+    expect(runs.status()).toEqual({ kind: "none" })
+    await runs.access()
+    expect(runs.status()).toEqual({ kind: "ready" })
+    host.clock += 10_000
+    await runs.access()
+    expect(runs.status()).toEqual({ kind: "spent" })
+    await runs.end("review_end")
+    expect(runs.status()).toEqual({ kind: "none" })
+  })
+
+  it("says off after an off answer, and names the step after a failure", async () => {
+    const off = new FakeHost(READY)
+    off.on = false
+    const offRuns = new SandboxRuns(off, 900)
+    await offRuns.access()
+    expect(offRuns.status()).toEqual({ kind: "off" })
+    const failing = new FakeHost(READY)
+    failing.grant = false
+    const failingRuns = new SandboxRuns(failing, 900)
+    await failingRuns.access()
+    expect(failingRuns.status()).toEqual({ kind: "unavailable", reason: "lease" })
+  })
+})
+
 describe("sandboxBudgetOf and sandboxOn", () => {
   it("parses a positive whole number of seconds and falls back to 900", () => {
     expect(DEFAULT_SANDBOX_SECONDS).toBe(900)

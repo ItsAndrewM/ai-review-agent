@@ -6,6 +6,9 @@ import {
   neuronsSince,
   ReviewSpend,
   reviewSpend,
+  SANDBOX_USD_PER_SECOND,
+  sandboxFields,
+  sandboxUsd,
   usageBaseline,
   spendFields,
   spendLine,
@@ -290,5 +293,45 @@ describe("reading the ledger", () => {
 
   it("has no spend when the ledger can't be read at the end, so the review still posts", async () => {
     expect(await reviewSpend(broken, {})).toEqual([])
+  })
+})
+
+describe("the sandbox on the cost line", () => {
+  it("prices a second of standard-1 at the Containers rates and rounds as the model's dollars are rounded", () => {
+    expect(SANDBOX_USD_PER_SECOND).toBe(0.00002056)
+    expect(sandboxUsd(134)).toBeCloseTo(0.00275504, 8)
+    expect(spendLine([spend({})], 134)).toBe(
+      "3 model calls · 61k in / 4.8k out tokens · ≈ 608 neurons ($0.007) · sandbox 2m 14s ($0.003)",
+    )
+  })
+
+  it("renders seconds, minutes and hours, and under a tenth of a cent as the model's dollars do", () => {
+    expect(spendLine([spend({})], 14)).toContain(" · sandbox 14s (<$0.001)")
+    expect(spendLine([spend({})], 3_723)).toContain(" · sandbox 1h 2m 3s ($0.077)")
+  })
+
+  it("keeps the sandbox part when the model reported no usage, when the reader has no other cost to go on", () => {
+    expect(spendLine([spend({ inputTokens: 0, outputTokens: 0 })], 134)).toBe(
+      "3 model calls · usage not reported · sandbox 2m 14s ($0.003)",
+    )
+  })
+
+  it("adds nothing for zero or unknown sandbox time", () => {
+    expect(spendLine([spend({})], 0)).not.toContain("sandbox")
+    expect(spendLine([spend({})])).not.toContain("sandbox")
+  })
+
+  it("shows the sandbox part alone when the ledger couldn't be read and the spend is empty", () => {
+    expect(spendLine([], 134)).toBe("sandbox 2m 14s ($0.003)")
+    expect(spendLine([], 0)).toBeUndefined()
+    expect(spendLine([])).toBeUndefined()
+  })
+
+  it("logs the seconds and the dollars, or nothing", () => {
+    const fields = sandboxFields(134)
+    expect(fields.sandboxSeconds).toBe(134)
+    expect(fields.sandboxUsd).toBeCloseTo(0.00275504, 8)
+    expect(sandboxFields(undefined)).toEqual({})
+    expect(sandboxFields(0)).toEqual({})
   })
 })

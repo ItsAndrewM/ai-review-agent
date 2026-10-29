@@ -4,6 +4,7 @@ import {
   argvFromTemplate,
   CHECK_ENV,
   checkKey,
+  checkRecordOf,
   checkText,
   checkTimeoutOf,
   DEFAULT_CHECK_TIMEOUT_MS,
@@ -151,6 +152,26 @@ describe("checkText and refusalText", () => {
 describe("CHECK_ENV", () => {
   it("turns colour off and says it's CI", () => {
     expect(CHECK_ENV).toEqual({ NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" })
+  })
+})
+
+describe("checkRecordOf", () => {
+  it("keeps what the summary and the record need, with the exit code only for a run that exited", () => {
+    expect(checkRecordOf({ name: "test", paths: ["a.ts"], outcome: exited(1, "FAIL\n"), ms: 2_400 })).toEqual({
+      name: "test",
+      paths: ["a.ts"],
+      outcome: "exited",
+      exitCode: 1,
+      ms: 2_400,
+      tail: "FAIL\n",
+    })
+    expect(checkRecordOf({ name: "lint", paths: [], outcome: timedOut, ms: 300_000 })).toEqual({
+      name: "lint",
+      paths: [],
+      outcome: "timeout",
+      ms: 300_000,
+      tail: "",
+    })
   })
 })
 

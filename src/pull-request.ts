@@ -137,6 +137,7 @@ import {
 import {
   neuronsSince,
   reviewSpend,
+  sandboxFields,
   spendFields,
   usageBaseline,
   usageTotals,
@@ -245,6 +246,7 @@ import {
   type RetryOutcome,
   type Verdict,
   type VerifyDisplay,
+  type ChecksDisplay,
 } from "./review/render.ts"
 import { approvalNote, resolveRefusal, resolveReply, resolveTargets, type ResolveScope } from "./review/resolve.ts"
 import { renderActivatedSkill, renderSkillWithResources } from "./review/skills.ts"
@@ -300,6 +302,7 @@ import {
   argvFromTemplate,
   CHECK_ENV,
   checkKey,
+  checkRecordOf,
   checkText,
   checkTimeoutOf,
   existsArgv,
@@ -559,6 +562,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return this.#queuedCheck(
       async () => this.#cachedCheck(pr, key) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
     )
+  }
+
+  #checksDisplay(): ChecksDisplay | undefined {
+    const status = this.#sandbox.status()
+    if (status.kind === "none" && this.#checks.size === 0) return undefined
+    const runs = [...this.#checks.values()].map(checkRecordOf)
+    return { status: status.kind, reason: status.kind === "unavailable" ? status.reason : undefined, runs }
   }
 
   #cachedCheck(pr: PullRequestInfo, key: string): string | undefined {
@@ -1046,6 +1056,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const attribution = attributionOf(pending)
     const spend = await this.spendOf(pending)
+    const sandboxSeconds = this.#sandbox.seconds()
+    const checks = this.#checksDisplay()
     const reviewed = nextReviewed({
       previous: await this.readReviewed(),
       scope,
@@ -1072,6 +1084,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       since: reviewed.since,
       verify: publication.verify,
       configError: pending.configError,
+      checks,
+      sandboxSeconds,
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
@@ -1102,7 +1116,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.replyFixed(pr, resolved)
     await this.storeFindings(pr, scoped.accepted, review.id)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
-    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, {
+    const posted: PostedReview = {
       reviewId: review.id,
       event,
       at: Date.now(),
@@ -1110,7 +1124,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       spend,
       unverified,
       ...attribution,
-    })
+    }
+    if (sandboxSeconds !== undefined) posted.sandboxSeconds = sandboxSeconds
+    if (checks !== undefined) posted.checks = [...checks.runs]
+    await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, posted)
     await this.endOwnRun(
       pending.deliveryId,
       postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now(), unverified),
@@ -1586,7 +1603,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
           ...this.#runs.usage(),
-          sandboxSeconds: this.#sandbox.seconds(),
+          ...sandboxFields(this.#sandbox.seconds()),
+          checks: this.#checks.size,
           ...spendFields(await this.postedSpend(pr)),
         })
       }

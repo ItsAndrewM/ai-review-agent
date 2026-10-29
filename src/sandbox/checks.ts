@@ -1,5 +1,6 @@
 import { Type } from "typebox"
 import { Value } from "typebox/value"
+import type { CheckRecord } from "../records.ts"
 import type { Manager } from "./checkout.ts"
 import { lastLine } from "./checkout.ts"
 import type { RunOutcome } from "./run.ts"
@@ -131,12 +132,28 @@ export interface CheckRun {
   readonly ms: number
 }
 
+export function checkRecordOf(run: CheckRun): CheckRecord {
+  const record: CheckRecord = {
+    name: run.name,
+    paths: [...run.paths],
+    outcome: run.outcome.outcome,
+    ms: run.ms,
+    tail: run.outcome.tail,
+  }
+  if (run.outcome.outcome === "exited") record.exitCode = run.outcome.exitCode
+  return record
+}
+
+export function secondsText(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`
+}
+
 export function checkText(run: CheckRun): string {
-  const seconds = (run.ms / 1000).toFixed(1).replace(/\.0$/, "")
+  const seconds = secondsText(run.ms)
   const head =
     run.outcome.outcome === "exited"
-      ? `${run.name} exited ${run.outcome.exitCode} in ${seconds}s`
-      : `${run.name} timed out after ${seconds}s`
+      ? `${run.name} exited ${run.outcome.exitCode} in ${seconds}`
+      : `${run.name} timed out after ${seconds}`
   const tail = run.outcome.tail === "" ? "(no output)" : run.outcome.tail
   const cut = run.outcome.cut ? "\n(output cut to its last 8 KiB)" : ""
   return `${head}\n\n${tail}${cut}`

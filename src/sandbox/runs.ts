@@ -59,6 +59,13 @@ export type SandboxAccess =
 
 export type SandboxEnd = "review_end" | "closed" | "new_head"
 
+export type SandboxStatus =
+  | { readonly kind: "none" }
+  | { readonly kind: "off" }
+  | { readonly kind: "ready" }
+  | { readonly kind: "spent" }
+  | { readonly kind: "unavailable"; readonly reason: UnavailableReason }
+
 export type AccessSummary =
   | { readonly kind: "ready"; readonly dir: string; readonly manager: Manager }
   | Exclude<SandboxAccess, { kind: "ready" }>
@@ -85,6 +92,7 @@ export class SandboxRuns {
   #leased = false
   #running = false
   #spentLogged = false
+  #answeredOff = false
   #settled: Settled | undefined
   #preparing: Promise<Settled> | undefined
 
@@ -107,9 +115,20 @@ export class SandboxRuns {
     if (spent) return spent
     if (this.#settled) return this.#settled
     if (this.#preparing) return this.#preparing
-    if (!(await this.host.enabled())) return { kind: "off" }
+    if (!(await this.host.enabled())) {
+      this.#answeredOff = true
+      return { kind: "off" }
+    }
     this.#preparing ??= this.#prepare()
     return this.#preparing
+  }
+
+  status(): SandboxStatus {
+    if (this.#spentLogged) return { kind: "spent" }
+    if (this.#settled?.kind === "unavailable") return { kind: "unavailable", reason: this.#settled.reason }
+    if (this.#settled?.kind === "ready") return { kind: "ready" }
+    if (this.#answeredOff) return { kind: "off" }
+    return { kind: "none" }
   }
 
   async end(reason: SandboxEnd): Promise<void> {
@@ -148,6 +167,7 @@ export class SandboxRuns {
     this.#started = undefined
     this.#head = undefined
     this.#spentLogged = false
+    this.#answeredOff = false
     this.#settled = undefined
     this.#preparing = undefined
   }
