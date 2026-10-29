@@ -316,6 +316,7 @@ import {
   type CheckRun,
 } from "./sandbox/checks.ts"
 import { sandboxTokenScope } from "./sandbox/probe.ts"
+import { SandboxRecord } from "./sandbox/record.ts"
 import { DEFAULT_TAIL_BYTES } from "./sandbox/run.ts"
 import {
   accessSummary,
@@ -526,6 +527,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return { number: pr.number, key: await this.key(), sha: pr.head.sha }
       },
       now: () => Date.now(),
+      load: async () => {
+        const stored = await this.ctx.storage.get("sandbox")
+        return Value.Check(SandboxRecord, stored) ? stored : undefined
+      },
+      save: async (record) => {
+        if (record === undefined) await this.ctx.storage.delete("sandbox")
+        else await this.ctx.storage.put<SandboxRecord>("sandbox", record)
+      },
+      scheduleDrop: async (time) => {
+        await this.lifecycle.jobs.push({ id: SANDBOX_DROP_JOB, fn: SANDBOX_DROP_JOB, time })
+      },
+      cancelDrop: async () => {
+        await this.lifecycle.jobs.cancel(SANDBOX_DROP_JOB)
+      },
     }
   }
 
@@ -564,8 +579,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
   }
 
-  #checksDisplay(): ChecksDisplay | undefined {
-    const status = this.#sandbox.status()
+  async #checksDisplay(): Promise<ChecksDisplay | undefined> {
+    const status = await this.#sandbox.status()
     if (status.kind === "none" && this.#checks.size === 0) return undefined
     const runs = [...this.#checks.values()].map(checkRecordOf)
     return { status: status.kind, reason: status.kind === "unavailable" ? status.reason : undefined, runs }
@@ -1056,8 +1071,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const attribution = attributionOf(pending)
     const spend = await this.spendOf(pending)
-    const sandboxSeconds = this.#sandbox.seconds()
-    const checks = this.#checksDisplay()
+    const sandboxSeconds = await this.#sandbox.seconds()
+    const checks = await this.#checksDisplay()
     const reviewed = nextReviewed({
       previous: await this.readReviewed(),
       scope,
@@ -1537,7 +1552,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#requestsPastBudget = 0
     this.#activated = []
     this.#runs.start()
-    this.#sandbox.start()
+    await this.#sandbox.start()
     this.#checks.clear()
     try {
       const files = await this.openRun(pr, run)
@@ -1603,7 +1618,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
           ms: Date.now() - run.started,
           ...this.#runs.usage(),
-          ...sandboxFields(this.#sandbox.seconds()),
+          ...sandboxFields(await this.#sandbox.seconds()),
           checks: this.#checks.size,
           ...spendFields(await this.postedSpend(pr)),
         })
@@ -2752,6 +2767,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const RECHECK_JOB = "approval.recheck"
+
+const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128

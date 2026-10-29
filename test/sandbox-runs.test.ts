@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { PullRequestKey } from "../src/records.ts"
 import { MAX_CHECKOUT_KIB } from "../src/sandbox/checkout.ts"
+import type { SandboxRecord } from "../src/sandbox/record.ts"
 import type { RunOptions, RunOutcome } from "../src/sandbox/run.ts"
 import {
   DEFAULT_SANDBOX_SECONDS,
@@ -22,8 +23,16 @@ class FakeSandbox implements SandboxCalls {
   calls: string[] = []
   tokens: (string | undefined)[] = []
   destroyThrows = false
+  alive = true
+  runningThrows = false
   rejects: string | undefined
   constructor(private readonly scripted: Scripted) {}
+
+  async running(): Promise<boolean> {
+    this.calls.push("running")
+    if (this.runningThrows) throw new Error("sandbox object unreachable")
+    return this.alive
+  }
 
   async start(token: string | undefined): Promise<void> {
     this.calls.push("start")
@@ -56,6 +65,12 @@ class FakeHost implements SandboxHost {
   headThrows = false
   sha = "abc123"
   clock = 1_000_000
+  stored: SandboxRecord | undefined
+  saved: (SandboxRecord | undefined)[] = []
+  loadThrows = false
+  saveThrows = false
+  drops: number[] = []
+  cancels = 0
   readonly box: FakeSandbox
   constructor(scripted: Scripted) {
     this.box = new FakeSandbox(scripted)
@@ -86,7 +101,30 @@ class FakeHost implements SandboxHost {
   now(): number {
     return this.clock
   }
+  async load(): Promise<SandboxRecord | undefined> {
+    if (this.loadThrows) throw new Error("storage unreadable")
+    return this.stored
+  }
+  async save(record: SandboxRecord | undefined): Promise<void> {
+    if (this.saveThrows) throw new Error("storage unwritable")
+    this.saved.push(record)
+  }
+  async scheduleDrop(time: number): Promise<void> {
+    this.drops.push(time)
+  }
+  async cancelDrop(): Promise<void> {
+    this.cancels += 1
+  }
 }
+
+const readyRecord = (sha = "abc123"): SandboxRecord => ({
+  head: { number: 7, key: KEY, sha },
+  started: 900_000,
+  leased: true,
+  running: true,
+  settled: { kind: "ready", manager: "pnpm" },
+  checks: [],
+})
 
 const READY = { "andabot-checkout": ok("kib=100\n"), "andabot-detect": ok("pnpm\n"), pnpm: ok("done\n") }
 
@@ -99,6 +137,22 @@ describe("SandboxRuns.access", () => {
     expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "run:andabot-detect", "run:pnpm"])
     expect(host.box.tokens).toEqual(["scoped-token"])
     expect(host.leases).toEqual([900_000 + LEASE_GRACE_MS])
+  })
+
+  it("saves the record at each step a teardown would have to undo: head read, leased, running, settled", async () => {
+    const host = new FakeHost(READY)
+    await new SandboxRuns(host, 900).access()
+    expect(host.saved.map((record) => [record?.leased, record?.running, record?.settled?.kind])).toEqual([
+      [false, false, undefined],
+      [true, false, undefined],
+      [true, true, undefined],
+      [true, true, "ready"],
+    ])
+    expect(host.saved[0]).toMatchObject({
+      head: { number: 7, key: KEY, sha: "abc123" },
+      started: 1_000_000,
+      checks: [],
+    })
   })
 
   it("answers from the memo without asking again whether the tier is on", async () => {
@@ -170,7 +224,7 @@ describe("SandboxRuns.access", () => {
     expect((await runs.access()).kind).toBe("ready")
     host.clock += 1
     expect(await runs.access()).toEqual({ kind: "spent", seconds: 10, budget: 10 })
-    expect(runs.seconds()).toBe(10)
+    expect(await runs.seconds()).toBe(10)
   })
 })
 
@@ -182,7 +236,7 @@ describe("SandboxRuns.end", () => {
     await runs.end("review_end")
     expect(host.box.calls.at(-1)).toBe("destroy")
     expect(host.unleased).toBe(1)
-    expect(runs.seconds()).toBeUndefined()
+    expect(await runs.seconds()).toBeUndefined()
     await runs.end("closed")
     expect(host.box.calls.filter((call) => call === "destroy")).toHaveLength(1)
     await runs.access()
@@ -210,14 +264,14 @@ describe("SandboxRuns.status", () => {
   it("says none before any call, then what the sandbox answered, and none again after end", async () => {
     const host = new FakeHost(READY)
     const runs = new SandboxRuns(host, 10)
-    expect(runs.status()).toEqual({ kind: "none" })
+    expect(await runs.status()).toEqual({ kind: "none" })
     await runs.access()
-    expect(runs.status()).toEqual({ kind: "ready" })
+    expect(await runs.status()).toEqual({ kind: "ready" })
     host.clock += 10_000
     await runs.access()
-    expect(runs.status()).toEqual({ kind: "spent" })
+    expect(await runs.status()).toEqual({ kind: "spent" })
     await runs.end("review_end")
-    expect(runs.status()).toEqual({ kind: "none" })
+    expect(await runs.status()).toEqual({ kind: "none" })
   })
 
   it("says off after an off answer, and names the step after a failure", async () => {
@@ -225,12 +279,12 @@ describe("SandboxRuns.status", () => {
     off.on = false
     const offRuns = new SandboxRuns(off, 900)
     await offRuns.access()
-    expect(offRuns.status()).toEqual({ kind: "off" })
+    expect(await offRuns.status()).toEqual({ kind: "off" })
     const failing = new FakeHost(READY)
     failing.grant = false
     const failingRuns = new SandboxRuns(failing, 900)
     await failingRuns.access()
-    expect(failingRuns.status()).toEqual({ kind: "unavailable", reason: "lease" })
+    expect(await failingRuns.status()).toEqual({ kind: "unavailable", reason: "lease" })
   })
 })
 
@@ -326,6 +380,116 @@ describe("SandboxRuns across reviews", () => {
     expect(calls.indexOf("destroy")).toBeLessThan(calls.lastIndexOf("start"))
     expect(host.leases).toHaveLength(2)
     expect(host.unleased).toBe(1)
-    expect(runs.seconds()).toBe(0)
+    expect(await runs.seconds()).toBe(0)
+  })
+})
+
+describe("SandboxRuns after a restart", () => {
+  it("ends what an earlier instance started: end destroys, unleases and deletes the record", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    await new SandboxRuns(host, 900).end("review_end")
+    expect(host.box.calls).toEqual(["running", "destroy"])
+    expect(host.unleased).toBe(1)
+    expect(host.saved.at(-1)).toBeUndefined()
+  })
+
+  it("drops an idle restored sandbox on a closed event", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    await new SandboxRuns(host, 900).dropIdle("closed")
+    expect(host.box.calls).toContain("destroy")
+    expect(host.unleased).toBe(1)
+  })
+
+  it("answers ready from the record, with no second lease, start, checkout or install, and keeps the clock", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    host.clock = 1_000_000
+    const runs = new SandboxRuns(host, 900)
+    const access = await runs.access()
+    expect(access).toEqual({ kind: "ready", sandbox: host.box, dir: "/workspace/repo", manager: "pnpm" })
+    expect(host.box.calls).toEqual(["running"])
+    expect(host.leases).toEqual([])
+    expect(await runs.seconds()).toBe(100)
+    expect(await runs.status()).toEqual({ kind: "ready" })
+  })
+
+  it("tears down a record for another head on end, since the container is the pull request's one container", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord("old111")
+    await new SandboxRuns(host, 900).end("review_end")
+    expect(host.box.calls).toContain("destroy")
+    expect(host.unleased).toBe(1)
+  })
+
+  it("tears down a record for another head first, then prepares the current head", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord("old111")
+    const runs = new SandboxRuns(host, 900)
+    expect((await runs.access()).kind).toBe("ready")
+    const calls = host.box.calls
+    expect(calls.indexOf("destroy")).toBeLessThan(calls.indexOf("start"))
+    expect(host.unleased).toBe(1)
+    expect(host.leases).toHaveLength(1)
+    expect(await runs.seconds()).toBe(0)
+  })
+
+  it("treats a container that no longer runs as lost: unleases, prepares afresh and keeps the clock", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    host.box.alive = false
+    const runs = new SandboxRuns(host, 900)
+    expect((await runs.access()).kind).toBe("ready")
+    expect(host.box.calls).toEqual(["running", "start", "run:andabot-checkout", "run:andabot-detect", "run:pnpm"])
+    expect(host.unleased).toBe(1)
+    expect(host.leases).toHaveLength(1)
+    expect(await runs.seconds()).toBe(100)
+  })
+
+  it("treats a container that can't say whether it runs as lost", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    host.box.runningThrows = true
+    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect(host.box.calls.filter((call) => call === "start")).toHaveLength(1)
+    expect(host.unleased).toBe(1)
+  })
+
+  it("ends a preparation an earlier instance left half done", async () => {
+    const host = new FakeHost(READY)
+    const { settled: _settled, ...halfDone } = readyRecord()
+    host.stored = halfDone
+    await new SandboxRuns(host, 900).end("review_end")
+    expect(host.box.calls).toContain("destroy")
+    expect(host.unleased).toBe(1)
+  })
+
+  it("restores an unavailable answer for the rest of the review", async () => {
+    const host = new FakeHost(READY)
+    host.stored = {
+      ...readyRecord(),
+      leased: false,
+      running: false,
+      settled: { kind: "unavailable", reason: "install" },
+    }
+    const runs = new SandboxRuns(host, 900)
+    expect(await runs.access()).toEqual({ kind: "unavailable", reason: "install" })
+    expect(host.box.calls).toEqual([])
+    expect(await runs.status()).toEqual({ kind: "unavailable", reason: "install" })
+  })
+
+  it("counts a load that throws as no record", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    host.loadThrows = true
+    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect(host.box.calls[0]).toBe("start")
+  })
+
+  it("never lets a throwing save out of access", async () => {
+    const host = new FakeHost(READY)
+    host.saveThrows = true
+    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
   })
 })
