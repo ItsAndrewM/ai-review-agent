@@ -585,10 +585,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     key: string,
   ): Promise<string> {
     const began = Date.now()
-    const missing = await this.#missingPath(access, paths)
-    if (missing !== undefined) return this.#checkRefused(name, { kind: "missing_path", path: missing })
     const argv = await this.#checkArgv(pr, name, access.manager, paths)
     if (argv === undefined) return this.#checkRefused(name, { kind: "no_command" })
+    const used = paths.filter((path) => argv.includes(path))
+    const missing = await this.#missingPath(access, used)
+    if (missing !== undefined) return this.#checkRefused(name, { kind: "missing_path", path: missing })
     const outcome = await access.sandbox.run(argv, {
       cwd: access.dir,
       env: { ...CHECK_ENV },
@@ -623,14 +624,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async #packageJsonAt(base: string): Promise<string | undefined> {
     if (this.#packageJson?.base === base) return this.#packageJson.text
-    let text: string | undefined
     try {
-      text = await (await this.github()).getFileContent(await this.key(), "package.json", base)
+      const text = await (await this.github()).getFileContent(await this.key(), "package.json", base)
+      this.#packageJson = { base, text }
+      return text
     } catch (cause) {
       logError("check.package_unreadable", { base: shortSha(base), error: errorText(cause) })
+      return undefined
     }
-    this.#packageJson = { base, text }
-    return text
   }
 
   async #checkRefused(name: CheckName, refusal: CheckRefusal): Promise<string> {
