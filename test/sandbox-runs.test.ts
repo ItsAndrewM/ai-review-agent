@@ -416,6 +416,17 @@ describe("SandboxRuns after a restart", () => {
     expect(await runs.status()).toEqual({ kind: "ready" })
   })
 
+  it("shares one restore between concurrent callers on a fresh instance, so neither prepares over the restored container", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    const runs = new SandboxRuns(host, 900)
+    const [first, second] = await Promise.all([runs.access(), runs.access()])
+    expect(first.kind).toBe("ready")
+    expect(second.kind).toBe("ready")
+    expect(host.box.calls).toEqual(["running"])
+    expect(host.leases).toEqual([])
+  })
+
   it("tears down a record for another head on end, since the container is the pull request's one container", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord("old111")
@@ -566,14 +577,16 @@ describe("SandboxRuns drop job", () => {
     expect(host.cancels).toBe(1)
   })
 
-  it("drops nothing while a review is active, so the review's own end follows", async () => {
+  it("drops nothing while a review is active and says so, so the job can come back for a review that dies later", async () => {
     const host = new FakeHost(READY)
     const runs = new SandboxRuns(host, 900)
     await runs.start()
     await runs.access()
-    await runs.dropIdle("review_end")
+    expect(await runs.dropIdle("review_end")).toBe(true)
     expect(host.box.calls).not.toContain("destroy")
     expect(host.cancels).toBe(0)
+    await runs.end("review_end")
+    expect(await runs.dropIdle("review_end")).toBe(false)
   })
 
   it("never lets a throwing schedule out of access", async () => {

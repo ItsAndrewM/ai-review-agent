@@ -17,7 +17,7 @@ import {
   type PiPromptResponse,
   type PiSession,
 } from "agents/harness/pi"
-import { Lifecycle, type LifecycleJobContext } from "agents/lifecycle"
+import { Lifecycle, type LifecycleJobContext, type LifecycleJobOutcome } from "agents/lifecycle"
 import { createAI } from "agents/models/pi-ai"
 import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
@@ -320,6 +320,7 @@ import { SandboxRecord } from "./sandbox/record.ts"
 import { DEFAULT_TAIL_BYTES } from "./sandbox/run.ts"
 import {
   accessSummary,
+  LEASE_GRACE_MS,
   sandboxBudgetOf,
   sandboxOn,
   SandboxRuns,
@@ -697,13 +698,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return "accepted"
   }
 
-  async onJob({ job }: LifecycleJobContext): Promise<void> {
-    if (job.fn === SANDBOX_DROP_JOB) return this.#sandbox.dropIdle("review_end")
+  async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
+    if (job.fn === SANDBOX_DROP_JOB) return this.#dropJob()
     if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
       logError("job.unreadable", { id: job.id, fn: job.fn })
       return
     }
     await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
+  }
+
+  async #dropJob(): Promise<LifecycleJobOutcome> {
+    const active = await this.#sandbox.dropIdle("review_end")
+    return active ? { rescheduleAt: Date.now() + LEASE_GRACE_MS } : undefined
   }
 
   botLogin(): string {

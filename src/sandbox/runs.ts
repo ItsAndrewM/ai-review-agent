@@ -94,7 +94,7 @@ class StepFailure extends Error {
 
 export class SandboxRuns {
   #active = 0
-  #restored = false
+  #restoring: Promise<void> | undefined
   #started: number | undefined
   #head: SandboxHead | undefined
   #leased = false
@@ -163,20 +163,25 @@ export class SandboxRuns {
     if (this.#active === 0) await this.#teardown(reason)
   }
 
-  async dropIdle(reason: SandboxEnd): Promise<void> {
+  async dropIdle(reason: SandboxEnd): Promise<boolean> {
     await this.#restore()
-    if (this.#active === 0) await this.#teardown(reason)
+    if (this.#active > 0) return true
+    await this.#teardown(reason)
+    return false
   }
 
   #seconds(): number | undefined {
     return this.#started === undefined ? undefined : Math.floor((this.host.now() - this.#started) / 1000)
   }
 
-  async #restore(): Promise<void> {
-    if (this.#restored) return
-    this.#restored = true
+  #restore(): Promise<void> {
+    this.#restoring ??= this.#restoreOnce()
+    return this.#restoring
+  }
+
+  async #restoreOnce(): Promise<void> {
     const record = await this.#load()
-    if (record === undefined || this.#head !== undefined) return
+    if (record === undefined) return
     this.#adopt(record)
     if (record.settled?.kind !== "unavailable") await this.#scheduleDrop()
     if (record.settled?.kind === "ready") return this.#reattach(record)
