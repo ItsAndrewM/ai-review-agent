@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
+import { GitHubError } from "./errors.ts"
 
 export const InstallationToken = Type.Object({ token: Type.String(), expiresAt: Type.Number() })
 
@@ -37,7 +38,8 @@ export async function fetchInstallationToken(
   apiBase = "https://api.github.com",
 ): Promise<InstallationToken> {
   const body = tokenRequestBody(scope)
-  const response = await fetch(`${apiBase}/app/installations/${installationId}/access_tokens`, {
+  const path = `/app/installations/${installationId}/access_tokens`
+  const response = await fetch(`${apiBase}${path}`, {
     method: "POST",
     headers: {
       authorization: `Bearer ${jwt}`,
@@ -49,7 +51,7 @@ export async function fetchInstallationToken(
     body: body ?? null,
   })
   if (!response.ok) {
-    throw new Error(`installation token: ${response.status} ${await response.text()}`)
+    throw new GitHubError(`installation token: ${response.status} ${await response.text()}`, response.status, path)
   }
   const data: unknown = await response.json()
   if (!Value.Check(InstallationTokenResponse, data)) throw new Error("installation token: unexpected response")

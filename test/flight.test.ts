@@ -1,7 +1,10 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
+import { GitHubError } from "../src/github/errors.ts"
 import {
+  afterReviewThrow,
   decideFlight,
+  resumedPending,
   GRACE_MS,
   migratePending,
   ownsOperation,
@@ -26,29 +29,71 @@ const afterGrace = pending.started + GRACE_MS
 
 describe("decideFlight", () => {
   it("starts when nothing is pending", () => {
-    expect(decideFlight(undefined, "aaa", { running: false, now: afterGrace })).toEqual({ kind: "start" })
+    expect(decideFlight(undefined, "aaa", { running: false, now: afterGrace }, "other-delivery")).toEqual({
+      kind: "start",
+    })
   })
 
   it("skips a head whose review the harness is still running", () => {
-    expect(decideFlight(pending, "aaa", { running: true, now: afterGrace })).toEqual({ kind: "skip" })
+    expect(decideFlight(pending, "aaa", { running: true, now: afterGrace }, "other-delivery")).toEqual({ kind: "skip" })
   })
 
   it("skips a head whose review started within the grace, when the host is between prompts and the harness lists nothing", () => {
-    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace - 1 })).toEqual({ kind: "skip" })
+    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace - 1 }, "other-delivery")).toEqual({
+      kind: "skip",
+    })
   })
 
   it("replaces the review of an older head as superseded, running or not", () => {
     const superseded = { kind: "replace", previous: pending, because: "superseded" }
-    expect(decideFlight(pending, "bbb", { running: true, now: afterGrace })).toEqual(superseded)
-    expect(decideFlight(pending, "bbb", { running: false, now: afterGrace - 1 })).toEqual(superseded)
+    expect(decideFlight(pending, "bbb", { running: true, now: afterGrace }, "other-delivery")).toEqual(superseded)
+    expect(decideFlight(pending, "bbb", { running: false, now: afterGrace - 1 }, "other-delivery")).toEqual(superseded)
   })
 
   it("replaces a review of the same head that the harness no longer runs, once the grace has passed, as dead", () => {
-    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace })).toEqual({
+    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace }, "other-delivery")).toEqual({
       kind: "replace",
       previous: pending,
       because: "dead",
     })
+  })
+})
+
+describe("decideFlight for the delivery that holds the pending", () => {
+  it("resumes its own review when the harness lists nothing, inside or outside the grace", () => {
+    const resume = { kind: "resume", previous: pending }
+    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace - 1 }, "d-1")).toEqual(resume)
+    expect(decideFlight(pending, "aaa", { running: false, now: afterGrace }, "d-1")).toEqual(resume)
+  })
+
+  it("skips while its own review is still running", () => {
+    expect(decideFlight(pending, "aaa", { running: true, now: afterGrace }, "d-1")).toEqual({ kind: "skip" })
+  })
+
+  it("supersedes its own pending for a newer head, as any delivery would", () => {
+    expect(decideFlight(pending, "bbb", { running: false, now: afterGrace }, "d-1")).toEqual({
+      kind: "replace",
+      previous: pending,
+      because: "superseded",
+    })
+  })
+})
+
+describe("resumedPending", () => {
+  it("starts the grace afresh, so another delivery meanwhile skips rather than replacing the resumed review as dead", () => {
+    const resumed = resumedPending(pending, afterGrace)
+    expect(resumed).toEqual({ ...pending, started: afterGrace })
+    expect(decideFlight(resumed, "aaa", { running: false, now: afterGrace + 1 }, "other-delivery")).toEqual({
+      kind: "skip",
+    })
+  })
+})
+
+describe("afterReviewThrow", () => {
+  it("keeps the pending and the check run for a transient error, and releases them for a final one", () => {
+    expect(afterReviewThrow(new GitHubError("GitHub 522 /x", 522, "/x"))).toBe("keep")
+    expect(afterReviewThrow(new GitHubError("GitHub 404 /x", 404, "/x"))).toBe("release")
+    expect(afterReviewThrow(new Error("model returned nothing"))).toBe("release")
   })
 })
 
@@ -153,12 +198,12 @@ describe("migratePending", () => {
 
   it("puts a record with no start time outside the grace, so only the harness listing can keep it live", () => {
     const migrated = migratePending({ headSha: "aaa", deliveryId: "d-1" })
-    expect(decideFlight(migrated, "aaa", { running: false, now: GRACE_MS })).toEqual({
+    expect(decideFlight(migrated, "aaa", { running: false, now: GRACE_MS }, "other-delivery")).toEqual({
       kind: "replace",
       previous: migrated,
       because: "dead",
     })
-    expect(decideFlight(migrated, "aaa", { running: true, now: GRACE_MS })).toEqual({ kind: "skip" })
+    expect(decideFlight(migrated, "aaa", { running: true, now: GRACE_MS }, "other-delivery")).toEqual({ kind: "skip" })
   })
 
   it("returns a full record unchanged", () => {

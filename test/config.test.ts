@@ -409,9 +409,9 @@ describe("readConfig", () => {
   })
 
   it.each<[number, string]>([
-    [403, "Error: GitHub 403 : forbidden"],
-    [500, "Error: GitHub 500 : forbidden"],
-    [502, "Error: GitHub 502 : forbidden"],
+    [403, "GitHubError: GitHub 403 : forbidden"],
+    [500, "GitHubError: GitHub 500 : forbidden"],
+    [502, "GitHubError: GitHub 502 : forbidden"],
   ])("reports a %s as unreadable and reviews with the defaults and the error text", async (status, error) => {
     const { report, reported } = recorder()
     const { github } = fakeGitHub(() => new Response("forbidden", { status }))
@@ -426,10 +426,12 @@ describe("readConfig", () => {
     })
     expect(await readConfig(github, ref, BASE, report)).toEqual({
       config: LITERAL_DEFAULTS,
-      error: "TypeError: fetch failed",
+      error: `GitHubError: GitHub /repos/o/r/contents/.andabot.yaml?ref=${BASE}: TypeError: fetch failed`,
       present: false,
     })
-    expect(reported).toEqual(["TypeError: fetch failed"])
+    expect(reported).toEqual([
+      `GitHubError: GitHub /repos/o/r/contents/.andabot.yaml?ref=${BASE}: TypeError: fetch failed`,
+    ])
   })
 
   it("hands out copies of the defaults whether the file is missing or unreadable", async () => {

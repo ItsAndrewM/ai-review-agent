@@ -440,7 +440,7 @@ describe("loadRepositoryContext", () => {
     const { report, reported } = recorder()
     const { github } = fakeGitHub(ENTRIES, BODIES, false, ["apps/web/CLAUDE.md"])
     const context = await loadRepositoryContext(github, ref, BASE, WEB, report)
-    expect(reported).toEqual([["apps/web/CLAUDE.md", "Error: GitHub 502 : boom"]])
+    expect(reported).toEqual([["apps/web/CLAUDE.md", "GitHubError: GitHub 502 : boom"]])
     expect(context.files).toEqual({ "CLAUDE.md": "Root rules.", "AGENTS.md": "" })
     expect(unloadedPaths(context, WEB)).toEqual(["apps/web/CLAUDE.md"])
     expect(reviewStandards(context, WEB, [])).toEqual({
@@ -459,7 +459,7 @@ describe("loadRepositoryContext", () => {
     const changed = [...WEB, "apps/api/b.ts"]
     const context = await loadRepositoryContext(github, ref, BASE, changed, report, cached)
     expect(context).toBe(cached)
-    expect(reported).toEqual([["apps/api/CLAUDE.md", "Error: GitHub 502 : boom"]])
+    expect(reported).toEqual([["apps/api/CLAUDE.md", "GitHubError: GitHub 502 : boom"]])
     expect(reviewStandards(context, changed, []).used).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md"])
   })
 })
@@ -473,7 +473,7 @@ describe("readRepositoryContext", () => {
       (error) => reported.push(error),
     )
     expect(context).toBeUndefined()
-    expect(reported).toEqual(["Error: GitHub 500 : boom"])
+    expect(reported).toEqual(["GitHubError: GitHub 500 : boom"])
     expect(reviewStandards(context, WEB, [])).toEqual(NO_STANDARDS)
   })
 

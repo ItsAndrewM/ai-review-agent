@@ -1,6 +1,7 @@
 import { createServer, type Server } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { canCommand, GitHubClient, type CreateCheckRun, type UpdateCheckRun } from "../src/github/client.ts"
+import { GitHubError } from "../src/github/errors.ts"
 
 interface Received {
   method: string | undefined
@@ -90,6 +91,37 @@ describe("GitHubClient check runs", () => {
 })
 
 const respond = (status: number, body: string) => async () => new Response(body, { status })
+
+describe("GitHubClient failures", () => {
+  it("throws a GitHubError carrying the status and the path when GitHub answers 522", async () => {
+    const failing = new GitHubClient("t", "https://api", respond(522, "origin unreachable"))
+    const error = await failing.getPullRequest({ owner: "o", repo: "r" }, 4).catch((cause: GitHubError) => cause)
+    expect(error).toBeInstanceOf(GitHubError)
+    expect(error).toMatchObject({ status: 522, path: "/repos/o/r/pulls/4" })
+    expect(String(error)).toContain("origin unreachable")
+  })
+
+  it("throws a GitHubError with no status when the fetch itself rejects", async () => {
+    const failing = new GitHubClient("t", "https://api", async () => {
+      throw new TypeError("fetch failed")
+    })
+    const error = await failing.getPullRequest({ owner: "o", repo: "r" }, 4).catch((cause: GitHubError) => cause)
+    expect(error).toBeInstanceOf(GitHubError)
+    expect(error).toMatchObject({ status: undefined, path: "/repos/o/r/pulls/4" })
+    expect(String(error)).toContain("fetch failed")
+  })
+
+  it("gives a 200 GraphQL body with errors the status 200, which is final", async () => {
+    const failing = new GitHubClient(
+      "t",
+      "https://api",
+      respond(200, JSON.stringify({ errors: [{ message: "nope" }] })),
+    )
+    const error = await failing.listReviewThreads({ owner: "o", repo: "r" }, 4).catch((cause: GitHubError) => cause)
+    expect(error).toBeInstanceOf(GitHubError)
+    expect(error).toMatchObject({ status: 200, path: "/graphql" })
+  })
+})
 
 describe("getIssue", () => {
   it("parses an issue, returns undefined for a missing one, and keeps a pull request's marker", async () => {

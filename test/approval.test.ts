@@ -14,6 +14,7 @@ import {
   lastReviewOf,
   LastReview,
   nextRecheck,
+  retriesAtDoor,
   openBlockingIn,
   ownsRecheck,
   RecheckJob,
@@ -458,7 +459,7 @@ describe("nextRecheck", () => {
     for (const reason of ["review_in_flight", "checks_unknown", "threads_unknown", "workflow_unknown"] as const) {
       expect(nextRecheck("checks_completed", { kind: "wait", reason }, 0)).toEqual({ attempt: 1, inMs: 20_000 })
     }
-    expect(nextRecheck("recheck", { kind: "failed" }, 1)).toEqual({ attempt: 2, inMs: 60_000 })
+    expect(nextRecheck("recheck", { kind: "failed", transient: true }, 1)).toEqual({ attempt: 2, inMs: 60_000 })
   })
 
   it("stops once the answer is final", () => {
@@ -516,5 +517,15 @@ describe("ownsRecheck", () => {
 
   it("stops a re-check whose job a later completion's chain replaced while it read GitHub", () => {
     expect(ownsRecheck("recheck", "old", { attempt: 1, delivery: "new" })).toBe(false)
+  })
+})
+
+describe("retriesAtDoor", () => {
+  it("sends a transient failure that nothing re-checks to the door, and nothing else", () => {
+    expect(retriesAtDoor({ kind: "failed", transient: true }, undefined)).toBe(true)
+    expect(retriesAtDoor({ kind: "failed", transient: true }, { attempt: 1, inMs: 20_000 })).toBe(false)
+    expect(retriesAtDoor({ kind: "failed", transient: false }, undefined)).toBe(false)
+    expect(retriesAtDoor({ kind: "wait", reason: "checks_pending" }, undefined)).toBe(false)
+    expect(retriesAtDoor({ kind: "approved", head: "abc" }, undefined)).toBe(false)
   })
 })

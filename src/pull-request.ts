@@ -41,6 +41,7 @@ import {
   type ChangedFile,
   type MarkedLines,
 } from "./github/diff.ts"
+import { errorOf, failureSummary, isTransient, softenUnlessTransient, TransientFailure } from "./github/errors.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -103,16 +104,17 @@ import {
   LastReview,
   lastReviewOf,
   nextRecheck,
+  retriesAtDoor,
   openBlockingIn,
   ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
   type ApprovalOutcome,
+  type Recheck,
   type ApprovalState,
   type ApprovalTrigger,
   type ChecksState,
   type WaitReason,
-  type WebhookTrigger,
   type WorkflowState,
 } from "./review/approval.ts"
 import {
@@ -144,6 +146,16 @@ import {
   type ReviewSpend,
   type UsageLedger,
 } from "./review/cost.ts"
+import {
+  abandonReplyWanted,
+  Deliveries,
+  RETRY_JOB,
+  RetryJob,
+  StoredDelivery,
+  type DeliveryHost,
+  type Incoming,
+  type ThreadContext,
+} from "./review/delivery.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -158,7 +170,9 @@ import {
   type WrittenReview,
 } from "./review/findings.ts"
 import {
+  afterReviewThrow,
   decideFlight,
+  resumedPending,
   migratePending,
   ownsOperation,
   replacedExit,
@@ -333,49 +347,7 @@ import {
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
-export type Incoming =
-  | {
-      kind: "review"
-      key: PullRequestKey
-      deliveryId: string
-      headSha: string
-      full: boolean
-      requestedBy?: string
-    }
-  | {
-      kind: "comment"
-      key: PullRequestKey
-      deliveryId: string
-      author: string
-      body: string
-      nodeId: string | undefined
-      thread?: ThreadContext
-    }
-  | {
-      kind: "reaction"
-      key: PullRequestKey
-      deliveryId: string
-      nodeId: string
-    }
-  | {
-      kind: "approval"
-      key: PullRequestKey
-      deliveryId: string
-      trigger: WebhookTrigger
-    }
-  | {
-      kind: "closed"
-      key: PullRequestKey
-      deliveryId: string
-    }
-
-export interface ThreadContext {
-  commentId: number
-  rootId: number
-  path: string
-  line: number | null
-  diffHunk: string
-}
+export type { Incoming, ThreadContext } from "./review/delivery.ts"
 
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
@@ -440,6 +412,7 @@ interface ReviewRun {
   operationId: string
   deliveryId: string
   started: number
+  checkRunId?: number
   staleBuild: boolean
   callerBuild: string | undefined
   skillsFingerprint: string
@@ -513,6 +486,26 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
   )
   #sandbox = new SandboxRuns(this.#sandboxHost(), sandboxBudgetOf(this.env.MAX_SANDBOX_SECONDS))
+  #deliveries = new Deliveries(this.#deliveryHost())
+
+  #deliveryHost(): DeliveryHost {
+    return {
+      store: async (key, record) => {
+        await this.ctx.storage.put<StoredDelivery>(key, record)
+      },
+      load: async (key) => {
+        const stored = await this.ctx.storage.get(key)
+        return Value.Check(StoredDelivery, stored) ? stored : undefined
+      },
+      forget: async (key) => {
+        await this.ctx.storage.delete(key)
+      },
+      schedule: async (id, time, payload) => {
+        await this.lifecycle.jobs.push({ id, fn: RETRY_JOB, time, payload })
+      },
+      now: () => Date.now(),
+    }
+  }
 
   #sandboxHost(): SandboxHost {
     const leases = () => this.env.SANDBOX_LEASES.getByName("leases")
@@ -690,21 +683,61 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async accept(incoming: Incoming, callerVersion?: Version): Promise<"accepted"> {
     await this.ctx.storage.put("key", incoming.key)
-    this.ctx.waitUntil(
-      this.handle(incoming, callerVersion).catch((error) =>
-        logError("event.failed", { delivery: incoming.deliveryId, kind: incoming.kind, error: errorText(error) }),
-      ),
-    )
+    this.ctx.waitUntil(this.#deliveries.accept(incoming, (replay) => this.handle(replay, callerVersion)))
     return "accepted"
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn === SANDBOX_DROP_JOB) return this.#dropJob()
+    if (job.fn === RETRY_JOB && Value.Check(RetryJob, job.payload)) return this.#retryJob(job.payload)
     if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
       logError("job.unreadable", { id: job.id, fn: job.fn })
       return
     }
     await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
+  }
+
+  async #retryJob(payload: RetryJob): Promise<LifecycleJobOutcome> {
+    await this.#deliveries.retry(
+      payload,
+      (replay) => this.handle(replay),
+      (incoming, error, _attempts, sinceMs) => this.#abandon(incoming, error, sinceMs),
+    )
+    return undefined
+  }
+
+  async #abandon(incoming: Incoming, error: Error, sinceMs: number): Promise<void> {
+    const minutes = Math.round(sinceMs / 60_000)
+    if (incoming.kind === "review") await this.#abandonReview(incoming, error, minutes)
+    if (incoming.kind === "comment") await this.#abandonComment(incoming, error, minutes)
+  }
+
+  async #abandonReview(incoming: ReviewIncoming, error: Error, minutes: number): Promise<void> {
+    const text = `GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}); comment \`@andabot review\` to retry.`
+    const update = await this.failedRun(text)
+    const pending = await this.pendingFor(incoming.deliveryId)
+    if (pending?.checkRunId === undefined) {
+      const key = await this.key()
+      const github = await this.github()
+      const start = startedCheckRun({
+        name: this.botLogin(),
+        headSha: incoming.headSha,
+        deliveryId: incoming.deliveryId,
+        fileCount: 0,
+        model: this.env.REVIEW_MODEL,
+        startedAt: Date.now(),
+      })
+      const created = await github.createCheckRun(key, start)
+      await github.updateCheckRun(key, created.id, update)
+    }
+    await this.endOwnRun(incoming.deliveryId, update)
+  }
+
+  async #abandonComment(incoming: CommentIncoming, error: Error, minutes: number): Promise<void> {
+    const ownThread = incoming.thread ? (await this.storedFindings([incoming.thread.rootId])).size > 0 : false
+    if (!abandonReplyWanted(incoming.body, this.botLogin(), ownThread)) return
+    const text = `I couldn't act on this: GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}). Say it again and I'll try again.`
+    await this.respond(await this.github(), await this.key(), incoming, `@${incoming.author} ${text}`)
   }
 
   async #dropJob(): Promise<LifecycleJobOutcome> {
@@ -1248,9 +1281,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         return this.comment(incoming, callerVersion)
       case "reaction":
         return reactWithEyes(await this.github(), incoming.nodeId, incoming.key.number)
-      case "approval":
-        await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
+      case "approval": {
+        const { outcome, recheck } = await this.evaluateWithRecheck(incoming.trigger, incoming.deliveryId, 0)
+        if (retriesAtDoor(outcome, recheck)) throw new TransientFailure(`approval after ${incoming.trigger}`)
         return
+      }
       case "closed":
         this.#runs.dropIdle(incoming.key.number, "closed")
         await this.#sandbox.dropIdle("closed")
@@ -1272,21 +1307,38 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const settingsSkip = await this.settingsSkip(pr, incoming, read)
     if (settingsSkip !== undefined) return settingsSkip
     const skillsFingerprint = (await bundledSkills()).fingerprint
-    const flight = await this.clearFlight(pr.head.sha)
+    const flight = await this.clearFlight(pr.head.sha, incoming.deliveryId)
     if (flight.kind === "skip") {
       log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
       return "in_progress"
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
-    const run = {
-      operationId: `review:${incoming.deliveryId}`,
-      deliveryId: incoming.deliveryId,
-      started: Date.now(),
+    const settings = {
       staleBuild,
       callerBuild: callerVersion?.id,
       skillsFingerprint,
       config: read.config,
       configStatus: configStatus(read),
+    }
+    if (flight.kind === "resume") {
+      log("review.resumed", { number: pr.number, head: shortSha(pr.head.sha), delivery: incoming.deliveryId })
+      const previous = resumedPending(flight.previous, Date.now())
+      await this.ctx.storage.put<PendingReview>("pending", previous)
+      const resumed: ReviewRun = {
+        operationId: previous.operationId,
+        deliveryId: previous.deliveryId,
+        started: previous.started,
+        ...settings,
+      }
+      if (previous.checkRunId !== undefined) resumed.checkRunId = previous.checkRunId
+      await this.runReview(pr, incoming, resumed)
+      return undefined
+    }
+    const run = {
+      operationId: `review:${incoming.deliveryId}`,
+      deliveryId: incoming.deliveryId,
+      started: Date.now(),
+      ...settings,
     }
     await this.ctx.storage.put<PendingReview>("pending", {
       headSha: pr.head.sha,
@@ -1341,10 +1393,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return pathFiltersSkip(config.reviews.path_filters, () => this.changedFiles())
   }
 
-  private async clearFlight(headSha: string): Promise<FlightDecision> {
+  private async clearFlight(headSha: string, deliveryId: string): Promise<FlightDecision> {
     const pending = await this.readPending()
     const operations = await this.operationsOf(pending)
-    const decision = decideFlight(pending, headSha, { running: operations.length > 0, now: Date.now() })
+    const decision = decideFlight(pending, headSha, { running: operations.length > 0, now: Date.now() }, deliveryId)
     if (decision.kind !== "replace") return decision
     log("review.replaced", {
       because: decision.because,
@@ -1390,7 +1442,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async openRun(pr: PullRequestInfo, run: ReviewRun): Promise<ChangedFile[]> {
     const files = await this.changedFiles()
-    const checkRunId = await this.startCheckRun(pr, files, run)
+    const checkRunId = run.checkRunId ?? (await this.startCheckRun(pr, files, run))
     if (checkRunId === undefined) return files
     const pending = await this.pendingFor(run.deliveryId)
     if (pending === undefined) await this.cancelUnrecordedRun(pr, run, checkRunId)
@@ -1643,7 +1695,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       }
       await this.releasePending(run.deliveryId)
     } catch (error) {
-      await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
+      if (afterReviewThrow(errorOf(error)) === "release") {
+        await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
+      }
       throw error
     } finally {
       await this.#runs.end(pr.number, "review_end")
@@ -1706,6 +1760,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       return await (await this.github()).compareCommits(key, since, pr.head.sha)
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.compare_failed", { number: pr.number, since: shortSha(since), error: errorText(error) })
       return undefined
     }
@@ -1723,6 +1778,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const findings = await this.storedFindings(threads.map((thread) => thread.firstCommentId))
       return planThreads({ threads, findings, botLogin: this.botLogin(), mode, covered, since })
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.threads_failed", { number: pr.number, error: errorText(error) })
       return undefined
     }
@@ -1861,6 +1917,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return (await this.freshPullRequest()).head.sha
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("review.head_unreadable", { number: pr.number, error: errorText(error) })
       return undefined
     }
@@ -2136,7 +2193,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async reviewRunning(headSha: string): Promise<boolean> {
     const pending = await this.readPending()
     const running = (await this.operationsOf(pending)).length > 0
-    return decideFlight(pending, headSha, { running, now: Date.now() }).kind === "skip"
+    return decideFlight(pending, headSha, { running, now: Date.now() }, NO_DELIVERY).kind === "skip"
   }
 
   private async catchUp(
@@ -2179,6 +2236,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return { where: "conversation", threads: await github.listReviewThreads(key, key.number) }
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("command.resolve_failed", { number: key.number, step: "read", error: errorText(error) })
       return undefined
     }
@@ -2421,13 +2479,18 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return Value.Check(Summarizing, stored) ? stored : undefined
   }
 
-  private async evaluateWithRecheck(trigger: ApprovalTrigger, deliveryId: string, attempt: number): Promise<void> {
-    const recheck = nextRecheck(trigger, await this.evaluateApproval(trigger, deliveryId), attempt)
-    if (recheck === undefined) return
+  private async evaluateWithRecheck(
+    trigger: ApprovalTrigger,
+    deliveryId: string,
+    attempt: number,
+  ): Promise<{ outcome: ApprovalOutcome; recheck: Recheck | undefined }> {
+    const outcome = await this.evaluateApproval(trigger, deliveryId)
+    const recheck = nextRecheck(trigger, outcome, attempt)
+    if (recheck === undefined) return { outcome, recheck }
     const scheduled = this.scheduledRecheck()
     if (!ownsRecheck(trigger, deliveryId, scheduled)) {
       log("approval.recheck_yielded", { delivery: deliveryId, to: scheduled?.delivery })
-      return
+      return { outcome, recheck }
     }
     await this.lifecycle.jobs.push({
       id: RECHECK_JOB,
@@ -2441,6 +2504,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       attempt: recheck.attempt,
       inMs: recheck.inMs,
     })
+    return { outcome, recheck }
   }
 
   private scheduledRecheck(): RecheckJob | undefined {
@@ -2461,7 +2525,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return await this.approve(pr.head.sha, context)
     } catch (error) {
       logError("approval.failed", { trigger, delivery: deliveryId, error: errorText(error) })
-      return { kind: "failed" }
+      return { kind: "failed", transient: isTransient(errorOf(error)) }
     }
   }
 
@@ -2567,6 +2631,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       return threadOf(await github.listReviewThreads(key, key.number), context.rootId)
     } catch (error) {
+      softenUnlessTransient(errorOf(error))
       logError("thread.lookup_failed", { number: key.number, root: context.rootId, error: errorText(error) })
       return undefined
     }
@@ -2788,6 +2853,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const RECHECK_JOB = "approval.recheck"
+
+const NO_DELIVERY = ""
 
 const SANDBOX_DROP_JOB = "sandbox.drop"
 

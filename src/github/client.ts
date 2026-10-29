@@ -1,6 +1,8 @@
 import { Type, type Static, type TSchema } from "typebox"
 import { Value } from "typebox/value"
+import { errorText } from "../log.ts"
 import { ChangedFile, type Side } from "./diff.ts"
+import { GitHubError } from "./errors.ts"
 
 export interface RepoRef {
   owner: string
@@ -325,12 +327,10 @@ export class GitHubClient {
   }
 
   async getFileContent(ref: RepoRef, path: string, gitRef: string): Promise<string | undefined> {
-    const response = await this.request(
-      `/repos/${ref.owner}/${ref.repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(gitRef)}`,
-      { headers: { accept: "application/vnd.github.raw+json" } },
-    )
+    const requestPath = `/repos/${ref.owner}/${ref.repo}/contents/${encodePath(path)}?ref=${encodeURIComponent(gitRef)}`
+    const response = await this.request(requestPath, { headers: { accept: "application/vnd.github.raw+json" } })
     if (response.status === 404) return undefined
-    if (!response.ok) throw await this.error(response)
+    if (!response.ok) throw await this.error(response, requestPath)
     return response.text()
   }
 
@@ -425,7 +425,11 @@ export class GitHubClient {
     const response = await this.request(`/repos/${ref.owner}/${ref.repo}/tarball/${sha}`)
     if (!response.ok || !response.body) {
       await response.body?.cancel()
-      throw new Error(`GitHub tarball ${response.status}`)
+      throw new GitHubError(
+        `GitHub tarball ${response.status}`,
+        response.status,
+        `/repos/${ref.owner}/${ref.repo}/tarball/${sha}`,
+      )
     }
     return response.body
   }
@@ -521,7 +525,7 @@ export class GitHubClient {
     path: string,
     response: Response,
   ): Promise<Static<Schema>> {
-    if (!response.ok) throw await this.error(response)
+    if (!response.ok) throw await this.error(response, path)
     const body: unknown = await response.json()
     if (Value.Check(schema, body)) return body
     const [first] = Value.Errors(schema, body)
@@ -534,10 +538,11 @@ export class GitHubClient {
     variables: GraphQLVariables,
   ): Promise<Static<Schema>> {
     const response = await this.request("/graphql", { method: "POST", body: JSON.stringify({ query, variables }) })
-    if (!response.ok) throw await this.error(response)
+    if (!response.ok) throw await this.error(response, "/graphql")
     const body: unknown = await response.json()
     if (Value.Check(GraphQLErrors, body)) {
-      throw new Error(`GitHub GraphQL: ${body.errors.map((error) => error.message).join("; ")}`)
+      const messages = body.errors.map((error) => error.message).join("; ")
+      throw new GitHubError(`GitHub GraphQL: ${messages}`, response.status, "/graphql")
     }
     if (Value.Check(schema, body)) return body
     const [first] = Value.Errors(schema, body)
@@ -552,12 +557,16 @@ export class GitHubClient {
     headers.set("user-agent", "andabot")
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json")
     const { fetchImpl } = this
-    return fetchImpl(`${this.apiBase}${path}`, { ...init, headers })
+    try {
+      return await fetchImpl(`${this.apiBase}${path}`, { ...init, headers })
+    } catch (cause) {
+      throw new GitHubError(`GitHub ${path}: ${errorText(cause)}`, undefined, path)
+    }
   }
 
-  private async error(response: Response): Promise<Error> {
+  private async error(response: Response, path: string): Promise<Error> {
     const text = await response.text()
-    return new Error(`GitHub ${response.status} ${response.url}: ${text.slice(0, 500)}`)
+    return new GitHubError(`GitHub ${response.status} ${response.url}: ${text.slice(0, 500)}`, response.status, path)
   }
 }
 

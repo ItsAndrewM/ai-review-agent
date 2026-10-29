@@ -269,6 +269,12 @@ describe("nothingToReview", () => {
     expect(nothingToReview(buildScope(recheckOnly))).toBe(false)
     expect(nothingToReview(buildScope({ ...incremental, mode: "full", covered: new Map() }))).toBe(false)
   })
+
+  it("never finds nothing to review in a full review, the mode a failed compare forces, so a failed read can't advance reviewed", () => {
+    const failedCompare = chooseMode({ full: false, reviewed, baseRef: "main", compareStatus: undefined })
+    expect(failedCompare).toBe("full")
+    expect(nothingToReview(buildScope({ ...incremental, mode: failedCompare, covered: new Map() }))).toBe(false)
+  })
 })
 
 describe("pathsNeedingRows", () => {

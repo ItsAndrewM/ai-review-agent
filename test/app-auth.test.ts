@@ -1,13 +1,16 @@
+import { createServer } from "node:http"
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import {
   createAppJwt,
+  fetchInstallationToken,
   fromBase64,
   InstallationToken,
   tokenRequestBody,
   unwrapPkcs8ToPkcs1,
   wrapPkcs1InPkcs8,
 } from "../src/github/app-auth.ts"
+import { GitHubError } from "../src/github/errors.ts"
 
 describe("tokenRequestBody", () => {
   it("sends no body for the App's full token, and the scope as JSON for a narrowed one", () => {
@@ -88,5 +91,26 @@ describe("GitHub App JWT", () => {
     const pair = await generateKeyPair()
     const pem = toPem("PRIVATE KEY", await exportPkcs8(pair.privateKey)).replace(/\n/g, "\\n")
     await expect(createAppJwt("1", pem)).resolves.toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/)
+  })
+})
+
+describe("fetchInstallationToken failures", () => {
+  it("throws a GitHubError carrying the status, so an outage on the token endpoint reads as transient", async () => {
+    const server = createServer((_req, res) => {
+      res.writeHead(525, { "content-type": "application/json" })
+      res.end(JSON.stringify({ message: "ssl handshake failed" }))
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!(address instanceof Object)) throw new Error("the test server has no port")
+    try {
+      const error = await fetchInstallationToken("jwt", 7, undefined, `http://127.0.0.1:${address.port}`).catch(
+        (cause: GitHubError) => cause,
+      )
+      expect(error).toBeInstanceOf(GitHubError)
+      expect(error).toMatchObject({ status: 525, path: "/app/installations/7/access_tokens" })
+    } finally {
+      server.close()
+    }
   })
 })

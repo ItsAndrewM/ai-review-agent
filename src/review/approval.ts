@@ -60,7 +60,7 @@ export type ApprovalDecision = { kind: "approve" } | { kind: "wait"; reason: Dec
 export type ApprovalOutcome =
   | { kind: "approved"; head: string }
   | { kind: "wait"; reason: WaitReason }
-  | { kind: "failed" }
+  | { kind: "failed"; transient: boolean }
 
 export interface ApprovalState {
   workflow: WorkflowState
@@ -245,6 +245,10 @@ export function nextRecheck(trigger: ApprovalTrigger, outcome: ApprovalOutcome, 
   if (outcome.kind === "approved" || (outcome.kind === "wait" && !UNSETTLED_WAITS.has(outcome.reason))) return undefined
   const inMs = RECHECK_DELAYS_MS[attempt]
   return inMs === undefined ? undefined : { attempt: attempt + 1, inMs }
+}
+
+export function retriesAtDoor(outcome: ApprovalOutcome, recheck: Recheck | undefined): boolean {
+  return outcome.kind === "failed" && outcome.transient && recheck === undefined
 }
 
 export function ownsRecheck(trigger: ApprovalTrigger, delivery: string, scheduled: RecheckJob | undefined): boolean {
