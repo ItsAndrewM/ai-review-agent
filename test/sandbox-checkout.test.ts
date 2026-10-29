@@ -3,6 +3,7 @@ import {
   checkoutArgv,
   detectArgv,
   installArgv,
+  overcommitArgv,
   MAX_CHECKOUT_KIB,
   parseCheckout,
   parseManager,
@@ -57,6 +58,15 @@ describe("parseCheckout", () => {
 
   it("treats a clean exit without a size line as a failure", () => {
     expect(parseCheckout(exited(0, "")).kind).toBe("failed")
+  })
+})
+
+describe("overcommitArgv", () => {
+  it("asks the kernel to always overcommit, since oxlint's JS-plugin allocator reserves 6 GiB that heuristic overcommit refuses on a 4 GiB instance", () => {
+    const argv = overcommitArgv()
+    expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
+    expect(argv[2]).toContain("echo 1 > /proc/sys/vm/overcommit_memory")
+    expect(argv[3]).toBe("andabot-overcommit")
   })
 })
 

@@ -18,7 +18,9 @@ const KEY: PullRequestKey = { installationId: 1, owner: "o", repo: "r", number: 
 
 const ok = (tail: string): RunOutcome => ({ outcome: "exited", exitCode: 0, tail, cut: false })
 
-type Scripted = Partial<Record<"andabot-checkout" | "andabot-detect" | "pnpm" | "npm", RunOutcome>>
+type Scripted = Partial<
+  Record<"andabot-checkout" | "andabot-detect" | "andabot-overcommit" | "pnpm" | "npm", RunOutcome>
+>
 
 class FakeSandbox implements SandboxCalls {
   calls: string[] = []
@@ -46,7 +48,13 @@ class FakeSandbox implements SandboxCalls {
     if (name === this.rejects) throw new Error("container gone")
     const outcome =
       this.scripted[
-        name === "andabot-checkout" || name === "andabot-detect" || name === "pnpm" || name === "npm" ? name : "pnpm"
+        name === "andabot-checkout" ||
+        name === "andabot-detect" ||
+        name === "andabot-overcommit" ||
+        name === "pnpm" ||
+        name === "npm"
+          ? name
+          : "pnpm"
       ]
     return outcome ?? ok("")
   }
@@ -140,9 +148,28 @@ describe("SandboxRuns.access", () => {
     const runs = new SandboxRuns(host, 900)
     const access = await runs.access()
     expect(access).toEqual({ kind: "ready", sandbox: host.box, dir: "/workspace/repo", manager: "pnpm" })
-    expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "run:andabot-detect", "run:pnpm"])
+    expect(host.box.calls).toEqual([
+      "start",
+      "run:andabot-overcommit",
+      "run:andabot-checkout",
+      "run:andabot-detect",
+      "run:pnpm",
+    ])
     expect(host.box.tokens).toEqual(["scoped-token"])
     expect(host.leases).toEqual([900_000 + LEASE_GRACE_MS])
+  })
+
+  it("turns overcommit on after the start and before the checkout, and goes on when the sysctl is read-only", async () => {
+    const readOnly = {
+      outcome: "exited" as const,
+      exitCode: 2,
+      tail: "cannot create /proc/sys/vm/overcommit_memory: Read-only file system\n",
+      cut: false,
+    }
+    const host = new FakeHost({ ...READY, "andabot-overcommit": readOnly })
+    const access = await new SandboxRuns(host, 900).access()
+    expect(access.kind).toBe("ready")
+    expect(host.box.calls.slice(0, 3)).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout"])
   })
 
   it("saves the record at each step a teardown would have to undo: head read, leased, running, settled", async () => {
@@ -193,10 +220,10 @@ describe("SandboxRuns.access", () => {
     const host = new FakeHost({ ...READY, "andabot-checkout": ok(`kib=${MAX_CHECKOUT_KIB + 1}\n`) })
     const runs = new SandboxRuns(host, 900)
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
-    expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "destroy"])
+    expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "destroy"])
     expect(host.unleased).toBe(1)
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
-    expect(host.box.calls).toHaveLength(3)
+    expect(host.box.calls).toHaveLength(4)
   })
 
   it("skips the install and still answers ready when there is no lockfile", async () => {
@@ -204,7 +231,7 @@ describe("SandboxRuns.access", () => {
     const access = await new SandboxRuns(host, 900).access()
     expect(access.kind).toBe("ready")
     expect(access.kind === "ready" && access.manager).toBe("none")
-    expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "run:andabot-detect"])
+    expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "run:andabot-detect"])
   })
 
   it("answers unavailable when the install fails", async () => {
@@ -317,10 +344,10 @@ describe("SandboxRuns when a step throws", () => {
     const runs = new SandboxRuns(host, 900)
     runs.start()
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
-    expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "destroy"])
+    expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "destroy"])
     expect(host.unleased).toBe(1)
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
-    expect(host.box.calls).toHaveLength(3)
+    expect(host.box.calls).toHaveLength(4)
     await expect(runs.end("review_end")).resolves.toBeUndefined()
     expect(host.box.calls.filter((call) => call === "destroy")).toHaveLength(1)
   })
@@ -458,7 +485,14 @@ describe("SandboxRuns after a restart", () => {
     host.box.alive = false
     const runs = new SandboxRuns(host, 900)
     expect((await runs.access()).kind).toBe("ready")
-    expect(host.box.calls).toEqual(["running", "start", "run:andabot-checkout", "run:andabot-detect", "run:pnpm"])
+    expect(host.box.calls).toEqual([
+      "running",
+      "start",
+      "run:andabot-overcommit",
+      "run:andabot-checkout",
+      "run:andabot-detect",
+      "run:pnpm",
+    ])
     expect(host.unleased).toBe(1)
     expect(host.leases).toHaveLength(1)
     expect(await runs.seconds()).toBe(100)

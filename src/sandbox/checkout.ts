@@ -15,6 +15,12 @@ echo "kib=$(du -sk ${REPO_DIR} | cut -f1)"`
 const DETECT_SCRIPT = `cd ${REPO_DIR} || exit 1
 if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f package-lock.json ]; then echo npm; else echo none; fi`
 
+const OVERCOMMIT_SCRIPT = "echo 1 > /proc/sys/vm/overcommit_memory"
+
+export function overcommitArgv(): string[] {
+  return ["/bin/sh", "-c", OVERCOMMIT_SCRIPT, "andabot-overcommit"]
+}
+
 export function repositoryUrl(key: PullRequestKey): string {
   return `https://github.com/${key.owner}/${key.repo}.git`
 }
