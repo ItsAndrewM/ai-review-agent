@@ -25,9 +25,9 @@ for p; do [ -e "$p" ] || { echo "$p"; exit 1; }; done`
 
 export const CHECK_ENV = { NO_COLOR: "1", FORCE_COLOR: "0", CI: "1" } as const
 
-export function checkTimeoutOf(value: string | undefined): number {
+export function checkTimeoutOf(value: string | undefined): number | undefined {
   const ms = Number(value)
-  return Number.isSafeInteger(ms) && ms > 0 ? ms : DEFAULT_CHECK_TIMEOUT_MS
+  return Number.isSafeInteger(ms) && ms > 0 ? ms : undefined
 }
 
 export function pathProblem(paths: readonly string[]): string | undefined {

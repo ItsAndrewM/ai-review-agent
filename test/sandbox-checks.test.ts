@@ -22,11 +22,11 @@ const exited = (exitCode: number, tail: string, cut = false): RunOutcome => ({ o
 const timedOut: RunOutcome = { outcome: "timeout", tail: "", cut: false }
 
 describe("checkTimeoutOf", () => {
-  it("parses a positive whole number of milliseconds and falls back to five minutes", () => {
+  it("parses a positive whole number of milliseconds and answers undefined for anything else", () => {
     expect(DEFAULT_CHECK_TIMEOUT_MS).toBe(300_000)
     expect(checkTimeoutOf("1000")).toBe(1000)
-    expect(checkTimeoutOf("0")).toBe(300_000)
-    expect(checkTimeoutOf(undefined)).toBe(300_000)
+    expect(checkTimeoutOf("0")).toBeUndefined()
+    expect(checkTimeoutOf(undefined)).toBeUndefined()
   })
 })
 
