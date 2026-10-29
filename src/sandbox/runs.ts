@@ -201,18 +201,19 @@ export class SandboxRuns {
   }
 
   async #reattach(record: SandboxRecord): Promise<void> {
-    const sandbox = await this.host.sandbox()
-    if (!(await this.#alive(sandbox))) return this.#lost()
+    const sandbox = await this.#reachable()
+    if (sandbox === undefined) return this.#lost()
     const manager = record.settled?.kind === "ready" ? record.settled.manager : "none"
     this.#settled = { kind: "ready", sandbox, dir: REPO_DIR, manager }
     this.#logRestored("ready")
   }
 
-  async #alive(sandbox: SandboxCalls): Promise<boolean> {
+  async #reachable(): Promise<SandboxCalls | undefined> {
     try {
-      return await sandbox.running()
+      const sandbox = await this.host.sandbox()
+      return (await sandbox.running()) ? sandbox : undefined
     } catch {
-      return false
+      return undefined
     }
   }
 

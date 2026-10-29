@@ -70,6 +70,7 @@ class FakeHost implements SandboxHost {
   saved: (SandboxRecord | undefined)[] = []
   loadThrows = false
   saveThrows = false
+  sandboxThrowsOnce = false
   drops: number[] = []
   cancels = 0
   readonly box: FakeSandbox
@@ -93,6 +94,10 @@ class FakeHost implements SandboxHost {
     return "scoped-token"
   }
   async sandbox(): Promise<SandboxCalls> {
+    if (this.sandboxThrowsOnce) {
+      this.sandboxThrowsOnce = false
+      throw new Error("binding unavailable")
+    }
     return this.box
   }
   async head(): Promise<{ number: number; key: PullRequestKey; sha: string }> {
@@ -457,6 +462,17 @@ describe("SandboxRuns after a restart", () => {
     expect(host.unleased).toBe(1)
     expect(host.leases).toHaveLength(1)
     expect(await runs.seconds()).toBe(100)
+  })
+
+  it("treats a sandbox object it can't reach during the restore as lost, and answers later calls rather than the same rejection", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    host.sandboxThrowsOnce = true
+    const runs = new SandboxRuns(host, 900)
+    expect((await runs.access()).kind).toBe("ready")
+    expect(host.box.calls.filter((call) => call === "start")).toHaveLength(1)
+    expect(host.unleased).toBe(1)
+    expect(await runs.status()).toEqual({ kind: "ready" })
   })
 
   it("treats a container that can't say whether it runs as lost", async () => {
