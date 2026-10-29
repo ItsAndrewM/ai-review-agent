@@ -146,6 +146,9 @@ describe("checkText and refusalText", () => {
     expect(refusalText("lint", { kind: "no_command" })).toContain("no lint command")
     expect(refusalText("test", { kind: "bad_path", problem: "a b" })).toContain("a b")
     expect(refusalText("test", { kind: "missing_path", path: "x.ts" })).toContain("x.ts")
+    expect(refusalText("test", { kind: "ended" })).toBe(
+      "No review is in flight for this pull request, so test did not run.",
+    )
   })
 })
 

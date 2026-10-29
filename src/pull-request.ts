@@ -557,37 +557,48 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async probeCheck(key: PullRequestKey, name: CheckName, paths: readonly string[]): Promise<string> {
     await this.ctx.storage.put("key", key)
-    return this.runCheck({ name, paths: [...paths] })
+    return this.#check({ name, paths: [...paths] })
   }
 
-  #checks = new Map<string, CheckRun>()
+  async endSandbox(key: PullRequestKey): Promise<{ ended: true }> {
+    await this.ctx.storage.put("key", key)
+    await this.#sandbox.dropIdle("review_end")
+    return { ended: true }
+  }
+
   #checkQueue: Promise<void> = Promise.resolve()
   #packageJson: { base: string; text: string | undefined } | undefined
 
   async runCheck(args: RunCheckArgs): Promise<string> {
+    if ((await this.readPending()) === undefined) return this.#checkRefused(args.name, { kind: "ended" })
+    return this.#check(args)
+  }
+
+  async #check(args: RunCheckArgs): Promise<string> {
     const paths = args.paths ?? []
     const problem = pathProblem(paths)
     if (problem !== undefined) return this.#checkRefused(args.name, { kind: "bad_path", problem })
     const pr = await this.pullRequest()
     const key = checkKey(pr.head.sha, args.name, paths)
-    const cached = this.#cachedCheck(pr, key)
+    const cached = await this.#cachedCheck(pr, key)
     if (cached !== undefined) return cached
     const access = await this.#sandbox.access()
     if (access.kind !== "ready") return this.#checkRefused(args.name, accessRefusal(access))
     return this.#queuedCheck(
-      async () => this.#cachedCheck(pr, key) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
+      async () => (await this.#cachedCheck(pr, key)) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
     )
   }
 
   async #checksDisplay(): Promise<ChecksDisplay | undefined> {
     const status = await this.#sandbox.status()
-    if (status.kind === "none" && this.#checks.size === 0) return undefined
-    const runs = [...this.#checks.values()].map(checkRecordOf)
+    const checks = await this.#sandbox.checks()
+    if (status.kind === "none" && checks.size === 0) return undefined
+    const runs = [...checks.values()].map(checkRecordOf)
     return { status: status.kind, reason: status.kind === "unavailable" ? status.reason : undefined, runs }
   }
 
-  #cachedCheck(pr: PullRequestInfo, key: string): string | undefined {
-    const cached = this.#checks.get(key)
+  async #cachedCheck(pr: PullRequestInfo, key: string): Promise<string | undefined> {
+    const cached = (await this.#sandbox.checks()).get(key)
     if (cached === undefined) return undefined
     log("check.cached", { number: pr.number, name: cached.name, paths: cached.paths.join(" ") })
     return checkText(cached)
@@ -622,7 +633,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       tailBytes: DEFAULT_TAIL_BYTES,
     })
     const run: CheckRun = { name, paths, outcome, ms: Date.now() - began }
-    this.#checks.set(key, run)
+    await this.#sandbox.remember(key, run)
     log("check.run", {
       number: pr.number,
       name,
@@ -687,6 +698,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<void> {
+    if (job.fn === SANDBOX_DROP_JOB) return this.#sandbox.dropIdle("review_end")
     if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
       logError("job.unreadable", { id: job.id, fn: job.fn })
       return
@@ -848,7 +860,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         submission.findings,
         indexCommentableLines(scopedFiles(scope, files)),
         hasLinkedIssues,
-        knownChecksOf(this.#checks, pr.head.sha),
+        knownChecksOf(await this.#sandbox.checks(), pr.head.sha),
       ),
       scope,
     )
@@ -1336,6 +1348,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.delete("pending")
     for (const operation of operations) await this.abortOperation(operation)
     await this.endReplacedRun(decision, headSha)
+    if (decision.because === "superseded") await this.#sandbox.dropIdle("new_head")
     return decision
   }
 
@@ -1553,7 +1566,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#activated = []
     this.#runs.start()
     await this.#sandbox.start()
-    this.#checks.clear()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)
@@ -1619,7 +1631,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           ms: Date.now() - run.started,
           ...this.#runs.usage(),
           ...sandboxFields(await this.#sandbox.seconds()),
-          checks: this.#checks.size,
+          checks: (await this.#sandbox.checks()).size,
           ...spendFields(await this.postedSpend(pr)),
         })
       }
@@ -2694,6 +2706,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const pending = await this.pendingFor(deliveryId)
     if (pending === undefined) return
     await this.ctx.storage.delete(["pending", "scope"])
+    await this.#sandbox.dropIdle("review_end")
     if (pending.checkRunId !== undefined) await this.completeCheckRun(pending.checkRunId, pending, update)
   }
 
@@ -2743,7 +2756,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async releasePending(deliveryId: string): Promise<void> {
-    if (await this.ownsPending(deliveryId)) await this.ctx.storage.delete(["pending", "scope"])
+    if (!(await this.ownsPending(deliveryId))) return
+    await this.ctx.storage.delete(["pending", "scope"])
+    await this.#sandbox.dropIdle("review_end")
   }
 
   private async restartGrace(deliveryId: string): Promise<void> {

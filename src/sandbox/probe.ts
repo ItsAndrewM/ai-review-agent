@@ -26,6 +26,8 @@ const DestroyProbe = Type.Object(
   { additionalProperties: false },
 )
 
+const EndProbe = Type.Object({ key: PullRequestKey, action: Type.Literal("end") }, { additionalProperties: false })
+
 const PrepareProbe = Type.Object(
   { key: PullRequestKey, action: Type.Literal("prepare") },
   { additionalProperties: false },
@@ -41,7 +43,7 @@ const CheckProbe = Type.Object(
   { additionalProperties: false },
 )
 
-export const ProbeRequest = Type.Union([RunProbe, DestroyProbe, PrepareProbe, CheckProbe])
+export const ProbeRequest = Type.Union([RunProbe, DestroyProbe, PrepareProbe, CheckProbe, EndProbe])
 
 export type ProbeRequest = Static<typeof ProbeRequest>
 
@@ -84,6 +86,8 @@ async function dispatchProbe(probe: ProbeRequest, env: Env): Promise<Response> {
       return Response.json(await object.prepareSandbox(probe.key))
     case "check":
       return new Response(await object.probeCheck(probe.key, probe.name, probe.paths ?? []))
+    case "end":
+      return Response.json(await object.endSandbox(probe.key))
     case "destroy":
       await env.REVIEW_SANDBOX.getByName(objectName(probe.key)).destroy()
       return Response.json({ destroyed: true })

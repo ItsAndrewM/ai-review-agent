@@ -33,6 +33,11 @@ describe("parseProbe", () => {
     expect(parseProbe(JSON.stringify({ key, action: "prepare" }))).toEqual({ key, action: "prepare" })
   })
 
+  it("accepts an end without more, which drops the pull request object's idle sandbox", () => {
+    expect(parseProbe(JSON.stringify({ key, action: "end" }))).toEqual({ key, action: "end" })
+    expect(parseProbe(JSON.stringify({ key, action: "end", reason: "closed" }))).toBeUndefined()
+  })
+
   it("accepts a check with a name and optional paths, and refuses one without a name", () => {
     expect(parseProbe(JSON.stringify({ key, action: "check", name: "test", paths: ["a.ts"] }))).toEqual({
       key,
