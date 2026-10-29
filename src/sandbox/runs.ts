@@ -178,6 +178,7 @@ export class SandboxRuns {
     const record = await this.#load()
     if (record === undefined || this.#head !== undefined) return
     this.#adopt(record)
+    if (record.settled?.kind !== "unavailable") await this.#scheduleDrop()
     if (record.settled?.kind === "ready") return this.#reattach(record)
     this.#logRestored(record.settled === undefined ? "preparing" : "unavailable")
   }
@@ -262,6 +263,23 @@ export class SandboxRuns {
       : { kind: "unavailable", reason: this.#settled.reason }
   }
 
+  async #scheduleDrop(): Promise<void> {
+    const started = this.#started ?? this.host.now()
+    try {
+      await this.host.scheduleDrop(started + this.budgetSeconds * 1000 + LEASE_GRACE_MS)
+    } catch (cause) {
+      logError("sandbox.drop_job_failed", { number: this.#head?.number, step: "schedule", error: errorText(cause) })
+    }
+  }
+
+  async #cancelDrop(): Promise<void> {
+    try {
+      await this.host.cancelDrop()
+    } catch (cause) {
+      logError("sandbox.drop_job_failed", { number: this.#head?.number, step: "cancel", error: errorText(cause) })
+    }
+  }
+
   async #persist(record: SandboxRecord | undefined): Promise<void> {
     try {
       await this.host.save(record)
@@ -294,6 +312,7 @@ export class SandboxRuns {
     if (this.#running) await this.#destroy()
     if (this.#leased) await this.#unlease()
     if (head && destroyed) log("sandbox.destroy", { number: head.number, reason, seconds: this.#seconds() })
+    if (head) await this.#cancelDrop()
     this.#started = undefined
     this.#head = undefined
     this.#spentLogged = false
@@ -306,6 +325,7 @@ export class SandboxRuns {
 
   async #prepare(): Promise<Settled> {
     this.#started ??= this.host.now()
+    await this.#scheduleDrop()
     let step: UnavailableReason = "head"
     try {
       const head = await this.host.head()

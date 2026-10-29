@@ -541,3 +541,46 @@ describe("SandboxRuns check cache", () => {
     expect((await runs.checks()).size).toBe(0)
   })
 })
+
+describe("SandboxRuns drop job", () => {
+  it("schedules one drop at the budget plus the lease grace when a preparation starts", async () => {
+    const host = new FakeHost(READY)
+    await new SandboxRuns(host, 900).access()
+    expect(host.drops).toEqual([1_000_000 + 900_000 + LEASE_GRACE_MS])
+  })
+
+  it("schedules the drop from the stored clock when a ready record is restored", async () => {
+    const host = new FakeHost(READY)
+    host.stored = readyRecord()
+    await new SandboxRuns(host, 900).access()
+    expect(host.drops).toEqual([900_000 + 900_000 + LEASE_GRACE_MS])
+  })
+
+  it("cancels the drop once when the sandbox ends", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    await runs.access()
+    await runs.end("review_end")
+    expect(host.cancels).toBe(1)
+    await runs.end("closed")
+    expect(host.cancels).toBe(1)
+  })
+
+  it("drops nothing while a review is active, so the review's own end follows", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    await runs.start()
+    await runs.access()
+    await runs.dropIdle("review_end")
+    expect(host.box.calls).not.toContain("destroy")
+    expect(host.cancels).toBe(0)
+  })
+
+  it("never lets a throwing schedule out of access", async () => {
+    const host = new FakeHost(READY)
+    host.scheduleDrop = async () => {
+      throw new Error("jobs unavailable")
+    }
+    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+  })
+})
