@@ -4,6 +4,7 @@ import { GitHubError } from "../src/github/errors.ts"
 import {
   afterReviewThrow,
   decideFlight,
+  resumedPending,
   GRACE_MS,
   migratePending,
   ownsOperation,
@@ -74,6 +75,16 @@ describe("decideFlight for the delivery that holds the pending", () => {
       kind: "replace",
       previous: pending,
       because: "superseded",
+    })
+  })
+})
+
+describe("resumedPending", () => {
+  it("starts the grace afresh, so another delivery meanwhile skips rather than replacing the resumed review as dead", () => {
+    const resumed = resumedPending(pending, afterGrace)
+    expect(resumed).toEqual({ ...pending, started: afterGrace })
+    expect(decideFlight(resumed, "aaa", { running: false, now: afterGrace + 1 }, "other-delivery")).toEqual({
+      kind: "skip",
     })
   })
 })

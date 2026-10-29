@@ -61,6 +61,10 @@ export function decideFlight(
   return { kind: "replace", previous: pending, because: "dead" }
 }
 
+export function resumedPending(previous: PendingReview, now: number): PendingReview {
+  return { ...previous, started: now }
+}
+
 export function afterReviewThrow(error: Error): "keep" | "release" {
   return isTransient(error) ? "keep" : "release"
 }

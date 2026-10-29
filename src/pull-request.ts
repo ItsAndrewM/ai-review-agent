@@ -41,7 +41,7 @@ import {
   type ChangedFile,
   type MarkedLines,
 } from "./github/diff.ts"
-import { errorOf, isTransient, softenUnlessTransient, TransientFailure } from "./github/errors.ts"
+import { errorOf, failureSummary, isTransient, softenUnlessTransient, TransientFailure } from "./github/errors.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -147,6 +147,7 @@ import {
   type UsageLedger,
 } from "./review/cost.ts"
 import {
+  abandonReplyWanted,
   Deliveries,
   RETRY_JOB,
   RetryJob,
@@ -171,6 +172,7 @@ import {
 import {
   afterReviewThrow,
   decideFlight,
+  resumedPending,
   migratePending,
   ownsOperation,
   replacedExit,
@@ -711,7 +713,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async #abandonReview(incoming: ReviewIncoming, error: Error, minutes: number): Promise<void> {
-    const text = `GitHub was unreachable for ${minutes} minutes (${error.message}); comment \`@andabot review\` to retry.`
+    const text = `GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}); comment \`@andabot review\` to retry.`
     const update = await this.failedRun(text)
     const pending = await this.pendingFor(incoming.deliveryId)
     if (pending?.checkRunId === undefined) {
@@ -732,7 +734,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async #abandonComment(incoming: CommentIncoming, error: Error, minutes: number): Promise<void> {
-    const text = `I couldn't act on this: GitHub was unreachable for ${minutes} minutes (${error.message}). Say it again and I'll try again.`
+    const ownThread = incoming.thread ? (await this.storedFindings([incoming.thread.rootId])).size > 0 : false
+    if (!abandonReplyWanted(incoming.body, this.botLogin(), ownThread)) return
+    const text = `I couldn't act on this: GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}). Say it again and I'll try again.`
     await this.respond(await this.github(), await this.key(), incoming, `@${incoming.author} ${text}`)
   }
 
@@ -1318,7 +1322,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     if (flight.kind === "resume") {
       log("review.resumed", { number: pr.number, head: shortSha(pr.head.sha), delivery: incoming.deliveryId })
-      const { previous } = flight
+      const previous = resumedPending(flight.previous, Date.now())
+      await this.ctx.storage.put<PendingReview>("pending", previous)
       const resumed: ReviewRun = {
         operationId: previous.operationId,
         deliveryId: previous.deliveryId,

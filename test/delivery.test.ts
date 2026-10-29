@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import { GitHubError } from "../src/github/errors.ts"
 import {
+  abandonReplyWanted,
   Deliveries,
   deliveryKey,
   RETRY_DELAYS_MS,
@@ -175,5 +176,14 @@ describe("Deliveries.retry", () => {
     )
     expect(handled).toEqual([])
     expect(host.forgets).toEqual(["delivery:d-9:review"])
+  })
+})
+
+describe("abandonReplyWanted", () => {
+  it("replies only where andabot was addressed: a mention anywhere, or a reply in one of its own threads", () => {
+    expect(abandonReplyWanted("@andabot review", "andabot", false)).toBe(true)
+    expect(abandonReplyWanted("looks fine to me", "andabot", true)).toBe(true)
+    expect(abandonReplyWanted("looks fine to me", "andabot", false)).toBe(false)
+    expect(abandonReplyWanted("@andabottle no", "andabot", false)).toBe(false)
   })
 })

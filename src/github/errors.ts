@@ -29,3 +29,8 @@ export function softenUnlessTransient(error: Error): void {
 export function errorOf(cause: unknown): Error {
   return cause instanceof Error ? cause : new Error(String(cause))
 }
+
+export function failureSummary(error: Error): string {
+  if (!(error instanceof GitHubError)) return error.message
+  return `${error.status ?? "no response"} on ${error.path}`
+}

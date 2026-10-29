@@ -2,6 +2,7 @@ import { Type, type Static } from "typebox"
 import { errorOf, isTransient } from "../github/errors.ts"
 import { errorText, log, logError } from "../log.ts"
 import { PullRequestKey } from "../records.ts"
+import { mentions } from "../route.ts"
 
 export const RETRY_DELAYS_MS = [30_000, 120_000, 600_000] as const
 
@@ -77,6 +78,10 @@ export type Incoming = Static<typeof StoredIncoming>
 export const StoredDelivery = Type.Object({ incoming: StoredIncoming, firstAt: Type.Integer() })
 
 export type StoredDelivery = Static<typeof StoredDelivery>
+
+export function abandonReplyWanted(body: string, botLogin: string, ownThread: boolean): boolean {
+  return ownThread || mentions(body, botLogin)
+}
 
 export interface DeliveryHost {
   store(key: string, record: StoredDelivery): Promise<void>

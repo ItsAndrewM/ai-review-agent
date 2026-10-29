@@ -217,7 +217,7 @@ function threadContextOf(comment: CommentEvent): ThreadContext | undefined {
   return { commentId: id, rootId: comment.in_reply_to_id ?? id, path, line: comment.line ?? null, diffHunk }
 }
 
-function mentions(body: string, botLogin: string): boolean {
+export function mentions(body: string, botLogin: string): boolean {
   return new RegExp(`(?:^|\\s)@${botLogin}(?![\\w-])`, "i").test(body)
 }
 
