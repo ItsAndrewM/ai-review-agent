@@ -145,7 +145,7 @@ export function sandboxFields(seconds: number | undefined): LogFields {
 }
 
 export function spendLine(spend: ReviewSpend, sandboxSeconds?: number): string | undefined {
-  if (spend.length === 0) return undefined
+  if (spend.length === 0) return sandboxPart(sandboxSeconds)[0]
   const totals = totalsOf(spend)
   const calls = `${totals.calls} model call${totals.calls === 1 ? "" : "s"}`
   if (tokensOf(totals) === 0) return [calls, "usage not reported", ...sandboxPart(sandboxSeconds)].join(" · ")

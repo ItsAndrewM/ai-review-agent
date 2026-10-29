@@ -321,6 +321,12 @@ describe("the sandbox on the cost line", () => {
     expect(spendLine([spend({})])).not.toContain("sandbox")
   })
 
+  it("shows the sandbox part alone when the ledger couldn't be read and the spend is empty", () => {
+    expect(spendLine([], 134)).toBe("sandbox 2m 14s ($0.003)")
+    expect(spendLine([], 0)).toBeUndefined()
+    expect(spendLine([])).toBeUndefined()
+  })
+
   it("logs the seconds and the dollars, or nothing", () => {
     const fields = sandboxFields(134)
     expect(fields.sandboxSeconds).toBe(134)

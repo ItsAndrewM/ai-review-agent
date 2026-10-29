@@ -1,6 +1,7 @@
 import type { ReviewEvent } from "../github/client.ts"
 import type { CheckRecord, SeverityCounts } from "../records.ts"
 import { CONFIG_FILE } from "../repository/config.ts"
+import { secondsText } from "../sandbox/checks.ts"
 import type { SandboxStatus } from "../sandbox/runs.ts"
 import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
@@ -252,7 +253,7 @@ function runLine(run: CheckRecord): string {
 }
 
 function runEnding(run: CheckRecord): string {
-  const seconds = `${(run.ms / 1000).toFixed(1).replace(/\.0$/, "")}s`
+  const seconds = secondsText(run.ms)
   if (run.outcome === "timeout") return `timed out after ${seconds}`
   return run.exitCode === 0 ? `passed in ${seconds}` : `failed (exit ${run.exitCode}) in ${seconds}`
 }

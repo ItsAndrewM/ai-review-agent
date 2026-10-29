@@ -144,12 +144,16 @@ export function checkRecordOf(run: CheckRun): CheckRecord {
   return record
 }
 
+export function secondsText(ms: number): string {
+  return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`
+}
+
 export function checkText(run: CheckRun): string {
-  const seconds = (run.ms / 1000).toFixed(1).replace(/\.0$/, "")
+  const seconds = secondsText(run.ms)
   const head =
     run.outcome.outcome === "exited"
-      ? `${run.name} exited ${run.outcome.exitCode} in ${seconds}s`
-      : `${run.name} timed out after ${seconds}s`
+      ? `${run.name} exited ${run.outcome.exitCode} in ${seconds}`
+      : `${run.name} timed out after ${seconds}`
   const tail = run.outcome.tail === "" ? "(no output)" : run.outcome.tail
   const cut = run.outcome.cut ? "\n(output cut to its last 8 KiB)" : ""
   return `${head}\n\n${tail}${cut}`
