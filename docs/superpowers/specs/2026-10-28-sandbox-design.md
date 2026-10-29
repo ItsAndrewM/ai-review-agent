@@ -196,3 +196,33 @@ A finding may carry `check: { name, paths?, exit_code }`. `validateFindings` tak
 ### Access order
 
 `access()` answers from its memo before it asks whether the tier is on, since the second live-checked `prepare` spent 6.7 s in that check; the tier is read once per preparation.
+
+## Slice 4, #134: the Checks line and the cost line
+
+What the reader of a review sees of the sandbox. Verify's half stays deferred to #129.
+
+### The summary comment
+
+A `Checks` line under the walkthrough, after the dropped-findings line and before the Verify section, from what the review's `SandboxRuns` and its run cache hold when the review posts:
+
+- `**Checks:** none` when the review never asked for the sandbox;
+- `**Checks:** off` when the tier was off for the repository or the Worker;
+- `**Checks:** unavailable (install failed)` when preparation failed, with the step;
+- `**Checks:** spent` when the budget was spent before any run;
+- otherwise one entry per run, in the order they ran: `test on \`test/x.test.ts\`: passed in 3.1s`, `lint: failed (exit 1) in 2.1s`, `typecheck: timed out after 300s`; a run with no paths names only the check.
+
+Each failed or timed-out run gets a collapsed `<details>` block headed `test on test/x.test.ts, exit 1` holding its tail, cut to its last 2,000 characters and fenced, so the reader sees what the model saw without the comment growing past GitHub's limit.
+
+A finding that carries a `check` reference renders one more line in its inline comment, after the basis: `_Check: test on \`test/x.test.ts\` exited 1_`, so the thread shows the run the finding rests on.
+
+### The cost line
+
+The footer's cost line gains the sandbox's wall time when the review asked for the sandbox: ` · sandbox 2m 14s ($0.0028)`, priced at the `standard-1` rates the spec's Q4 records (half a vCPU at $0.000020 per vCPU-second, 4 GiB at $0.0000025 per GiB-second, 8 GB disk at $0.00000007 per GB-second: $0.00002056 a second), the seconds from `SandboxRuns.seconds()` at post time. The Workers Paid plan's monthly allowance (375 vCPU-minutes, 25 GiB-hours) is noted in `docs/setup.md` beside the var. `review.done` gains `sandboxUsd` beside `sandboxSeconds`.
+
+### The record
+
+`posted:<sha>` gains `sandboxSeconds` and `checks`, the runs as `{ name, paths, outcome, exitCode, ms, tail }`, so a later re-render of the same head (a run that finds the head posted) and the logs agree with the comment, and so #135's measurement can read the runs from the record.
+
+### Logs
+
+`review.done` gains `sandboxUsd` and `checks` (the count of runs). No new events.
