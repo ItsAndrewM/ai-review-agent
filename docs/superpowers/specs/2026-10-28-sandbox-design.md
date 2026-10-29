@@ -289,3 +289,17 @@ Unit tests on `SandboxRuns` with a stored record in the fake host: `end()` on a 
 ### Logs
 
 `sandbox.restored` (`number`, `sha`, `kind`, `checks`, `seconds`), `sandbox.lost` (`number`, `sha`, `seconds`), and `check.refused` gains the reason `ended`. No change to the others.
+
+## Slice 7, #146: oxlint aborts in the container
+
+### Why
+
+Both of Kimi's `lint` runs in #135's measurement died with `called Result::unwrap() on an Err value: ()` in `crates/oxc_allocator/src/pool/fixed_size.rs:112` and `SIGABRT`. With any `jsPlugins` entry, which this repository has, oxlint builds a fixed-size allocator pool: one 2 GiB block aligned to 4 GiB per thread, through `malloc`, which glibc turns into a single 6 GiB private mapping. `standard-1` is a 4 GiB VM with `vm.overcommit_memory=0` and no swap, and heuristic overcommit refuses a single mapping larger than RAM plus swap, whatever the thread count; `--threads 1` aborts the same way. Upstream (oxc #20331) has no Linux fix. Probed in production on 29 Oct 2026: the container's root can write `/proc/sys/vm/overcommit_memory`, and with it set to 1 the same lint passes in 1.7 s.
+
+### The fix
+
+The preparation turns overcommit on right after the container starts and before the checkout, with one more run (`echo 1 > /proc/sys/vm/overcommit_memory`, argv `andabot-overcommit`), logged as `sandbox.overcommit` (`number`, `exitCode`, and `reason` with the last line when it failed). The write is best effort: a runtime that makes the sysctl read-only logs it and the review goes on, with `lint` crashing as before rather than the sandbox being unavailable, since `test` and `typecheck` don't need it. Not chosen: a jemalloc preload (works under heuristic overcommit by mapping `MAP_NORESERVE`, but needs the image to carry it and every check to set `LD_PRELOAD`), a bigger instance (three times the price for every review), and an oxlint flag (none exists).
+
+### Tests
+
+`overcommitArgv` in `test/sandbox-checkout.test.ts`; the runs' order (start, overcommit, checkout) and the read-only case in `test/sandbox-runs.test.ts`. Live: a probe `check lint` on `standard-1` after the deploy.

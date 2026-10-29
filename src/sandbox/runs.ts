@@ -5,6 +5,7 @@ import {
   detectArgv,
   installArgv,
   lastLine,
+  overcommitArgv,
   parseCheckout,
   parseManager,
   REPO_DIR,
@@ -348,6 +349,7 @@ export class SandboxRuns {
       await sandbox.start(await this.host.token())
       this.#running = true
       await this.#save()
+      await this.#allowOvercommit(sandbox, head)
       step = "checkout"
       await this.#checkout(sandbox, head)
       step = "install"
@@ -356,6 +358,20 @@ export class SandboxRuns {
       return this.#failed(cause instanceof StepFailure ? cause : new StepFailure(step, errorText(cause)))
     } finally {
       this.#preparing = undefined
+    }
+  }
+
+  async #allowOvercommit(sandbox: SandboxCalls, head: SandboxHead): Promise<void> {
+    try {
+      const outcome = await this.#run(sandbox, overcommitArgv(), "/workspace")
+      const exitCode = outcome.outcome === "exited" ? outcome.exitCode : undefined
+      log("sandbox.overcommit", {
+        number: head.number,
+        exitCode,
+        reason: exitCode === 0 ? undefined : lastLine(outcome.tail),
+      })
+    } catch (cause) {
+      logError("sandbox.overcommit", { number: head.number, error: errorText(cause) })
     }
   }
 
