@@ -30,7 +30,20 @@ const Reviews = Type.Object(
 
 const Model = Type.Object({ verify: Type.Optional(Type.String({ minLength: 1 })) })
 
-export const AndabotConfig = Type.Object({ reviews: Reviews, model: Type.Optional(Model) })
+const Template = Type.Optional(Type.String({ minLength: 1 }))
+
+export const CheckTemplates = Type.Object(
+  { lint: Template, typecheck: Template, test: Template },
+  { additionalProperties: false },
+)
+
+export type CheckTemplates = Static<typeof CheckTemplates>
+
+export const AndabotConfig = Type.Object({
+  reviews: Reviews,
+  model: Type.Optional(Model),
+  checks: Type.Optional(CheckTemplates),
+})
 
 export type AndabotConfig = Static<typeof AndabotConfig>
 
@@ -38,6 +51,7 @@ const AndabotConfigFile = Type.Object(
   {
     reviews: Type.Optional(Type.Partial(Reviews, { additionalProperties: false })),
     model: Type.Optional(Model),
+    checks: Type.Optional(CheckTemplates),
   },
   { additionalProperties: false },
 )
@@ -130,9 +144,11 @@ const yamlProblem = (cause: unknown): string =>
 const schemaProblem = ([first]: readonly TLocalizedValidationError[]): string =>
   `${first?.instancePath || "/"} ${first?.message ?? "is invalid"}`
 
-const withDefaults = ({ reviews, model }: AndabotConfigFile): AndabotConfig => {
-  const config = { reviews: { ...defaults().reviews, ...reviews } }
-  return model?.verify === undefined ? config : { ...config, model: { verify: model.verify } }
+const withDefaults = ({ reviews, model, checks }: AndabotConfigFile): AndabotConfig => {
+  const config: AndabotConfig = { reviews: { ...defaults().reviews, ...reviews } }
+  if (model?.verify !== undefined) config.model = { verify: model.verify }
+  if (checks !== undefined) config.checks = checks
+  return config
 }
 
 export function parseConfig(text: string): ParsedConfig {

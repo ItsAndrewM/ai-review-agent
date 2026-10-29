@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest"
 import type { PullRequestKey } from "../src/records.ts"
 import { MAX_CHECKOUT_KIB } from "../src/sandbox/checkout.ts"
-import type { RunOptions } from "../src/sandbox/review-sandbox.ts"
-import type { RunOutcome } from "../src/sandbox/run.ts"
+import type { RunOptions, RunOutcome } from "../src/sandbox/run.ts"
 import {
   DEFAULT_SANDBOX_SECONDS,
   LEASE_GRACE_MS,
@@ -61,7 +60,9 @@ class FakeHost implements SandboxHost {
   constructor(scripted: Scripted) {
     this.box = new FakeSandbox(scripted)
   }
+  enabledCalls = 0
   async enabled(): Promise<boolean> {
+    this.enabledCalls += 1
     return this.on
   }
   async lease(ttlMs: number): Promise<boolean> {
@@ -98,6 +99,15 @@ describe("SandboxRuns.access", () => {
     expect(host.box.calls).toEqual(["start", "run:andabot-checkout", "run:andabot-detect", "run:pnpm"])
     expect(host.box.tokens).toEqual(["scoped-token"])
     expect(host.leases).toEqual([900_000 + LEASE_GRACE_MS])
+  })
+
+  it("answers from the memo without asking again whether the tier is on", async () => {
+    const host = new FakeHost(READY)
+    const runs = new SandboxRuns(host, 900)
+    await runs.access()
+    await runs.access()
+    await runs.access()
+    expect(host.enabledCalls).toBe(1)
   })
 
   it("answers off without touching anything when the tier is off", async () => {

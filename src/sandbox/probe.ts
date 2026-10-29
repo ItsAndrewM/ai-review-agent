@@ -5,20 +5,43 @@ import { verifyWebhookSignature } from "../github/webhook.ts"
 import { log } from "../log.ts"
 import { PullRequestKey } from "../records.ts"
 import { objectName } from "../route.ts"
+import type { RunOutcome } from "./run.ts"
 
 const DEFAULT_PROBE_TIMEOUT_MS = 60_000
 
-export const ProbeRequest = Type.Object(
+const RunProbe = Type.Object(
   {
     key: PullRequestKey,
-    action: Type.Union([Type.Literal("run"), Type.Literal("destroy"), Type.Literal("prepare")]),
-    command: Type.Optional(Type.Array(Type.String(), { minItems: 1 })),
+    action: Type.Literal("run"),
+    command: Type.Array(Type.String(), { minItems: 1 }),
     cwd: Type.Optional(Type.String()),
     timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
     tailBytes: Type.Optional(Type.Integer({ minimum: 1 })),
   },
   { additionalProperties: false },
 )
+
+const DestroyProbe = Type.Object(
+  { key: PullRequestKey, action: Type.Literal("destroy") },
+  { additionalProperties: false },
+)
+
+const PrepareProbe = Type.Object(
+  { key: PullRequestKey, action: Type.Literal("prepare") },
+  { additionalProperties: false },
+)
+
+const CheckProbe = Type.Object(
+  {
+    key: PullRequestKey,
+    action: Type.Literal("check"),
+    name: Type.Union([Type.Literal("lint"), Type.Literal("typecheck"), Type.Literal("test")]),
+    paths: Type.Optional(Type.Array(Type.String())),
+  },
+  { additionalProperties: false },
+)
+
+export const ProbeRequest = Type.Union([RunProbe, DestroyProbe, PrepareProbe, CheckProbe])
 
 export type ProbeRequest = Static<typeof ProbeRequest>
 
@@ -37,9 +60,7 @@ export function parseProbe(body: string): ProbeRequest | undefined {
   } catch {
     return undefined
   }
-  if (!Value.Check(ProbeRequest, parsed)) return undefined
-  if (parsed.action === "run" && parsed.command === undefined) return undefined
-  return parsed
+  return Value.Check(ProbeRequest, parsed) ? parsed : undefined
 }
 
 export async function serveProbe(request: Request, env: Env): Promise<Response> {
@@ -53,21 +74,32 @@ export async function serveProbe(request: Request, env: Env): Promise<Response> 
   const probe = parseProbe(body)
   if (probe === undefined) return new Response("Bad probe", { status: 400 })
   log("sandbox.probe", { action: probe.action, number: probe.key.number })
-  if (probe.action === "prepare") {
-    return Response.json(await env.PULL_REQUEST.getByName(objectName(probe.key)).prepareSandbox(probe.key))
+  return dispatchProbe(probe, env)
+}
+
+async function dispatchProbe(probe: ProbeRequest, env: Env): Promise<Response> {
+  const object = env.PULL_REQUEST.getByName(objectName(probe.key))
+  switch (probe.action) {
+    case "prepare":
+      return Response.json(await object.prepareSandbox(probe.key))
+    case "check":
+      return new Response(await object.probeCheck(probe.key, probe.name, probe.paths ?? []))
+    case "destroy":
+      await env.REVIEW_SANDBOX.getByName(objectName(probe.key)).destroy()
+      return Response.json({ destroyed: true })
+    case "run":
+      return Response.json(await runProbe(probe, env))
   }
+}
+
+async function runProbe(probe: Static<typeof RunProbe>, env: Env): Promise<RunOutcome> {
   const sandbox = env.REVIEW_SANDBOX.getByName(objectName(probe.key))
-  if (probe.action === "destroy") {
-    await sandbox.destroy()
-    return Response.json({ destroyed: true })
-  }
   const jwt = await createAppJwt(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY)
   const token = await fetchInstallationToken(jwt, probe.key.installationId, sandboxTokenScope(probe.key))
   await sandbox.start(token.token)
-  const outcome = await sandbox.run(probe.command ?? [], {
+  return sandbox.run(probe.command, {
     cwd: probe.cwd ?? "/workspace",
     timeoutMs: probe.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS,
     tailBytes: probe.tailBytes,
   })
-  return Response.json(outcome)
 }

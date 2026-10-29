@@ -33,6 +33,17 @@ describe("parseProbe", () => {
     expect(parseProbe(JSON.stringify({ key, action: "prepare" }))).toEqual({ key, action: "prepare" })
   })
 
+  it("accepts a check with a name and optional paths, and refuses one without a name", () => {
+    expect(parseProbe(JSON.stringify({ key, action: "check", name: "test", paths: ["a.ts"] }))).toEqual({
+      key,
+      action: "check",
+      name: "test",
+      paths: ["a.ts"],
+    })
+    expect(parseProbe(JSON.stringify({ key, action: "check" }))).toBeUndefined()
+    expect(parseProbe(JSON.stringify({ key, action: "check", name: "build" }))).toBeUndefined()
+  })
+
   it("refuses a run without a command", () => {
     expect(parseProbe(JSON.stringify({ key, action: "run" }))).toBeUndefined()
     expect(parseProbe(JSON.stringify({ key, action: "run", command: [] }))).toBeUndefined()

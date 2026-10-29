@@ -25,6 +25,7 @@ import {
   treeText,
   type RequestBudget,
   type ReviewHost,
+  type RunCheckArgs,
   type SearchAccess,
 } from "../src/review/tools.ts"
 
@@ -71,6 +72,7 @@ const host = {
   pathFilters: async () => [],
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
+  runCheck: async (args: RunCheckArgs) => `ran ${args.name} on ${(args.paths ?? []).join(" ") || "nothing"}`,
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
   budgetBlockFor: async (): Promise<string | undefined> => undefined,
   requestBudget: async (): Promise<RequestBudget> => "allow",
@@ -141,15 +143,27 @@ describe("changedFilesText", () => {
 })
 
 describe("createReviewExtension", () => {
-  it("offers the model six tools, with submit_review last", () => {
+  it("offers the model seven tools, with submit_review last", () => {
     expect(createReviewExtension(host).tools?.map((tool) => tool.name)).toEqual([
       "read_file",
       "list_changed_files",
       "get_issue",
       "grep",
       "tree",
+      "run_check",
       "submit_review",
     ])
+  })
+
+  it("offers run_check with the three check names and optional paths, replayed unsafe like grep", () => {
+    const runCheck = createReviewExtension(host).tools?.find((tool) => tool.name === "run_check")
+    const parameters = JSON.stringify(runCheck?.parameters)
+    expect(parameters).toContain('"lint"')
+    expect(parameters).toContain('"typecheck"')
+    expect(parameters).toContain('"test"')
+    expect(parameters).toContain('"paths"')
+    expect(runCheck?.replay).toBe("unsafe")
+    expect(runCheck?.description).toContain("whole suite is CI's job")
   })
 
   it("runs submit_review's round one call at a time, so two calls in one round can't post or verify at once", () => {

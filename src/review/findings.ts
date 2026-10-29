@@ -10,6 +10,7 @@ import {
   type Side,
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
+import type { CheckName } from "../sandbox/checks.ts"
 
 export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
 
@@ -55,7 +56,27 @@ export const Finding = Type.Object({
         "The new text for the anchored lines, start_line (or line) through line, on the RIGHT side, verbatim, indented as in the file, no fences. GitHub removes those lines and puts this in their place, so keep any of them you still need: to add code beside a line, include that line. Only when you are sure it compiles and is complete.",
     }),
   ),
+  check: Type.Optional(
+    Type.Object(
+      {
+        name: Type.Union([Type.Literal("lint"), Type.Literal("typecheck"), Type.Literal("test")]),
+        paths: Type.Optional(Type.Array(Type.String())),
+        exit_code: Type.Integer(),
+      },
+      {
+        additionalProperties: false,
+        description:
+          "The run_check call this finding rests on, as it answered: the same name and paths, and the exit code it reported. Only after run_check ran.",
+      },
+    ),
+  ),
 })
+
+const CHECK_NOT_RUN = "check names a run that didn't happen: run_check first and copy its answer"
+
+export function findingCheckKey(check: { name: CheckName; paths?: readonly string[] }): string {
+  return `${check.name}:${(check.paths ?? []).join(" ")}`
+}
 
 export const Walkthrough = Type.Object({
   path: Type.String({ description: "Path of the changed file, exactly as listed." }),
@@ -201,6 +222,7 @@ export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
   hasLinkedIssues: boolean,
+  knownChecks: ReadonlyMap<string, number> = new Map(),
 ): ValidatedReview {
   const accepted: FindingInput[] = []
   const rejected: Rejected[] = []
@@ -208,7 +230,7 @@ export function validateFindings(
   let relocated = 0
   let suggestionsDropped = 0
   for (const finding of findings) {
-    const checked = checkFinding(finding, commentable, hasLinkedIssues)
+    const checked = checkFinding(finding, commentable, hasLinkedIssues, knownChecks)
     if ("reason" in checked) {
       rejected.push({ finding, reason: checked.reason, unfounded: checked.unfounded })
       continue
@@ -238,9 +260,13 @@ function checkFinding(
   finding: FindingInput,
   commentable: ReadonlyMap<string, CommentableLines>,
   hasLinkedIssues: boolean,
+  knownChecks: ReadonlyMap<string, number>,
 ): Checked {
   const basisIssue = basisProblem(finding, hasLinkedIssues)
   if (basisIssue !== undefined) return { reason: basisIssue, unfounded: true }
+  if (finding.check !== undefined && knownChecks.get(findingCheckKey(finding.check)) !== finding.check.exit_code) {
+    return { reason: CHECK_NOT_RUN, unfounded: true }
+  }
   const lines = commentable.get(finding.path)
   if (!lines) return refused(`path "${finding.path}" is not a changed file`)
   const side = finding.side ?? "RIGHT"

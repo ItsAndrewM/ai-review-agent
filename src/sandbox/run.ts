@@ -52,6 +52,13 @@ export function tailBytesOf(requested: number | undefined): number {
   return Math.min(requested, MAX_TAIL_BYTES)
 }
 
+export interface RunOptions {
+  readonly cwd: string
+  readonly env?: Record<string, string>
+  readonly timeoutMs: number
+  readonly tailBytes?: number | undefined
+}
+
 export type RunOutcome =
   | { readonly outcome: "exited"; readonly exitCode: number; readonly tail: string; readonly cut: boolean }
   | { readonly outcome: "timeout"; readonly tail: string; readonly cut: boolean }

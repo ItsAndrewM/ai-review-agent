@@ -38,6 +38,7 @@ export interface ReviewHost {
   pathFilters(): Promise<readonly string[]>
   submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
+  runCheck(args: RunCheckArgs): Promise<string>
   loadedSnapshot(): SnapshotFiles | undefined
   budgetBlockFor(toolName: string, conversationId: ConversationId): Promise<string | undefined>
   requestBudget(conversationId: ConversationId): Promise<RequestBudget>
@@ -76,6 +77,20 @@ export const TreeParameters = Type.Object({
 })
 
 export type TreeArgs = Static<typeof TreeParameters>
+
+export const RunCheckParameters = Type.Object({
+  name: Type.Union([Type.Literal("lint"), Type.Literal("typecheck"), Type.Literal("test")], {
+    description: "Which of the repository's checks to run.",
+  }),
+  paths: Type.Optional(
+    Type.Array(Type.String(), {
+      description:
+        "Repository paths to run it on, such as the test file or package the change touches. Left out, the check runs as the repository defines it.",
+    }),
+  ),
+})
+
+export type RunCheckArgs = Static<typeof RunCheckParameters>
 
 type ToolText<Args> = (args: Args, conversationId: ConversationId) => Promise<string>
 
@@ -117,8 +132,22 @@ export function treeTool(list: ToolText<TreeArgs>) {
   })
 }
 
+export function runCheckTool(run: (args: RunCheckArgs) => Promise<string>) {
+  return defineTool({
+    name: "run_check",
+    description:
+      "Run the repository's lint, typecheck or test command on the named paths at the pull request's head, in a sandbox, and read the exit code and the last 8 KiB of output. Name the test file or package the change touches; the whole suite is CI's job. Answers at once when the sandbox is off, spent or unavailable.",
+    parameters: RunCheckParameters,
+    replay: "unsafe",
+    async execute(args) {
+      return text(await run(args))
+    },
+  })
+}
+
 export function createReviewExtension(host: ReviewHost): Extension {
   const readFile = readFileTool((args) => readFileText(host, args))
+  const runCheck = runCheckTool((args) => host.runCheck(args))
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
@@ -171,7 +200,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
         tag: false,
       },
     ],
-    tools: [readFile, listChangedFiles, getIssue, grepFiles, listTree, submitReview],
+    tools: [readFile, listChangedFiles, getIssue, grepFiles, listTree, runCheck, submitReview],
     hooks: [
       hook(ToolTask, {
         beforeTool: async (call, api) => blockOrNothing(await host.budgetBlockFor(call.name, api.conversationId)),

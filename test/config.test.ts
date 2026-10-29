@@ -54,6 +54,10 @@ const FULL_FILE = [
   "model:",
   "  name: glm-5.3-flash",
   "  verify: '@cf/x/y'",
+  "checks:",
+  "  lint: pnpm oxlint {paths}",
+  "  typecheck: pnpm tsc --noEmit",
+  "  test: pnpm vitest run {paths}",
   "",
 ].join("\n")
 
@@ -73,6 +77,7 @@ const FULL_CONFIG = {
     ],
   },
   model: { verify: "@cf/x/y" },
+  checks: { lint: "pnpm oxlint {paths}", typecheck: "pnpm tsc --noEmit", test: "pnpm vitest run {paths}" },
 } satisfies AndabotConfig
 
 const LITERAL_DEFAULTS = {
@@ -132,6 +137,24 @@ describe("DEFAULT_CONFIG", () => {
 
   it("names no verify model, which means the Worker var applies", () => {
     expect(DEFAULT_CONFIG.model).toBeUndefined()
+  })
+
+  it("names no checks, which means run_check falls back to the runners package.json names", () => {
+    expect(DEFAULT_CONFIG.checks).toBeUndefined()
+  })
+})
+
+describe("checks", () => {
+  it("refuses a check it doesn't know and an empty template, applying the defaults", () => {
+    expect(parseConfig("checks:\n  build: pnpm build\n").error).toContain("build")
+    expect(parseConfig("checks:\n  lint: ''\n").error).toBeDefined()
+    expect(parseConfig("checks:\n  lint: ''\n").config.checks).toBeUndefined()
+  })
+
+  it("reads a partial map", () => {
+    expect(parseConfig("checks:\n  test: pnpm vitest run {paths}\n").config.checks).toEqual({
+      test: "pnpm vitest run {paths}",
+    })
   })
 })
 

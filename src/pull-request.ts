@@ -265,6 +265,7 @@ import {
   fileAt,
   type RequestBudget,
   type ReviewHost,
+  type RunCheckArgs,
   type SearchAccess,
   type SubmitOutcome,
 } from "./review/tools.ts"
@@ -293,13 +294,33 @@ import {
   type VerifyCandidate,
 } from "./review/verify.ts"
 import { objectName } from "./route.ts"
+import type { Manager } from "./sandbox/checkout.ts"
+import {
+  accessRefusal,
+  argvFromTemplate,
+  CHECK_ENV,
+  checkKey,
+  checkText,
+  checkTimeoutOf,
+  existsArgv,
+  fallbackArgv,
+  knownChecksOf,
+  missingPath,
+  pathProblem,
+  refusalText,
+  type CheckName,
+  type CheckRefusal,
+  type CheckRun,
+} from "./sandbox/checks.ts"
 import { sandboxTokenScope } from "./sandbox/probe.ts"
+import { DEFAULT_TAIL_BYTES } from "./sandbox/run.ts"
 import {
   accessSummary,
   sandboxBudgetOf,
   sandboxOn,
   SandboxRuns,
   type AccessSummary,
+  type SandboxAccess,
   type SandboxCalls,
   type SandboxHead,
   type SandboxHost,
@@ -516,6 +537,108 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return accessSummary(await this.#sandbox.access())
   }
 
+  async probeCheck(key: PullRequestKey, name: CheckName, paths: readonly string[]): Promise<string> {
+    await this.ctx.storage.put("key", key)
+    return this.runCheck({ name, paths: [...paths] })
+  }
+
+  #checks = new Map<string, CheckRun>()
+  #checkQueue: Promise<void> = Promise.resolve()
+  #packageJson: { base: string; text: string | undefined } | undefined
+
+  async runCheck(args: RunCheckArgs): Promise<string> {
+    const paths = args.paths ?? []
+    const problem = pathProblem(paths)
+    if (problem !== undefined) return this.#checkRefused(args.name, { kind: "bad_path", problem })
+    const pr = await this.pullRequest()
+    const key = checkKey(pr.head.sha, args.name, paths)
+    const cached = this.#cachedCheck(pr, key)
+    if (cached !== undefined) return cached
+    const access = await this.#sandbox.access()
+    if (access.kind !== "ready") return this.#checkRefused(args.name, accessRefusal(access))
+    return this.#queuedCheck(
+      async () => this.#cachedCheck(pr, key) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
+    )
+  }
+
+  #cachedCheck(pr: PullRequestInfo, key: string): string | undefined {
+    const cached = this.#checks.get(key)
+    if (cached === undefined) return undefined
+    log("check.cached", { number: pr.number, name: cached.name, paths: cached.paths.join(" ") })
+    return checkText(cached)
+  }
+
+  #queuedCheck<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.#checkQueue.then(work)
+    this.#checkQueue = run.then(
+      () => undefined,
+      () => undefined,
+    )
+    return run
+  }
+
+  async #runCheckNow(
+    access: Extract<SandboxAccess, { kind: "ready" }>,
+    pr: PullRequestInfo,
+    name: CheckName,
+    paths: readonly string[],
+    key: string,
+  ): Promise<string> {
+    const began = Date.now()
+    const argv = await this.#checkArgv(pr, name, access.manager, paths)
+    if (argv === undefined) return this.#checkRefused(name, { kind: "no_command" })
+    const used = paths.filter((path) => argv.includes(path))
+    const missing = await this.#missingPath(access, used)
+    if (missing !== undefined) return this.#checkRefused(name, { kind: "missing_path", path: missing })
+    const outcome = await access.sandbox.run(argv, {
+      cwd: access.dir,
+      env: { ...CHECK_ENV },
+      timeoutMs: checkTimeoutOf(this.env.SANDBOX_CHECK_TIMEOUT),
+      tailBytes: DEFAULT_TAIL_BYTES,
+    })
+    const run: CheckRun = { name, paths, outcome, ms: Date.now() - began }
+    this.#checks.set(key, run)
+    log("check.run", {
+      number: pr.number,
+      name,
+      paths: paths.join(" "),
+      outcome: outcome.outcome,
+      exitCode: outcome.outcome === "exited" ? outcome.exitCode : undefined,
+      ms: run.ms,
+      bytes: new TextEncoder().encode(outcome.tail).length,
+      cut: outcome.cut,
+    })
+    return checkText(run)
+  }
+
+  async #missingPath(access: Extract<SandboxAccess, { kind: "ready" }>, paths: readonly string[]) {
+    if (paths.length === 0) return undefined
+    return missingPath(await access.sandbox.run(existsArgv(paths), { cwd: access.dir, timeoutMs: 60_000 }))
+  }
+
+  async #checkArgv(pr: PullRequestInfo, name: CheckName, manager: Manager, paths: readonly string[]) {
+    const template = (await this.repositoryConfig(pr)).config.checks?.[name]
+    if (template !== undefined) return argvFromTemplate(template, paths)
+    return fallbackArgv(name, manager, await this.#packageJsonAt(pr.base.sha), paths)
+  }
+
+  async #packageJsonAt(base: string): Promise<string | undefined> {
+    if (this.#packageJson?.base === base) return this.#packageJson.text
+    try {
+      const text = await (await this.github()).getFileContent(await this.key(), "package.json", base)
+      this.#packageJson = { base, text }
+      return text
+    } catch (cause) {
+      logError("check.package_unreadable", { base: shortSha(base), error: errorText(cause) })
+      return undefined
+    }
+  }
+
+  async #checkRefused(name: CheckName, refusal: CheckRefusal): Promise<string> {
+    log("check.refused", { number: (await this.pullRequest()).number, name, reason: refusal.kind })
+    return refusalText(name, refusal)
+  }
+
   reviewModel() {
     return this.ai(this.env.REVIEW_MODEL)
   }
@@ -696,7 +819,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const scope = await this.scopeFor(pending.deliveryId)
     const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
     const validated = withFilteredUnfounded(
-      validateFindings(submission.findings, indexCommentableLines(scopedFiles(scope, files)), hasLinkedIssues),
+      validateFindings(
+        submission.findings,
+        indexCommentableLines(scopedFiles(scope, files)),
+        hasLinkedIssues,
+        knownChecksOf(this.#checks, pr.head.sha),
+      ),
       scope,
     )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
@@ -1393,6 +1521,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     this.#activated = []
     this.#runs.start()
     this.#sandbox.start()
+    this.#checks.clear()
     try {
       const files = await this.openRun(pr, run)
       const issues = await this.linkedIssues(pr)

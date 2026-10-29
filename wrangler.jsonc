@@ -46,6 +46,9 @@
     // included, after which run_check answers that the budget is spent.
     // Separate from MAX_REVIEW_NEURONS: the sandbox costs instance time.
     "MAX_SANDBOX_SECONDS": "900",
+    // Milliseconds one run_check command may take before its process group
+    // is killed and the tool answers timeout.
+    "SANDBOX_CHECK_TIMEOUT": "300000",
     // "true": request changes on blocking findings and approve clean PRs.
     // "false": only ever comment.
     "REQUEST_CHANGES_WORKFLOW": "true",
