@@ -81,6 +81,7 @@ export function renderSummaryComment(input: {
   verify?: VerifyDisplay | undefined
   configError?: string | undefined
   checks?: ChecksDisplay | undefined
+  sandboxSeconds?: number | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
@@ -95,7 +96,7 @@ export function renderSummaryComment(input: {
     footer: [
       ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify),
       ...unverifiedLines(input.verify),
-      ...spendLines(input.spend),
+      ...spendLines(input.spend, input.sandboxSeconds),
       ...budgetNoteLines(input.budgetNote),
       linkedIssuesLine(input.linkedIssues),
       standardsLine(input.instructionFiles),
@@ -336,8 +337,8 @@ function summarizedBy(model: string, skillsFingerprint: string): string {
   return `<sub>Summarized by \`${model}\` with skills \`summary@${skillsFingerprint.slice(0, 8)}\`.</sub>`
 }
 
-function spendLines(spend: ReviewSpend | undefined): string[] {
-  const line = spend === undefined ? undefined : spendLine(spend)
+function spendLines(spend: ReviewSpend | undefined, sandboxSeconds: number | undefined): string[] {
+  const line = spend === undefined ? undefined : spendLine(spend, sandboxSeconds)
   return line === undefined ? [] : [`<sub>${line}</sub>`]
 }
 

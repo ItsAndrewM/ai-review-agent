@@ -1,5 +1,6 @@
 import { Type } from "typebox"
 import { Value } from "typebox/value"
+import type { CheckRecord } from "../records.ts"
 import type { Manager } from "./checkout.ts"
 import { lastLine } from "./checkout.ts"
 import type { RunOutcome } from "./run.ts"
@@ -129,6 +130,18 @@ export interface CheckRun {
   readonly paths: readonly string[]
   readonly outcome: RunOutcome
   readonly ms: number
+}
+
+export function checkRecordOf(run: CheckRun): CheckRecord {
+  const record: CheckRecord = {
+    name: run.name,
+    paths: [...run.paths],
+    outcome: run.outcome.outcome,
+    ms: run.ms,
+    tail: run.outcome.tail,
+  }
+  if (run.outcome.outcome === "exited") record.exitCode = run.outcome.exitCode
+  return record
 }
 
 export function checkText(run: CheckRun): string {
