@@ -41,6 +41,7 @@ import {
   type ChangedFile,
   type MarkedLines,
 } from "./github/diff.ts"
+import { errorOf } from "./github/errors.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
 import { reactWithEyes } from "./reaction.ts"
@@ -143,7 +144,15 @@ import {
   type ReviewSpend,
   type UsageLedger,
 } from "./review/cost.ts"
-import type { Incoming, ThreadContext } from "./review/delivery.ts"
+import {
+  Deliveries,
+  RETRY_JOB,
+  RetryJob,
+  StoredDelivery,
+  type DeliveryHost,
+  type Incoming,
+  type ThreadContext,
+} from "./review/delivery.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -158,6 +167,7 @@ import {
   type WrittenReview,
 } from "./review/findings.ts"
 import {
+  afterReviewThrow,
   decideFlight,
   migratePending,
   ownsOperation,
@@ -398,6 +408,7 @@ interface ReviewRun {
   operationId: string
   deliveryId: string
   started: number
+  checkRunId?: number
   staleBuild: boolean
   callerBuild: string | undefined
   skillsFingerprint: string
@@ -471,6 +482,26 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
   )
   #sandbox = new SandboxRuns(this.#sandboxHost(), sandboxBudgetOf(this.env.MAX_SANDBOX_SECONDS))
+  #deliveries = new Deliveries(this.#deliveryHost())
+
+  #deliveryHost(): DeliveryHost {
+    return {
+      store: async (key, record) => {
+        await this.ctx.storage.put<StoredDelivery>(key, record)
+      },
+      load: async (key) => {
+        const stored = await this.ctx.storage.get(key)
+        return Value.Check(StoredDelivery, stored) ? stored : undefined
+      },
+      forget: async (key) => {
+        await this.ctx.storage.delete(key)
+      },
+      schedule: async (id, time, payload) => {
+        await this.lifecycle.jobs.push({ id, fn: RETRY_JOB, time, payload })
+      },
+      now: () => Date.now(),
+    }
+  }
 
   #sandboxHost(): SandboxHost {
     const leases = () => this.env.SANDBOX_LEASES.getByName("leases")
@@ -648,21 +679,59 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async accept(incoming: Incoming, callerVersion?: Version): Promise<"accepted"> {
     await this.ctx.storage.put("key", incoming.key)
-    this.ctx.waitUntil(
-      this.handle(incoming, callerVersion).catch((error) =>
-        logError("event.failed", { delivery: incoming.deliveryId, kind: incoming.kind, error: errorText(error) }),
-      ),
-    )
+    this.ctx.waitUntil(this.#deliveries.accept(incoming, (replay) => this.handle(replay, callerVersion)))
     return "accepted"
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
     if (job.fn === SANDBOX_DROP_JOB) return this.#dropJob()
+    if (job.fn === RETRY_JOB && Value.Check(RetryJob, job.payload)) return this.#retryJob(job.payload)
     if (job.fn !== RECHECK_JOB || !Value.Check(RecheckJob, job.payload)) {
       logError("job.unreadable", { id: job.id, fn: job.fn })
       return
     }
     await this.evaluateWithRecheck("recheck", job.payload.delivery, job.payload.attempt)
+  }
+
+  async #retryJob(payload: RetryJob): Promise<LifecycleJobOutcome> {
+    await this.#deliveries.retry(
+      payload,
+      (replay) => this.handle(replay),
+      (incoming, error, _attempts, sinceMs) => this.#abandon(incoming, error, sinceMs),
+    )
+    return undefined
+  }
+
+  async #abandon(incoming: Incoming, error: Error, sinceMs: number): Promise<void> {
+    const minutes = Math.round(sinceMs / 60_000)
+    if (incoming.kind === "review") await this.#abandonReview(incoming, error, minutes)
+    if (incoming.kind === "comment") await this.#abandonComment(incoming, error, minutes)
+  }
+
+  async #abandonReview(incoming: ReviewIncoming, error: Error, minutes: number): Promise<void> {
+    const text = `GitHub was unreachable for ${minutes} minutes (${error.message}); comment \`@andabot review\` to retry.`
+    const update = await this.failedRun(text)
+    const pending = await this.pendingFor(incoming.deliveryId)
+    if (pending?.checkRunId === undefined) {
+      const key = await this.key()
+      const github = await this.github()
+      const start = startedCheckRun({
+        name: this.botLogin(),
+        headSha: incoming.headSha,
+        deliveryId: incoming.deliveryId,
+        fileCount: 0,
+        model: this.env.REVIEW_MODEL,
+        startedAt: Date.now(),
+      })
+      const created = await github.createCheckRun(key, start)
+      await github.updateCheckRun(key, created.id, update)
+    }
+    await this.endOwnRun(incoming.deliveryId, update)
+  }
+
+  async #abandonComment(incoming: CommentIncoming, error: Error, minutes: number): Promise<void> {
+    const text = `I couldn't act on this: GitHub was unreachable for ${minutes} minutes (${error.message}). Say it again and I'll try again.`
+    await this.respond(await this.github(), await this.key(), incoming, `@${incoming.author} ${text}`)
   }
 
   async #dropJob(): Promise<LifecycleJobOutcome> {
@@ -1236,15 +1305,31 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return "in_progress"
     }
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
-    const run = {
-      operationId: `review:${incoming.deliveryId}`,
-      deliveryId: incoming.deliveryId,
-      started: Date.now(),
+    const settings = {
       staleBuild,
       callerBuild: callerVersion?.id,
       skillsFingerprint,
       config: read.config,
       configStatus: configStatus(read),
+    }
+    if (flight.kind === "resume") {
+      log("review.resumed", { number: pr.number, head: shortSha(pr.head.sha), delivery: incoming.deliveryId })
+      const { previous } = flight
+      const resumed: ReviewRun = {
+        operationId: previous.operationId,
+        deliveryId: previous.deliveryId,
+        started: previous.started,
+        ...settings,
+      }
+      if (previous.checkRunId !== undefined) resumed.checkRunId = previous.checkRunId
+      await this.runReview(pr, incoming, resumed)
+      return undefined
+    }
+    const run = {
+      operationId: `review:${incoming.deliveryId}`,
+      deliveryId: incoming.deliveryId,
+      started: Date.now(),
+      ...settings,
     }
     await this.ctx.storage.put<PendingReview>("pending", {
       headSha: pr.head.sha,
@@ -1348,7 +1433,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async openRun(pr: PullRequestInfo, run: ReviewRun): Promise<ChangedFile[]> {
     const files = await this.changedFiles()
-    const checkRunId = await this.startCheckRun(pr, files, run)
+    const checkRunId = run.checkRunId ?? (await this.startCheckRun(pr, files, run))
     if (checkRunId === undefined) return files
     const pending = await this.pendingFor(run.deliveryId)
     if (pending === undefined) await this.cancelUnrecordedRun(pr, run, checkRunId)
@@ -1601,7 +1686,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       }
       await this.releasePending(run.deliveryId)
     } catch (error) {
-      await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
+      if (afterReviewThrow(errorOf(error)) === "release") {
+        await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
+      }
       throw error
     } finally {
       await this.#runs.end(pr.number, "review_end")

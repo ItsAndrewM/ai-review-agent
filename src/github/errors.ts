@@ -25,3 +25,7 @@ export function isTransient(error: Error): boolean {
 export function softenUnlessTransient(error: Error): void {
   if (isTransient(error)) throw error
 }
+
+export function errorOf(cause: unknown): Error {
+  return cause instanceof Error ? cause : new Error(String(cause))
+}

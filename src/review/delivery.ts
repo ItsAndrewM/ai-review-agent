@@ -1,5 +1,5 @@
 import { Type, type Static } from "typebox"
-import { isTransient } from "../github/errors.ts"
+import { errorOf, isTransient } from "../github/errors.ts"
 import { errorText, log, logError } from "../log.ts"
 import { PullRequestKey } from "../records.ts"
 
@@ -161,8 +161,4 @@ export class Deliveries {
       logError("event.abandon_failed", { delivery: incoming.deliveryId, kind: incoming.kind, error: errorText(cause) })
     }
   }
-}
-
-function errorOf(cause: unknown): Error {
-  return cause instanceof Error ? cause : new Error(String(cause))
 }
