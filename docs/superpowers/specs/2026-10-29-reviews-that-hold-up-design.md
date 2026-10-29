@@ -44,7 +44,7 @@ _Ruling (29 Oct, Andrew):_ no catch-up on the next event. The next push reviews 
 
 ### Logs
 
-`event.retry` (`delivery`, `kind`, `attempt`, `inMs`, `error`), `event.abandoned` (`delivery`, `kind`, `attempts`, `error`); `event.failed` keeps logging every failed attempt and gains `transient` and `attempt`.
+`event.retry` (`delivery`, `kind`, `attempt`, `inMs`, `error`), `event.abandoned` (`delivery`, `kind`, `attempts`, `error`), `event.retry_skipped` (`delivery`, `kind`, `attempt`, `reason`) when a rung fires for a record that is gone; `event.failed` keeps logging every failed attempt and gains `transient` and `attempt`.
 
 ### Where the pieces live
 

@@ -108,12 +108,7 @@ export class Deliveries {
     const key = deliveryKey(job.delivery, job.kind)
     const record = await this.host.load(key)
     if (record === undefined) {
-      logError("event.abandoned", {
-        delivery: job.delivery,
-        kind: job.kind,
-        attempts: job.attempt,
-        error: "stored delivery unreadable",
-      })
+      log("event.retry_skipped", { delivery: job.delivery, kind: job.kind, attempt: job.attempt, reason: "no_record" })
       await this.host.forget(key)
       return
     }
