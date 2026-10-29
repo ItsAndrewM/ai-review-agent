@@ -271,12 +271,7 @@ describe("nothingToReview", () => {
   })
 
   it("never finds nothing to review in a full review, the mode a failed compare forces, so a failed read can't advance reviewed", () => {
-    const failedCompare = chooseMode({
-      full: false,
-      reviewed: { headSha: "old", baseRef: "main" },
-      baseRef: "main",
-      compareStatus: undefined,
-    })
+    const failedCompare = chooseMode({ full: false, reviewed, baseRef: "main", compareStatus: undefined })
     expect(failedCompare).toBe("full")
     expect(nothingToReview(buildScope({ ...incremental, mode: failedCompare, covered: new Map() }))).toBe(false)
   })
