@@ -1230,7 +1230,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const settingsSkip = await this.settingsSkip(pr, incoming, read)
     if (settingsSkip !== undefined) return settingsSkip
     const skillsFingerprint = (await bundledSkills()).fingerprint
-    const flight = await this.clearFlight(pr.head.sha)
+    const flight = await this.clearFlight(pr.head.sha, incoming.deliveryId)
     if (flight.kind === "skip") {
       log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
       return "in_progress"
@@ -1299,10 +1299,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return pathFiltersSkip(config.reviews.path_filters, () => this.changedFiles())
   }
 
-  private async clearFlight(headSha: string): Promise<FlightDecision> {
+  private async clearFlight(headSha: string, deliveryId: string): Promise<FlightDecision> {
     const pending = await this.readPending()
     const operations = await this.operationsOf(pending)
-    const decision = decideFlight(pending, headSha, { running: operations.length > 0, now: Date.now() })
+    const decision = decideFlight(pending, headSha, { running: operations.length > 0, now: Date.now() }, deliveryId)
     if (decision.kind !== "replace") return decision
     log("review.replaced", {
       because: decision.because,
@@ -2094,7 +2094,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async reviewRunning(headSha: string): Promise<boolean> {
     const pending = await this.readPending()
     const running = (await this.operationsOf(pending)).length > 0
-    return decideFlight(pending, headSha, { running, now: Date.now() }).kind === "skip"
+    return decideFlight(pending, headSha, { running, now: Date.now() }, NO_DELIVERY).kind === "skip"
   }
 
   private async catchUp(
@@ -2746,6 +2746,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 }
 
 const RECHECK_JOB = "approval.recheck"
+
+const NO_DELIVERY = ""
 
 const SANDBOX_DROP_JOB = "sandbox.drop"
 
