@@ -1,9 +1,12 @@
 import { Value } from "typebox/value"
 import { verifyWebhookSignature } from "./github/webhook.ts"
 import { objectName, routeWebhook, WebhookPayload } from "./route.ts"
+import { serveProbe } from "./sandbox/probe.ts"
 import { versionOf } from "./version.ts"
 
 export { PullRequest } from "./pull-request.ts"
+export { Outbound } from "./sandbox/outbound.ts"
+export { ReviewSandbox } from "./sandbox/review-sandbox.ts"
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -11,6 +14,7 @@ export default {
     if (url.pathname === "/" || url.pathname === "/health") {
       return Response.json({ name: env.BOT_LOGIN, ok: true })
     }
+    if (url.pathname === "/sandbox-probe") return serveProbe(request, env)
     if (url.pathname !== "/webhook") return new Response("Not found", { status: 404 })
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 })
     return receiveWebhook(request, env)

@@ -20,7 +20,7 @@ The manifest registers, and the script's arguments can change: the name `andabot
 | Events | Pull request · Issue comment · Pull request review · Pull request review comment · Pull request review thread · Check suite · Check run |
 | Where it can be installed | Only on this account |
 
-Checks: Read and write lets the App create the review check run and receive the `check_run` and `check_suite` events. Contents: Read and write lets it resolve the review threads a push fixed. GitHub lets only the pull request's author or someone with write access resolve a conversation, and for an App that means Contents write; Pull requests write isn't enough. That permission is broader than the one call: an installation token with it can change the repository's files and branches. The Worker uses it only to resolve threads, so install the App only on repositories it reviews, and treat its private key and tokens as write credentials.
+Checks: Read and write lets the App create the review check run and receive the `check_run` and `check_suite` events. Contents: Read and write lets it resolve the review threads a push fixed. GitHub lets only the pull request's author or someone with write access resolve a conversation, and for an App that means Contents write; Pull requests write isn't enough. That permission is broader than the one call: an installation token with it can change the repository's files and branches. The Worker uses it only to resolve threads, so install the App only on repositories it reviews, and treat its private key and tokens as write credentials. The sandbox tier never holds that token: the token its outbound handler adds to `github.com` requests is minted for the sandbox alone, read-only on the reviewed repository's contents, so code running in a sandbox can fetch but not push.
 
 To change an App that is already registered, set the permission on its Permissions & events page, then accept the request on the installation page (Settings, Applications, Installed GitHub Apps, andabot). Until it is accepted, those calls answer 403 "Resource not accessible by integration". The Worker logs a failed check call as `check.failed` and a failed resolve as `review.resolve_failed`, and otherwise ignores both. The installation token is cached per pull request object for up to an hour, so a pull request opened before the change can lack the permission for that long, and a new pull request is unaffected. A new event, such as Pull request review, is a box under Subscribe to events on the same page.
 
@@ -38,6 +38,8 @@ pnpm run deploy                 # `pnpm run`, since pnpm has a built-in `deploy`
 scripts/set-secrets.sh ~/andabot-app.json
 ```
 
+`pnpm run deploy` and `pnpm dev` need Docker running: wrangler builds `container/Dockerfile`, the sandbox tier's image (#131), and uploads it with the Worker. CI needs none, since `pnpm check` builds no image.
+
 The Worker is at `https://andabot.dinocode.workers.dev`. `GET /health` answers `{"name":"andabot","ok":true}`; a webhook with a bad signature answers `401`, and a signed `ping` answers `200 {"ignored":"no installation or repository"}`. The App's **Advanced** tab lists every delivery and can redeliver one.
 
 Variables in `wrangler.jsonc`:
@@ -50,6 +52,7 @@ Variables in `wrangler.jsonc`:
 | `MAX_REVIEW_NEURONS` | `10000` | Neurons after which the model is told to submit; if it still hasn't three model requests later, the review fails. The request that crosses it and those three are spent past it. 10,000 is one day of Workers AI's free allowance. Anything but a positive whole number falls back to 10,000, and spend on a model without a price isn't counted. `review.budget_spent` and `review.budget_refused` log the two stops. |
 | `REQUEST_CHANGES_WORKFLOW` | `true` | `true`: request changes on blocking findings, approve clean PRs. `false`: comment only. A repository's `.andabot.yaml` overrides it with `reviews.request_changes_workflow` (section 6). |
 | `VERIFY_MODEL` | empty | Workers AI model for the verify pass (#31), a second pass that keeps or drops each blocking finding and suggestion, and sets its severity, before a review posts. Empty turns verify off for every repository, whatever its `.andabot.yaml` says; it remains empty because neither model passed the [24 Oct replay](https://github.com/ItsAndrewM/ai-review-agent/issues/31#issuecomment-6389469628). Set it in `wrangler.jsonc`, or with `--var VERIFY_MODEL:<model id>` on deploy, to turn verify on after a model clears the bar; a repository's `model.verify` then overrides it and `reviews.verify: false` opts the repository out (section 6). A model id Workers AI doesn't serve fails verify, so each review posts unverified. A review that has reached `MAX_REVIEW_NEURONS` skips verify and posts unverified too, and verify's spend is in the cost line. |
+| `SANDBOX_PROBE` | `false` | `true` turns on `POST /sandbox-probe`, which drives a pull request's sandbox by hand for #131's live check (section 3). The `false` in `wrangler.jsonc` is the default every deploy gets; turn it on for one deploy with `--var SANDBOX_PROBE:true`, or locally in `.dev.vars`, rather than editing the default. It goes once `run_check` (#133) uses the sandbox. |
 
 ## 3. Local development
 
@@ -61,6 +64,14 @@ A webhook can also be replayed by hand. Sign the body with the secret and post i
 BODY='{"zen":"hi"}'
 SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | sed 's/^.* //')"
 curl -s -X POST localhost:8787/webhook -H "x-github-event: ping" -H "x-github-delivery: test-1" -H "x-hub-signature-256: $SIG" -d "$BODY"
+```
+
+**Probing the sandbox.** With `SANDBOX_PROBE=true` in `.dev.vars` (or `--var SANDBOX_PROBE:true` on a deploy), `POST /sandbox-probe` takes a body signed the same way: a pull request key, an `action` of `run` or `destroy`, and for a run the `command` as an argv array, with optional `cwd` (default `/workspace`), `timeoutMs` (default 60,000) and `tailBytes` (default 8 KiB, 50 KiB at most). A run starts the pull request's sandbox with its installation token, runs the command and answers `{ outcome: "exited", exitCode, tail, cut }` or `{ outcome: "timeout", tail, cut }`; a destroy stops the container. The sandbox reaches only `github.com` and `registry.npmjs.org`, over HTTPS; a `fetch` to any other host from inside answers 403.
+
+```sh
+BODY='{"key":{"installationId":1,"owner":"ItsAndrewM","repo":"ai-review-agent","number":1},"action":"run","command":["node","--version"]}'
+SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$GITHUB_WEBHOOK_SECRET" | sed 's/^.* //')"
+curl -s -X POST localhost:8787/sandbox-probe -H "x-hub-signature-256: $SIG" -d "$BODY"
 ```
 
 ## 4. What happens on a pull request
