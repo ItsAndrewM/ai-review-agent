@@ -112,7 +112,6 @@ import {
   type ApprovalTrigger,
   type ChecksState,
   type WaitReason,
-  type WebhookTrigger,
   type WorkflowState,
 } from "./review/approval.ts"
 import {
@@ -144,6 +143,7 @@ import {
   type ReviewSpend,
   type UsageLedger,
 } from "./review/cost.ts"
+import type { Incoming, ThreadContext } from "./review/delivery.ts"
 import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
@@ -333,49 +333,7 @@ import {
 import { shortSha } from "./sha.ts"
 import { isOlder, versionOf, type Version } from "./version.ts"
 
-export type Incoming =
-  | {
-      kind: "review"
-      key: PullRequestKey
-      deliveryId: string
-      headSha: string
-      full: boolean
-      requestedBy?: string
-    }
-  | {
-      kind: "comment"
-      key: PullRequestKey
-      deliveryId: string
-      author: string
-      body: string
-      nodeId: string | undefined
-      thread?: ThreadContext
-    }
-  | {
-      kind: "reaction"
-      key: PullRequestKey
-      deliveryId: string
-      nodeId: string
-    }
-  | {
-      kind: "approval"
-      key: PullRequestKey
-      deliveryId: string
-      trigger: WebhookTrigger
-    }
-  | {
-      kind: "closed"
-      key: PullRequestKey
-      deliveryId: string
-    }
-
-export interface ThreadContext {
-  commentId: number
-  rootId: number
-  path: string
-  line: number | null
-  diffHunk: string
-}
+export type { Incoming, ThreadContext } from "./review/delivery.ts"
 
 type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 type CommentIncoming = Extract<Incoming, { kind: "comment" }>
