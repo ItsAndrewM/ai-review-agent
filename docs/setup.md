@@ -40,6 +40,8 @@ scripts/set-secrets.sh ~/andabot-app.json
 
 `pnpm run deploy` and `pnpm dev` need Docker running: wrangler builds `container/Dockerfile`, the sandbox tier's image (#131), and uploads it with the Worker. CI needs none, since `pnpm check` builds no image.
 
+A one-off variable for a single deploy goes on wrangler itself, as `pnpm exec wrangler deploy --var SANDBOX_PROBE:true`. Through `pnpm run deploy -- --var SANDBOX_PROBE:true` the argument is dropped and the deploy gets `wrangler.jsonc`'s defaults.
+
 The Worker is at `https://andabot.dinocode.workers.dev`. `GET /health` answers `{"name":"andabot","ok":true}`; a webhook with a bad signature answers `401`, and a signed `ping` answers `200 {"ignored":"no installation or repository"}`. The App's **Advanced** tab lists every delivery and can redeliver one.
 
 Variables in `wrangler.jsonc`:
