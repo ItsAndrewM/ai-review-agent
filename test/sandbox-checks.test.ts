@@ -89,9 +89,13 @@ describe("fallbackArgv", () => {
 
   it("falls back to eslint and jest, and answers nothing when no runner is named", () => {
     const alt = JSON.stringify({ dependencies: { eslint: "9", jest: "30" } })
-    expect(fallbackArgv("lint", "none", alt, [])).toEqual(["npx", "--no-install", "eslint"])
-    expect(fallbackArgv("test", "none", alt, ["a"])).toEqual(["npx", "--no-install", "jest", "a"])
+    expect(fallbackArgv("lint", "npm", alt, [])).toEqual(["npx", "--no-install", "eslint"])
+    expect(fallbackArgv("test", "npm", alt, ["a"])).toEqual(["npx", "--no-install", "jest", "a"])
     expect(fallbackArgv("typecheck", "pnpm", alt, [])).toBeUndefined()
+  })
+
+  it("answers nothing without an installed manager, since npx would exit 1 and read as a failed check", () => {
+    expect(fallbackArgv("test", "none", pkg, ["a.test.ts"])).toBeUndefined()
   })
 
   it("answers nothing for a missing or unparsable package.json", () => {

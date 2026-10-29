@@ -77,6 +77,7 @@ export function fallbackArgv(
   packageJson: string | undefined,
   paths: readonly string[],
 ): string[] | undefined {
+  if (manager === "none") return undefined
   const named = dependencyNames(packageJson)
   const runner = RUNNERS[name].find(([dependency]) => named.has(dependency))
   if (runner === undefined) return undefined

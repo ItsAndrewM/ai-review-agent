@@ -550,16 +550,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const paths = args.paths ?? []
     const problem = pathProblem(paths)
     if (problem !== undefined) return this.#checkRefused(args.name, { kind: "bad_path", problem })
-    const access = await this.#sandbox.access()
-    if (access.kind !== "ready") return this.#checkRefused(args.name, accessRefusal(access))
     const pr = await this.pullRequest()
     const key = checkKey(pr.head.sha, args.name, paths)
+    const cached = this.#cachedCheck(pr, key)
+    if (cached !== undefined) return cached
+    const access = await this.#sandbox.access()
+    if (access.kind !== "ready") return this.#checkRefused(args.name, accessRefusal(access))
+    return this.#queuedCheck(
+      async () => this.#cachedCheck(pr, key) ?? (await this.#runCheckNow(access, pr, args.name, paths, key)),
+    )
+  }
+
+  #cachedCheck(pr: PullRequestInfo, key: string): string | undefined {
     const cached = this.#checks.get(key)
-    if (cached !== undefined) {
-      log("check.cached", { number: pr.number, name: args.name, paths: paths.join(" ") })
-      return checkText(cached)
-    }
-    return this.#queuedCheck(() => this.#runCheckNow(access, pr, args.name, paths, key))
+    if (cached === undefined) return undefined
+    log("check.cached", { number: pr.number, name: cached.name, paths: cached.paths.join(" ") })
+    return checkText(cached)
   }
 
   #queuedCheck<T>(work: () => Promise<T>): Promise<T> {
