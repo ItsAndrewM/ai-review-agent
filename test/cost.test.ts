@@ -310,6 +310,11 @@ describe("the sandbox on the cost line", () => {
     expect(spendLine([spend({})], 3_723)).toContain(" · sandbox 1h 2m 3s ($0.077)")
   })
 
+  it("keeps a zero minute between hours and seconds, and a zero second after minutes", () => {
+    expect(spendLine([spend({})], 3_600)).toContain(" · sandbox 1h 0m 0s ($0.074)")
+    expect(spendLine([spend({})], 120)).toContain(" · sandbox 2m 0s ($0.002)")
+  })
+
   it("keeps the sandbox part when the model reported no usage, when the reader has no other cost to go on", () => {
     expect(spendLine([spend({ inputTokens: 0, outputTokens: 0 })], 134)).toBe(
       "3 model calls · usage not reported · sandbox 2m 14s ($0.003)",
