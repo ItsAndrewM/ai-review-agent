@@ -155,6 +155,7 @@ describe("barVerdict", () => {
     usd: 0.03,
     costPerReview: 0.01,
     reviews: 3,
+    partial: false,
     ...changes,
   })
 
@@ -171,5 +172,23 @@ describe("barVerdict", () => {
       adopted: true,
       reasons: ["cost per review $0.0500 vs $0.0100"],
     })
+  })
+})
+
+describe("scoreSet on a partial run", () => {
+  it("scores only the heads that ran and says so", () => {
+    const ran = headCase()
+    const skipped = headCase({ pr: 10, head: "c".repeat(40), expects: [expecting("10-1")] })
+    const score = scoreSet(
+      { heads: [ran, skipped] },
+      runsOf(ran, [posted([finding("src/example.ts", 10, "wrong total")])]),
+      {
+        model: "glm",
+        thinking: "low",
+        skills: "abc",
+      },
+    )
+    expect(score.heads.map(({ head }) => head)).toEqual([ran.head])
+    expect([score.found, score.expected, score.partial]).toEqual([1, 1, true])
   })
 })

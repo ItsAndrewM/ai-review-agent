@@ -180,3 +180,17 @@ describe("attemptReview", () => {
     expect(answer.failure).toBe("Error: upstream down")
   })
 })
+
+describe("replayReview's transcript", () => {
+  it("hands the observer the whole conversation at the end", async () => {
+    const { tools, host, budget, complete } = setup([
+      fauxAssistantMessage([fauxToolCall("read_file", { path: "src/a.ts" })], { stopReason: "toolUse" }),
+      fauxAssistantMessage([fauxToolCall("submit_review", submission([]))], { stopReason: "toolUse" }),
+    ])
+    const roles: string[][] = []
+    await replayReview("system", "review", tools, host, budget, complete, (messages) => {
+      roles.push(messages.map(({ role }) => role))
+    })
+    expect(roles).toEqual([["user", "assistant", "toolResult", "assistant", "toolResult"]])
+  })
+})

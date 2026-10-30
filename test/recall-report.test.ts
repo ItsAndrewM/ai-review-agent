@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { compareTable, resultsTable } from "../tools/recall/report.ts"
+import { compareTable, resultsFileName, resultsTable } from "../tools/recall/report.ts"
 import { barVerdict, type SetScore } from "../tools/recall/score.ts"
 import { expecting, headCase } from "./recall-fixtures.ts"
 
@@ -37,6 +37,7 @@ const score: SetScore = {
   usd: 0.042,
   costPerReview: 0.007,
   reviews: 6,
+  partial: false,
 }
 
 describe("resultsTable", () => {
@@ -67,5 +68,16 @@ describe("compareTable", () => {
       barVerdict(score, { ...score, thinking: "high" }),
     )
     expect(adopted.trimEnd().endsWith("Adopted: cost per review $0.0070 vs $0.0070")).toBe(true)
+  })
+})
+
+describe("resultsFileName", () => {
+  it("carries the stamp, the model tail, the level and the case prefix", () => {
+    expect(resultsFileName("2026-10-30T14:05:09.123Z", "@cf/zai-org/glm-5.3-flash", "low", undefined)).toBe(
+      "2026-10-30T14-05-09-glm-5.3-flash-low.json",
+    )
+    expect(resultsFileName("2026-10-30T14:05:09.123Z", "@cf/moonshotai/kimi-k2.7-code", "high", "b7b89ae")).toBe(
+      "2026-10-30T14-05-09-kimi-k2.7-code-high-case-b7b89ae.json",
+    )
   })
 })

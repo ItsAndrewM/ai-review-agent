@@ -69,6 +69,7 @@ export const SetScore = Type.Object({
   usd: Type.Number(),
   costPerReview: Type.Number(),
   reviews: Type.Integer(),
+  partial: Type.Boolean(),
 })
 export type SetScore = Static<typeof SetScore>
 
@@ -195,12 +196,10 @@ export function scoreSet(
   runs: readonly RunScore[],
   meta: Pick<SetScore, "model" | "thinking" | "skills">,
 ): SetScore {
-  const heads = set.heads.map((head) =>
-    headScore(
-      head,
-      runs.filter((run) => run.head === head.head),
-    ),
-  )
+  const heads = set.heads.flatMap((head) => {
+    const own = runs.filter((run) => run.head === head.head)
+    return own.length === 0 ? [] : [headScore(head, own)]
+  })
   const expects = heads.flatMap((head) => head.expects)
   const usd = sum(runs.map((run) => run.answer.usd))
   return {
@@ -214,6 +213,7 @@ export function scoreSet(
     usd,
     costPerReview: runs.length === 0 ? 0 : usd / runs.length,
     reviews: runs.length,
+    partial: heads.length < set.heads.length,
   }
 }
 

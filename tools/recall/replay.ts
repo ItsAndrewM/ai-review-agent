@@ -1,5 +1,6 @@
 import { appendFile, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
+import type { Message } from "@earendil-works/pi-ai"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { reviewableFiles, filterGlobs, isFiltered, type ChangedFile } from "../../src/github/diff.ts"
@@ -15,7 +16,7 @@ import { attemptReview } from "./conversation.ts"
 import { changedFilesAt } from "./files.ts"
 import { ReviewHost } from "./host.ts"
 import { promptFor, reviewSkill, systemFor, type ReviewSkill } from "./prompt.ts"
-import { compareTable, resultsTable } from "./report.ts"
+import { compareTable, resultsFileName, resultsTable } from "./report.ts"
 import { parseSet, setProblems, type HeadCase, type RecallSet } from "./schema.ts"
 import { barVerdict, scoreRun, scoreSet, SetScore, type RunScore } from "./score.ts"
 import { standardsAt } from "./standards.ts"
@@ -57,9 +58,10 @@ interface RunMeta {
   maxReviewNeurons: number
   runs: number
   at: string
+  partial: boolean
 }
 
-const ResultsScore = Type.Object({ score: SetScore })
+const ResultsScore = Type.Object({ meta: Type.Object({ partial: Type.Boolean() }), score: SetScore })
 
 function valuedOption(options: Options, name: string, value: string | undefined): boolean {
   switch (name) {
@@ -160,13 +162,28 @@ async function prepare(
   }
 }
 
-async function reviewOnce(prepared: Prepared, run: number, model: ReplayModel, neurons: number): Promise<RunScore> {
+async function reviewOnce(
+  prepared: Prepared,
+  run: number,
+  model: ReplayModel,
+  neurons: number,
+  transcripts: URL,
+): Promise<RunScore> {
   const host = new ReviewHost(prepared.files, prepared.pathFilters, prepared.head.issues.length > 0)
   const tools = new RecallTools(prepared.source, async (submission) => host.submit(submission))
   const budget = new NeuronBudget(neurons)
-  const answer = await attemptReview(prepared.system, prepared.prompt, tools, host, budget, (context) =>
-    model.complete(context),
+  const transcript: Message[] = []
+  const answer = await attemptReview(
+    prepared.system,
+    prepared.prompt,
+    tools,
+    host,
+    budget,
+    (context) => model.complete(context),
+    (messages) => transcript.push(...messages),
   )
+  const line = JSON.stringify({ head: prepared.head.head, pr: prepared.head.pr, run, messages: transcript })
+  await appendFile(transcripts, `${line}\n`)
   return scoreRun(prepared.head, run, answer)
 }
 
@@ -216,11 +233,9 @@ async function readScore(path: string): Promise<SetScore> {
 async function compare(paths: [string, string]): Promise<void> {
   const [baseline, candidate] = await Promise.all(paths.map(readScore))
   if (baseline === undefined || candidate === undefined) throw new Error(USAGE)
+  if (baseline.partial || candidate.partial)
+    throw new Error("A partial run (--case) can't be compared against the bar.")
   console.log(compareTable(baseline, candidate, barVerdict(baseline, candidate)))
-}
-
-function modelTail(modelId: string): string {
-  return modelId.split("/").at(-1) ?? modelId
 }
 
 async function measure(set: RecallSet, options: Options, account: string, token: string): Promise<void> {
@@ -244,11 +259,12 @@ async function measure(set: RecallSet, options: Options, account: string, token:
   const toolNames = toolNamesOf()
   const stamp = new Date().toISOString()
   const journal = new URL(`${stamp.replaceAll(":", "-")}.jsonl`, RUNS_DIR)
+  const transcripts = new URL(`${stamp.replaceAll(":", "-")}-transcripts.jsonl`, RUNS_DIR)
   const runs: RunScore[] = []
   for (const head of headsMatching(set, options.onlyCase)) {
     const prepared = await prepare(head, git, skill, toolNames)
     for (let run = 1; run <= options.runs; run++) {
-      const scored = await reviewOnce(prepared, run, model, neurons)
+      const scored = await reviewOnce(prepared, run, model, neurons, transcripts)
       runs.push(scored)
       await appendFile(journal, `${JSON.stringify(scored)}\n`)
       console.error(
@@ -256,6 +272,7 @@ async function measure(set: RecallSet, options: Options, account: string, token:
       )
     }
   }
+  const score = scoreSet(set, runs, { model: options.model, thinking, skills: skill.fingerprint })
   const meta: RunMeta = {
     model: options.model,
     thinking,
@@ -264,11 +281,13 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     maxReviewNeurons: neurons,
     runs: options.runs,
     at: stamp,
+    partial: score.partial,
   }
-  const score = scoreSet(set, runs, { model: options.model, thinking, skills: skill.fingerprint })
-  const file = new URL(`${stamp.slice(0, 10)}-${modelTail(options.model)}-${thinking}.json`, RESULTS_DIR)
-  await writeFile(file, `${JSON.stringify({ meta, score, runs }, null, 2)}\n`)
-  console.log(`${resultsTable(set, score)}\n\nResults: ${file.pathname}\nJournal: ${journal.pathname}`)
+  const file = new URL(resultsFileName(stamp, options.model, thinking, options.onlyCase), RESULTS_DIR)
+  await writeFile(file, `${JSON.stringify({ meta, score, runs }, null, 2)}\n`, { flag: "wx" })
+  console.log(
+    `${resultsTable(set, score)}\n\nResults: ${file.pathname}\nJournal: ${journal.pathname}\nTranscripts: ${transcripts.pathname}`,
+  )
 }
 
 async function main(): Promise<void> {

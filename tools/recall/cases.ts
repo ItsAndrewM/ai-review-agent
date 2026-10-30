@@ -168,7 +168,8 @@ export const cases: readonly Case[] = [
         basis_kind: "defect",
         scenario:
           "carriedBodies carries a donor entry stored without a mode, so a symlink recorded before modes were kept carries its target's body under an unchanged blob sha.",
-        pattern: "mode|symlink.*(donor|carr|record)|(donor|carried).*symlink|before (the )?modes",
+        pattern:
+          "(without|no|missing|lacks?) (a |the |its )?modes?\\b|modes? (left out|missing|absent|not (kept|stored))|before (the )?modes|SYMLINK_MODE|symlink.*(donor|carr|record)|(donor|carried).*symlink",
         evidence: "CodeRabbit on #105, open; the audit judged it contrived",
       },
     ]),
@@ -242,7 +243,8 @@ export const cases: readonly Case[] = [
         basis_kind: "test",
         scenario:
           "The unreadable-ledger paths (usage_unreadable, the empty return, spendOf with no baseline) ship without a test.",
-        pattern: "unreadable|usage_unreadable|ledger.*(test|untested)|without a test|no test|untested",
+        pattern:
+          "(unreadable|usage_unreadable|ledger|spendOf|usageBaseline).*(test|untested)|(test|untested).*(unreadable|ledger|spendOf|usageBaseline)",
         evidence: "andabot's finding 4338905701 on #66, judged valid by the audit and fixed",
       },
     ],
@@ -294,7 +296,8 @@ export const cases: readonly Case[] = [
         basis_kind: "defect",
         scenario:
           "The check run's summary promises a Details link even when detailsUrl is undefined, so the reader is told to open a link that isn't there.",
-        pattern: "Details|details_url|detailsUrl|summary comment.*(undefined|missing)",
+        pattern:
+          "Details (link|opens)|details_url|detailsUrl|link.*(undefined|missing|isn't there|not there)|summary comment.*(undefined|missing)",
         evidence: "andabot's finding 4331323993 on #57, judged valid by the audit and fixed",
       },
     ],
@@ -354,7 +357,8 @@ export const cases: readonly Case[] = [
         severity: "blocking",
         basis_kind: "defect",
         scenario: "A storage write is not awaited, so the review record can be lost and a rejection is unhandled.",
-        pattern: "await|floating promise|unawaited|fire-and-forget|not waited",
+        pattern:
+          "not awaited|missing await|without (an )?await|unawaited|floating promise|fire-and-forget|unhandled rejection|never awaited",
         evidence: "answer key on #2 (810e304)",
       },
       {
@@ -439,7 +443,7 @@ export const cases: readonly Case[] = [
         basis_kind: "defect",
         scenario: "ms is run.started minus now, so the logged elapsed time is negative.",
         pattern:
-          "negat|sign|backward|run\\.started - Date|started - Date\\.now|less than zero|below zero|wrong (order|way)",
+          "negat|\\bsign\\b|backward|run\\.started - Date|started - Date\\.now|less than zero|below zero|wrong (order|way)",
         evidence: "answer key on #2 (#50 fixture: the negated ms)",
       },
       {
@@ -489,7 +493,7 @@ export const cases: readonly Case[] = [
         scenario:
           "checkTimeoutOf now returns undefined for a missing value, but its caller passes the result as a number, so typecheck fails (TS2322) and the default timeout is gone.",
         pattern:
-          "undefined|TS2322|type ?check|timeoutMs|default (timeout|value)|caller|not assignable|number \\| undefined",
+          "number \\| undefined|not assignable|TS2322|checkTimeoutOf.*(undefined|caller)|default timeout|timeoutMs.*undefined|undefined.*timeoutMs",
         evidence: "#135 fixture, planted type error",
       },
     ]),
@@ -517,7 +521,7 @@ export const cases: readonly Case[] = [
         basis_kind: "defect",
         scenario:
           "The `..` segment check is removed from onePathProblem, so a path such as ../secret leaves the repository and the sandbox runs a check on it.",
-        pattern: "\\.\\.|parent director|traversal|leaves? the repositor|escape|outside the repo",
+        pattern: "`\\.\\.`|\\.\\. segment|parent director|traversal|leaves? the repositor|escape|outside the repo",
         evidence: "#123 fixture, planted at b09ae16 and fixed in 3cf1c47",
       },
     ]),

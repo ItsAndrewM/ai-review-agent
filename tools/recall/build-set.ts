@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { linkedIssueNumbers, linkedIssuesFrom } from "../../src/review/linked-issues.ts"
+import { withoutGeneratedNotes } from "./body.ts"
 import { cases, type Case } from "./cases.ts"
 import { parseSet, REPOSITORY, type FrozenIssue, type HeadCase } from "./schema.ts"
 
@@ -85,6 +86,7 @@ async function checkExpectedPaths(item: Case, base: string): Promise<void> {
 
 async function freeze(item: Case): Promise<HeadCase> {
   const pr = await pullRequest(item.pr)
+  const body = withoutGeneratedNotes(pr.body)
   const base = item.base ?? (await originalBase(item.pr))
   await checkExpectedPaths(item, base)
   const head: HeadCase = {
@@ -92,12 +94,12 @@ async function freeze(item: Case): Promise<HeadCase> {
     head: item.head,
     base,
     title: pr.title,
-    body: pr.body,
+    body,
     author: pr.user.login,
     headRef: pr.head.ref,
     baseRef: pr.base.ref,
     labels: pr.labels.map(({ name }) => name),
-    issues: await frozenIssues(pr.body, pr.head.ref),
+    issues: await frozenIssues(body, pr.head.ref),
     expects: item.expects,
     verdict: item.verdict,
     allowed: item.allowed,

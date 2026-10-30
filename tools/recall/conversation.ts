@@ -28,6 +28,8 @@ export interface ReviewAnswer {
 
 type Complete = (context: Context) => Promise<AssistantMessage>
 
+export type Observe = (messages: readonly Message[]) => void
+
 type Phase = "review" | "retry"
 
 interface Run {
@@ -51,9 +53,10 @@ export async function attemptReview(
   host: ReviewHost,
   budget: NeuronBudget,
   complete: Complete,
+  observe?: Observe,
 ): Promise<ReviewAnswer> {
   try {
-    return await replayReview(system, prompt, tools, host, budget, complete)
+    return await replayReview(system, prompt, tools, host, budget, complete, observe)
   } catch (cause) {
     if (cause instanceof ReplaySpendCapError) throw cause
     return answer([], host, { kind: "unposted", reason: "error", failure: errorText(cause) })
@@ -67,6 +70,7 @@ export async function replayReview(
   host: ReviewHost,
   budget: NeuronBudget,
   complete: Complete,
+  observe?: Observe,
 ): Promise<ReviewAnswer> {
   const run: Run = {
     context: {
@@ -80,11 +84,15 @@ export async function replayReview(
     budget,
     phase: "review",
   }
-  for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const ending = await oneTurn(run, complete)
-    if (ending.kind !== "continue") return answer(run.responses, host, ending)
+  try {
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+      const ending = await oneTurn(run, complete)
+      if (ending.kind !== "continue") return answer(run.responses, host, ending)
+    }
+    return answer(run.responses, host, { kind: "unposted", reason: "turns" })
+  } finally {
+    observe?.(run.context.messages)
   }
-  return answer(run.responses, host, { kind: "unposted", reason: "turns" })
 }
 
 async function oneTurn(run: Run, complete: Complete): Promise<Ending> {

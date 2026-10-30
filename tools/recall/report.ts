@@ -72,3 +72,15 @@ export function compareTable(baseline: SetScore, candidate: SetScore, verdict: B
   const outcome = verdict.adopted ? "Adopted" : "Not adopted"
   return [...rows, "", `${outcome}: ${verdict.reasons.join("; ")}`].join("\n")
 }
+
+export function resultsFileName(
+  stamp: string,
+  modelId: string,
+  thinking: string,
+  onlyCase: string | undefined,
+): string {
+  const time = stamp.slice(0, 19).replaceAll(":", "-")
+  const tail = modelId.split("/").at(-1) ?? modelId
+  const suffix = onlyCase === undefined ? "" : `-case-${onlyCase}`
+  return `${time}-${tail}-${thinking}${suffix}.json`
+}
