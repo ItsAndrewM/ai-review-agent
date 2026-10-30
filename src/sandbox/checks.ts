@@ -32,6 +32,8 @@ export function checkTimeoutOf(value: string | undefined): number {
 
 export function pathProblem(paths: readonly string[]): string | undefined {
   if (paths.length > MAX_CHECK_PATHS) return `more than ${MAX_CHECK_PATHS} paths; name the few that matter`
+  const escaping = paths.find((path) => path.split("/").includes(".."))
+  if (escaping !== undefined) return `path "${escaping}" leaves the repository`
   for (const path of paths) {
     const problem = onePathProblem(path)
     if (problem !== undefined) return problem
