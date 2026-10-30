@@ -169,7 +169,7 @@ async function serveCalls(run: Run, calls: readonly ToolCall[]): Promise<Ending>
       toolCallId: call.id,
       toolName: call.name,
       content: [{ type: "text", text: served.text }],
-      isError: call.argumentsError !== undefined,
+      isError: call.argumentsError !== undefined || served.isError === true,
       timestamp: Date.now(),
     })
     if (served.done) {

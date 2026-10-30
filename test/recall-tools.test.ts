@@ -63,17 +63,33 @@ describe("RecallTools", () => {
       submitted.push(given.verdict)
       return { text: "Posted review 1.", done: true }
     })
-    expect(await tools.execute("submit_review", { summary: "no walkthrough" })).toEqual({
-      text: "Invalid arguments for submit_review.",
-      done: false,
-    })
+    const refused = await tools.execute("submit_review", { summary: "no walkthrough" })
+    expect(refused.text).toContain('Validation failed for tool "submit_review":')
+    expect(refused.done).toBe(false)
     expect(await tools.execute("submit_review", submission)).toEqual({ text: "Posted review 1.", done: true })
     expect(submitted).toEqual(["approve"])
   })
 
-  it("refuses bad arguments and unknown tools", async () => {
+  it("answers bad arguments with pi-ai's validation message, as the harness does, and refuses unknown tools", async () => {
     const tools = new RecallTools(source, async () => ({ text: "posted", done: true }))
-    expect((await tools.execute("read_file", { ref: "head" })).text).toBe("Invalid arguments for read_file.")
+    const read = await tools.execute("read_file", { ref: "head" })
+    expect(read.text).toContain('Validation failed for tool "read_file":')
+    expect(read.text).toContain("path")
+    expect(read.isError).toBe(true)
+    const submitted = await tools.execute("submit_review", {
+      ...submission,
+      findings: [
+        { line: 1, quote: "q", severity: "blocking", basis_kind: "defect", basis: "b", title: "t", body: "b" },
+      ],
+    })
+    expect(submitted.text).toContain('Validation failed for tool "submit_review":')
+    expect(submitted.text).toContain("findings.0.path")
+    expect(submitted.done).toBe(false)
     expect((await tools.execute("nothing", {})).text).toBe("Unknown review tool: nothing")
+  })
+
+  it("coerces a numeric string the way the harness does", async () => {
+    const tools = new RecallTools(source, async () => ({ text: "posted", done: true }))
+    expect((await tools.execute("get_issue", { number: "50" })).text).toBe("#50: frozen")
   })
 })

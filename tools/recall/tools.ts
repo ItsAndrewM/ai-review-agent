@@ -1,4 +1,5 @@
-import type { JsonValue } from "@earendil-works/pi-ai"
+import type { JsonObject, JsonValue } from "@earendil-works/pi-ai"
+import { validateToolArguments } from "@earendil-works/pi-ai/utils/validation"
 import { Type, type TSchema } from "typebox"
 import { Value } from "typebox/value"
 import type { GitHubClient, PullRequestInfo } from "../../src/github/client.ts"
@@ -26,6 +27,10 @@ export interface ToolDescription {
   name: string
   description: string
   parameters: TSchema
+}
+
+export interface ToolAnswer extends SubmitOutcome {
+  isError?: boolean
 }
 
 type Submit = (submission: ReviewSubmissionInput) => Promise<SubmitOutcome>
@@ -56,14 +61,33 @@ function stubHost(): ReviewHost {
   }
 }
 
-export function reviewToolDescriptions(): ToolDescription[] {
+function reviewTools(): ToolDescription[] {
   const tools = createReviewExtension(stubHost()).tools ?? []
   return tools.map(({ name, description, parameters }) => ({ name, description, parameters }))
+}
+
+export function reviewToolDescriptions(): ToolDescription[] {
+  return reviewTools()
+}
+
+function messageOf(cause: unknown): string {
+  return cause instanceof Error ? cause.message : String(cause)
+}
+
+type Validated = { args: JsonValue } | { error: string }
+
+function validated(tool: ToolDescription, args: JsonObject): Validated {
+  try {
+    return { args: validateToolArguments(tool, { type: "toolCall", id: "replay", name: tool.name, arguments: args }) }
+  } catch (cause) {
+    return { error: messageOf(cause) }
+  }
 }
 
 export class RecallTools {
   readonly #source: RecallSource
   readonly #submit: Submit
+  readonly #tools = reviewTools()
 
   constructor(source: RecallSource, submit: Submit) {
     this.#source = source
@@ -71,10 +95,18 @@ export class RecallTools {
   }
 
   descriptions(): ToolDescription[] {
-    return reviewToolDescriptions()
+    return this.#tools
   }
 
-  async execute(name: string, args: JsonValue): Promise<SubmitOutcome> {
+  async execute(name: string, args: JsonObject): Promise<ToolAnswer> {
+    const tool = this.#tools.find((candidate) => candidate.name === name)
+    if (tool === undefined) return { text: `Unknown review tool: ${name}`, done: false }
+    const checked = validated(tool, args)
+    if ("error" in checked) return { text: checked.error, done: false, isError: true }
+    return this.run(name, checked.args)
+  }
+
+  private async run(name: string, args: JsonValue): Promise<ToolAnswer> {
     switch (name) {
       case "read_file":
       case "grep":
