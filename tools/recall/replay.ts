@@ -17,13 +17,14 @@ import { changedFilesAt } from "./files.ts"
 import { ReviewHost } from "./host.ts"
 import { promptFor, reviewSkill, systemFor, type ReviewSkill } from "./prompt.ts"
 import { compareTable, resultsFileName, resultsTable } from "./report.ts"
+import { parseResults, rescore } from "./rescore.ts"
 import { parseSet, setProblems, type HeadCase, type RecallSet } from "./schema.ts"
 import { barVerdict, scoreRun, scoreSet, SetScore, type RunScore } from "./score.ts"
 import { standardsAt } from "./standards.ts"
 import { RecallTools, type RecallSource } from "./tools.ts"
 
 const USAGE =
-  "Usage: pnpm recall --inspect | --prompt <sha prefix> | --compare <baseline.json> <run.json> | --model <Workers AI model id> [--thinking low] [--runs 3] [--case <sha prefix>] (a run needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)"
+  "Usage: pnpm recall --inspect | --prompt <sha prefix> | --compare <baseline.json> <run.json> | --rescore <results.json> | --model <Workers AI model id> [--thinking low] [--runs 3] [--case <sha prefix>] (a run needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)"
 const ROOT = process.cwd()
 const BOT_LOGIN = "andabot"
 const SPEND_CAP_USD = 15
@@ -38,6 +39,7 @@ interface Options {
   inspect: boolean
   prompt: string | undefined
   compare: [string, string] | undefined
+  rescore: string | undefined
 }
 
 interface Prepared {
@@ -94,11 +96,13 @@ function optionsOf(args: readonly string[]): Options {
     inspect: false,
     prompt: undefined,
     compare: undefined,
+    rescore: undefined,
   }
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] ?? ""
     if (arg === "--inspect") options.inspect = true
     else if (arg === "--compare") options.compare = [args[++index] ?? "", args[++index] ?? ""]
+    else if (arg === "--rescore") options.rescore = args[++index]
     else if (valuedOption(options, arg, args[index + 1])) index++
     else throw new Error(`${USAGE}\nUnrecognized option: ${arg}`)
   }
@@ -238,6 +242,12 @@ async function compare(paths: [string, string]): Promise<void> {
   console.log(compareTable(baseline, candidate, barVerdict(baseline, candidate)))
 }
 
+async function rescoreFile(set: RecallSet, path: string): Promise<void> {
+  const rescored = rescore(set, parseResults(await readFile(path, "utf8")))
+  await writeFile(path, `${JSON.stringify(rescored, null, 2)}\n`)
+  console.log(`${resultsTable(set, rescored.score)}\n\nRescored: ${path}`)
+}
+
 async function measure(set: RecallSet, options: Options, account: string, token: string): Promise<void> {
   if (options.model === undefined) throw new Error(USAGE)
   const thinking = thinkingLevelOf(options.thinking)
@@ -296,6 +306,7 @@ async function main(): Promise<void> {
   if (options.inspect) return inspect(set)
   if (options.prompt !== undefined) return showPrompt(set, options.prompt)
   if (options.compare !== undefined) return compare(options.compare)
+  if (options.rescore !== undefined) return rescoreFile(set, options.rescore)
   const account = process.env.CLOUDFLARE_ACCOUNT_ID
   const token = process.env.CLOUDFLARE_API_TOKEN
   if (options.model === undefined || !account || !token) throw new Error(USAGE)

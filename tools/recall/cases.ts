@@ -47,7 +47,14 @@ export const cases: readonly Case[] = [
         note: "true: the onJob and evaluateWithRecheck wiring has no test, as the description says; the skill grades such a gap a suggestion",
       },
     ],
-    knownFalse: [],
+    knownFalse: [
+      {
+        id: "87-f1",
+        path: "src/pull-request.ts",
+        pattern: "jobs\\.push[^.]{0,120}(reject|fail)|push (fails|failure|rejects)|(failed|failing) (job )?push",
+        note: "false: lifecycle.jobs.push is a storage write like every other in the object; a storage failure resets the object and no write in it retries, so nothing singles this one out",
+      },
+    ],
   },
   {
     pr: 102,
@@ -66,8 +73,21 @@ export const cases: readonly Case[] = [
       },
     ]),
     verdict: "comment",
-    allowed: [],
+    allowed: [
+      {
+        id: "102-a1",
+        path: "test/tar.test.ts",
+        pattern: "base-256|TextEncoder|0xC2|C2 80|high bit",
+        note: "true: TextEncoder writes the \\x80 of the base-256 case as C2 80, so the test pins the ordinary non-octal rejection, not a base-256 field",
+      },
+    ],
     knownFalse: [
+      {
+        id: "102-f2",
+        path: "src/repository/tar.ts",
+        pattern: "lone zero block[^.]{0,120}truncated|truncated[^.]{0,120}lone zero block|short tail",
+        note: "false: a lone zero block at the end of the stream is a truncated archive, and the finding says the message needs no change",
+      },
       {
         id: "102-f1",
         path: "test/tar.test.ts",
@@ -175,6 +195,18 @@ export const cases: readonly Case[] = [
     verdict: "comment",
     allowed: [
       {
+        id: "65-a4",
+        path: "src/pull-request.ts",
+        pattern: "(no|without|has no|lacks? a) test|untested",
+        note: "true: cachedContext, cacheContext and the uncached log have no test, as the description says",
+      },
+      {
+        id: "65-a5",
+        path: "src/pull-request.ts",
+        pattern: "unbounded|storage (value )?limit|2 MB|never (fit|help)|bound(ing)? (each|the) (cached )?bod",
+        note: "true: nothing bounds a cached body while the standards section caps at 12,000 characters, so a record over the value limit is never stored",
+      },
+      {
         id: "65-a1",
         path: "src/pull-request.ts",
         pattern: "standards[^.]{0,80}(before|wasted|short-circuit|nothingToReview)|nothingToReview",
@@ -194,6 +226,18 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "65-f5",
+        path: "src/repository/instructions.ts",
+        pattern: "O\\(n|quadratic|re-renders?[^.]{0,60}(prefix|every|each)|running total",
+        note: "false: at most 24 loaded files rendered in memory; the finding calls itself a clean-up",
+      },
+      {
+        id: "65-f6",
+        path: "test/client.test.ts",
+        pattern: "recordingFetch[^.]{0,80}(overlap|duplicat|shape)|respond[^.]{0,80}recordingFetch",
+        note: "false: respond answers one status and body while recordingFetch records calls; a shared base would be longer than either",
+      },
       {
         id: "65-f1",
         path: "docs/superpowers/plans/2026-10-21-repository-context.md",
@@ -240,6 +284,12 @@ export const cases: readonly Case[] = [
     allowed: [],
     knownFalse: [
       {
+        id: "91-f3",
+        path: "src/pull-request.ts",
+        pattern: "re-reads? pending|readPending[^.]{0,80}(again|extra|second)|extra storage read",
+        note: "false: one extra storage read on a refusal path, and the pending record is what the refusal logs",
+      },
+      {
         id: "91-f1",
         path: "src/review/tools.ts",
         pattern: "another head|other head|different head|wrong commit",
@@ -271,6 +321,12 @@ export const cases: readonly Case[] = [
     ]),
     verdict: "comment",
     allowed: [
+      {
+        id: "105-a2",
+        path: "src/repository/context.ts",
+        pattern: "empty (file|body)[^.]{0,80}(missing|MISSING_AT_BASE)|MISSING_AT_BASE[^.]{0,80}empty|0-byte",
+        note: "true: MISSING_AT_BASE is the empty string, so an empty instruction file never carries over a base move",
+      },
       {
         id: "105-a1",
         path: "test/repository-skills.test.ts",
@@ -311,6 +367,12 @@ export const cases: readonly Case[] = [
     verdict: "comment",
     allowed: [],
     knownFalse: [
+      {
+        id: "112-f2",
+        path: "src/repository/skills.ts",
+        pattern: "recomput|computed twice|twice per|isServableResource[^.]{0,80}isOversizedResource|size-comparison",
+        note: "false: the symlink survey is a filter over an in-memory tree and the two size predicates are one line each",
+      },
       {
         id: "112-f1",
         path: "src/github/client.ts",
@@ -375,6 +437,12 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "66-f5",
+        path: "src/review/cost.ts",
+        pattern: "1 neurons|plurali[sz]",
+        note: "false: a review costs hundreds of neurons and zero renders as < 1 neuron; the finding calls itself cosmetic",
+      },
+      {
         id: "66-f4",
         path: "src/pull-request.ts",
         pattern: "(chat|question|answer)[^.]{0,80}(bill|inflat|spend|cost|footer)",
@@ -411,12 +479,39 @@ export const cases: readonly Case[] = [
       },
     ],
     verdict: "comment",
-    allowed: [],
+    allowed: [
+      {
+        id: "88-a1",
+        path: "src/repository/search.ts",
+        pattern:
+          "first line[^.]{0,80}(count|searched)|searched\\+\\+|Stopped early after 0|before (the file|it) is counted",
+        note: "true: the budget check runs before found.searched++, so a file stopped on its first line is left out of the note",
+      },
+    ],
     knownFalse: [
+      {
+        id: "88-f3",
+        path: "src/review/tools.ts",
+        pattern: "has\\(path\\)|has\\(\\)|twice per read|has \\+ read|two (round trips|queries)",
+        note: "false: one extra SQLite lookup per snapshot read, bounded work with no observable effect",
+      },
+      {
+        id: "88-f4",
+        path: "src/repository/search.ts",
+        pattern: "per call[^.]{0,120}(cpu_ms|300|per review)|per-review (unit )?budget|40 (costly )?calls",
+        note: "not a finding: the description declares the per-review budget a follow-up, filed as #92 and shipped in #98",
+      },
+      {
+        id: "88-f5",
+        path: "src/github/client.ts",
+        pattern: "BlobObject[^.]{0,80}(shadow|same name|type alias)|same name[^.]{0,40}(schema|type)",
+        note: "false: a TypeBox schema and its Static type share a name throughout the repository, PullRequestInfo in the same file included",
+      },
       {
         id: "88-f1",
         path: "src/review/tools.ts",
-        pattern: "(wrapper|pass-through|glue)[^.]{0,80}(test|untested)|no test drives",
+        pattern:
+          "(wrapper|pass-through|glue)[^.]{0,80}(test|untested)|no test drives|no test[^.]{0,80}wrapper|wrappers?[^.]{0,80}no test",
         note: "false: test/tools.test.ts drives the extension's tools from line 126",
       },
       {
@@ -447,6 +542,19 @@ export const cases: readonly Case[] = [
     verdict: "comment",
     allowed: [
       {
+        id: "57-a2",
+        path: "src/pull-request.ts",
+        pattern: "(no|without|has no|lacks? a) test|untested",
+        note: "true: endOwnRun's ordering has no test, as the description says",
+      },
+      {
+        id: "57-a3",
+        path: "src/pull-request.ts",
+        pattern:
+          "releasePending[^.]{0,80}(no-op|leftover|unreachable|dead|survive)|(leftover|unreachable|dead)[^.]{0,40}releasePending",
+        note: "true: every exit of runReview ends through endOwnRun, so the releasePending after the success path is dead",
+      },
+      {
         id: "57-a1",
         path: "src/pull-request.ts",
         pattern: "isPosted|unchecked|without (a )?(check|schema)|Value.Check",
@@ -454,6 +562,18 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "57-f2",
+        path: "src/pull-request.ts",
+        pattern: "endOwnRun[^.]{0,120}(unconditional|re-check|gap|slips)|delete[^.]{0,60}unconditional",
+        note: "false: pendingFor and the delete are consecutive storage operations, and a Durable Object's input gate delivers no event between them",
+      },
+      {
+        id: "57-f3",
+        path: "src/pull-request.ts",
+        pattern: "countBySeverity[^.]{0,80}(twice|again)|counted twice|scoped\\.accepted[^.]{0,60}twice",
+        note: "false: one reduction over a handful of findings computed twice, with no observable effect",
+      },
       {
         id: "57-f1",
         path: "src/review/flight.ts",
@@ -582,6 +702,12 @@ export const cases: readonly Case[] = [
     verdict: "request_changes",
     allowed: [
       {
+        id: "38-a2",
+        path: "src/pull-request.ts",
+        pattern: "unfit_json|retry[^.]{0,80}(silent|without (a |the )?log|not logged|no log)|unfit[^.]{0,60}retry",
+        note: "true: postedRetryText returns false on an unfit retry without the unfit_json log the first pass writes",
+      },
+      {
         id: "38-a1",
         path: "src/pull-request.ts",
         pattern: "(no|without|has no|lacks? a) test|untested",
@@ -589,6 +715,12 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "38-f6",
+        path: "src/review/findings.ts",
+        pattern: "minItems|empty walkthrough|no walkthrough entry|nothing to walk",
+        note: "false: GitHub lists at least one changed file for every pull request, a submodule bump included, so a review with nothing to walk through never runs",
+      },
       {
         id: "38-f5",
         path: "test/models.test.ts",
@@ -668,7 +800,15 @@ export const cases: readonly Case[] = [
     ]),
     verdict: "request_changes",
     allowed: [],
-    knownFalse: [],
+    knownFalse: [
+      {
+        id: "142-f1",
+        path: "src/review/cost.ts",
+        pattern:
+          "durationText[^.]{0,80}(no test|untested|not? cover)|no test[^.]{0,60}(durationText|rendering)|(rendering|behaviou?r)[^.]{0,40}(has )?no test",
+        note: "false: test/cost.test.ts pins durationText through spendLine (1h 0m 0s, 2m 0s) and fails on this head's change, as the finding's own text says",
+      },
+    ],
   },
   {
     pr: 143,
