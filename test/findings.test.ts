@@ -1,6 +1,7 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { commentableLines } from "../src/github/diff.ts"
+import type { BasisContext } from "../src/review/basis.ts"
 import { budgetNote } from "../src/review/budget.ts"
 import type { ReviewSpend } from "../src/review/cost.ts"
 import {
@@ -45,6 +46,10 @@ const base: ReviewSubmissionInput = {
   merge_danger: { door: "two-way", blast_radius: "one module" },
 }
 
+function context(overrides: Partial<BasisContext> = {}): BasisContext {
+  return { hasLinkedIssues: true, instructionFiles: ["CLAUDE.md"], activatedSkills: [], ...overrides }
+}
+
 function finding(overrides: Partial<FindingInput> = {}): FindingInput {
   return {
     path: "src/x.ts",
@@ -76,7 +81,7 @@ describe("validateFindings", () => {
     const result = validateFindings(
       [finding(), finding({ line: 2, side: "LEFT", quote: "const b = 2;", title: "removed" })],
       commentable,
-      true,
+      context(),
     )
     expect(result.accepted).toHaveLength(2)
     expect(result.rejected).toHaveLength(0)
@@ -92,7 +97,7 @@ describe("validateFindings", () => {
         finding({ title: "   " }),
       ],
       commentable,
-      true,
+      context(),
     )
     expect(result.accepted).toHaveLength(0)
     expect(result.rejected.map((r) => r.reason)).toEqual([
@@ -116,7 +121,7 @@ describe("validateFindings", () => {
     const result = validateFindings(
       [finding({ path: "src/hunks.ts", start_line: 2, line: 10, quote: "const j = 10;" })],
       new Map([["src/hunks.ts", commentableLines(hunks.join("\n"))]]),
-      true,
+      context(),
     )
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "lines 2 to 10 (RIGHT) are not all in the diff of src/hunks.ts",
@@ -124,15 +129,19 @@ describe("validateFindings", () => {
   })
 
   it("rejects a suggestion over 60000 characters, since one comment over GitHub's limit fails the whole review", () => {
-    expect(validateFindings([finding({ suggestion: "x".repeat(60_000) })], commentable, true).accepted).toHaveLength(1)
     expect(
-      validateFindings([finding({ suggestion: "x".repeat(60_001) })], commentable, true).rejected.map((r) => r.reason),
+      validateFindings([finding({ suggestion: "x".repeat(60_000) })], commentable, context()).accepted,
+    ).toHaveLength(1)
+    expect(
+      validateFindings([finding({ suggestion: "x".repeat(60_001) })], commentable, context()).rejected.map(
+        (r) => r.reason,
+      ),
     ).toEqual(["suggestion longer than 60000 characters"])
   })
 
   it("rejects a finding whose rendered comment would pass GitHub's 65536-character limit", () => {
     const long = finding({ title: "t".repeat(2_000), body: "b".repeat(4_000), suggestion: "s".repeat(60_000) })
-    expect(validateFindings([long], commentable, true).rejected.map((r) => r.reason)).toEqual([
+    expect(validateFindings([long], commentable, context()).rejected.map((r) => r.reason)).toEqual([
       "comment longer than 65536 characters, GitHub's limit",
     ])
   })
@@ -144,7 +153,7 @@ describe("validateFindings", () => {
       { line: 3, quote: "export { a, b };" },
     ]
     const many = Array.from({ length: MAX_FINDINGS + 2 }, (_, i) => finding({ ...anchors[i % 3], title: `t${i}` }))
-    const result = validateFindings(many, commentable, true)
+    const result = validateFindings(many, commentable, context())
     expect(result.accepted).toHaveLength(3)
     expect(result.rejected.every((r) => r.reason.startsWith("duplicate anchor"))).toBe(true)
   })
@@ -158,19 +167,19 @@ describe("quote verification", () => {
   ])
 
   it("accepts a quote that matches its line up to surrounding and repeated whitespace", () => {
-    const result = validateFindings([finding({ quote: "  const  b = 3;\t" })], files, true)
+    const result = validateFindings([finding({ quote: "  const  b = 3;\t" })], files, context())
     expect(result.accepted).toEqual([finding({ quote: "  const  b = 3;\t" })])
     expect(result.relocated).toBe(0)
   })
 
   it("moves a finding to the one line its quote matches, as when the model miscounts", () => {
-    const result = validateFindings([finding({ line: 3, suggestion: "const b = 4;" })], files, true)
+    const result = validateFindings([finding({ line: 3, suggestion: "const b = 4;" })], files, context())
     expect(result.accepted).toEqual([finding({ line: 2, suggestion: "const b = 4;" })])
     expect(result.relocated).toBe(1)
   })
 
   it("drops the range and its suggestion when it moves a multi-line finding, since only the quoted line is verified", () => {
-    const result = validateFindings([finding({ start_line: 1, line: 3, suggestion: "const b = 4;" })], files, true)
+    const result = validateFindings([finding({ start_line: 1, line: 3, suggestion: "const b = 4;" })], files, context())
     expect(result.accepted).toEqual([
       {
         path: "src/x.ts",
@@ -189,7 +198,7 @@ describe("quote verification", () => {
     const result = validateFindings(
       [finding({ quote: "const c = 4;" }), finding({ path: "src/twice.ts", line: 2, quote: "const x = 1;" })],
       files,
-      true,
+      context(),
     )
     expect(result.accepted).toHaveLength(0)
     expect(result.rejected.map((r) => r.reason)).toEqual([
@@ -199,9 +208,9 @@ describe("quote verification", () => {
   })
 
   it("accepts a quote carrying the diff's marker for its side, and keeps the quote without it", () => {
-    const right = validateFindings([finding({ quote: "+const b = 3;" })], files, true)
-    const left = validateFindings([finding({ side: "LEFT", quote: "-  const b = 2;" })], files, true)
-    const moved = validateFindings([finding({ line: 3, quote: " + const b = 3;" })], files, true)
+    const right = validateFindings([finding({ quote: "+const b = 3;" })], files, context())
+    const left = validateFindings([finding({ side: "LEFT", quote: "-  const b = 2;" })], files, context())
+    const moved = validateFindings([finding({ line: 3, quote: " + const b = 3;" })], files, context())
     expect([...right.accepted, ...left.accepted, ...moved.accepted].map((f) => [f.line, f.quote])).toEqual([
       [2, "const b = 3;"],
       [2, "const b = 2;"],
@@ -212,7 +221,7 @@ describe("quote verification", () => {
 
   it("refuses to move a finding when the quote as written and without its marker match different lines", () => {
     const marks = new Map([["src/marks.ts", commentableLines(["@@ -0,0 +1,3 @@", "++x", "+x", "+y"].join("\n"))]])
-    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks, true)
+    const result = validateFindings([finding({ path: "src/marks.ts", line: 3, quote: "+x" })], marks, context())
     expect(result.accepted).toEqual([])
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "quote matches 2 lines in src/marks.ts; anchor the right one",
@@ -221,8 +230,10 @@ describe("quote verification", () => {
 
   it("keeps a quote whose own text starts with a plus, and refuses the other side's marker", () => {
     const plus = new Map([["src/plus.ts", commentableLines(["@@ -1 +1,2 @@", " a", "++x"].join("\n"))]])
-    expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus, true).accepted[0]?.quote).toBe("+x")
-    expect(validateFindings([finding({ quote: "-const b = 3;" })], files, true).accepted).toEqual([])
+    expect(validateFindings([finding({ path: "src/plus.ts", quote: "+x" })], plus, context()).accepted[0]?.quote).toBe(
+      "+x",
+    )
+    expect(validateFindings([finding({ quote: "-const b = 3;" })], files, context()).accepted).toEqual([])
   })
 
   describe("a quote that carries the diff's anchor or marker", () => {
@@ -233,7 +244,7 @@ describe("quote verification", () => {
       ],
     ])
     const carriedAt = (line: number, quote: string) =>
-      validateFindings([finding({ path: "src/carried.ts", line, quote })], carried, true)
+      validateFindings([finding({ path: "src/carried.ts", line, quote })], carried, context())
 
     it.each([
       "+ const x = 1",
@@ -250,13 +261,13 @@ describe("quote verification", () => {
     })
 
     it("anchors a LEFT quote that carries its anchor, its star and its minus", () => {
-      const result = validateFindings([finding({ side: "LEFT", quote: "L2*    -const b = 2;" })], files, true)
+      const result = validateFindings([finding({ side: "LEFT", quote: "L2*    -const b = 2;" })], files, context())
       expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "const b = 2;"]])
       expect(result.relocated).toBe(0)
     })
 
     it("moves a miscounted finding to the one line its quote matches once the anchor and marker are stripped", () => {
-      const result = validateFindings([finding({ line: 3, quote: "R2 +const b = 3;" })], files, true)
+      const result = validateFindings([finding({ line: 3, quote: "R2 +const b = 3;" })], files, context())
       expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "const b = 3;"]])
       expect(result.relocated).toBe(1)
     })
@@ -269,7 +280,7 @@ describe("quote verification", () => {
 
     it("tries the quote as written before any stripped reading, so a line that starts with a star keeps its quote", () => {
       const stars = new Map([["src/stars.ts", commentableLines(["@@ -1 +1,2 @@", " a", "+ * item"].join("\n"))]])
-      const result = validateFindings([finding({ path: "src/stars.ts", quote: "* item" })], stars, true)
+      const result = validateFindings([finding({ path: "src/stars.ts", quote: "* item" })], stars, context())
       expect(result.accepted.map((f) => [f.line, f.quote])).toEqual([[2, "* item"]])
     })
 
@@ -277,7 +288,11 @@ describe("quote verification", () => {
       const anchors = new Map([
         ["src/anchors.ts", commentableLines(["@@ -0,0 +1,3 @@", "+R2 total", "+total", "+other"].join("\n"))],
       ])
-      const result = validateFindings([finding({ path: "src/anchors.ts", line: 3, quote: "R2 total" })], anchors, true)
+      const result = validateFindings(
+        [finding({ path: "src/anchors.ts", line: 3, quote: "R2 total" })],
+        anchors,
+        context(),
+      )
       expect(result.accepted).toEqual([])
       expect(result.rejected.map((r) => r.reason)).toEqual([
         "quote matches 2 lines in src/anchors.ts; anchor the right one",
@@ -325,7 +340,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion: "right.add(newLine++)" })],
       files,
-      true,
+      context(),
     )
     expect(result.accepted[0]?.suggestion).toBe("      right.add(newLine++)")
     expect(result.suggestionsDropped).toBe(0)
@@ -343,7 +358,7 @@ describe("suggestions", () => {
         }),
       ],
       files,
-      true,
+      context(),
     )
     expect(result.accepted[0]?.suggestion).toBe('    if (fresh) {\n      log("review.skip")\n      return\n    }')
   })
@@ -353,7 +368,7 @@ describe("suggestions", () => {
       const result = validateFindings(
         [finding({ path: "src/diff.ts", line: 31, quote: "right.add(++newLine)", suggestion })],
         files,
-        true,
+        context(),
       )
       expect(result.accepted[0]?.suggestion).toBe(suggestion)
     }
@@ -371,7 +386,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed, suggestion: guard })],
       files,
-      true,
+      context(),
     )
     expect(result.accepted).toEqual([finding({ path: "src/review.ts", line: 201, quote: alreadyReviewed })])
     expect(result.suggestionsDropped).toBe(1)
@@ -381,7 +396,7 @@ describe("suggestions", () => {
     const result = validateFindings(
       [finding({ path: "src/list.ts", line: 1, quote: "const list = [", suggestion: "const list = {" })],
       files,
-      true,
+      context(),
     )
     expect(result.accepted[0]?.suggestion).toBeUndefined()
     expect(result.suggestionsDropped).toBe(1)
@@ -397,7 +412,7 @@ describe("basis", () => {
         finding({ basis_kind: "test", basis: "checkout has no test" }),
       ],
       commentable,
-      true,
+      context(),
     )
     expect(result.rejected.map((r) => r.reason)).toEqual([
       "basis is required",
@@ -414,13 +429,34 @@ describe("basis", () => {
         finding({ severity: "major", line: 3, quote: "export { a, b };" }),
       ],
       commentable,
-      true,
+      context(),
     )
     expect(result.rejected.map((r) => [r.reason, r.unfounded])).toEqual([
       [WORKS_AS_IT_STANDS, true],
       [WORKS_AS_IT_STANDS, true],
     ])
     expect(result.accepted.map((f) => f.severity)).toEqual(["major"])
+  })
+
+  it("refuses a standard basis that names no standards file, smell or activated skill, as unfounded", () => {
+    const result = validateFindings(
+      [
+        finding({ basis_kind: "standard", severity: "suggestion", basis: "src/pull-request.ts: trusts the scope" }),
+        finding({
+          basis_kind: "standard",
+          severity: "nitpick",
+          basis: "CLAUDE.md: no comments of any kind",
+          line: 1,
+          quote: "const a = 1;",
+        }),
+      ],
+      commentable,
+      context(),
+    )
+    expect(result.rejected.map((r) => [r.unfounded, r.reason.startsWith("a standard finding must name")])).toEqual([
+      [true, true],
+    ])
+    expect(result.accepted.map((f) => f.basis)).toEqual(["CLAUDE.md: no comments of any kind"])
   })
 
   it("fails the schema for an empty basis, so a tool call and written JSON alike come back for a fix", () => {
@@ -453,7 +489,7 @@ describe("basis", () => {
         }),
       ],
       commentable,
-      true,
+      context(),
     )
     expect(result.rejected).toEqual([])
     expect(result.accepted).toHaveLength(3)
@@ -461,20 +497,24 @@ describe("basis", () => {
 
   it("rejects a spec finding when no issue is linked, offering the defect kind, and accepts it when one is", () => {
     const spec = specFinding()
-    const result = validateFindings([spec], commentable, false)
+    const result = validateFindings([spec], commentable, context({ hasLinkedIssues: false }))
     expect(result.accepted).toEqual([])
     expect(result.rejected).toEqual([{ finding: spec, reason: NO_LINKED_ISSUE, unfounded: true }])
-    expect(validateFindings([spec], commentable, true).accepted).toEqual([spec])
+    expect(validateFindings([spec], commentable, context()).accepted).toEqual([spec])
   })
 
   it("rejects a spec finding with no linked issue whatever its grade", () => {
-    const result = validateFindings([specFinding(), specFinding({ severity: "major" })], commentable, false)
+    const result = validateFindings(
+      [specFinding(), specFinding({ severity: "major" })],
+      commentable,
+      context({ hasLinkedIssues: false }),
+    )
     expect(result.rejected.map((r) => r.reason)).toEqual([NO_LINKED_ISSUE, NO_LINKED_ISSUE])
   })
 
   it("marks a rejection unfounded when its basis caused it, and not for an anchor, range, size or suggestion side", () => {
     const unfoundedOf = (findings: FindingInput[]) =>
-      validateFindings(findings, commentable, false).rejected.map((r) => r.unfounded)
+      validateFindings(findings, commentable, context({ hasLinkedIssues: false })).rejected.map((r) => r.unfounded)
     expect(
       unfoundedOf([finding({ basis: "  " }), finding({ basis_kind: "test", basis: "no test" }), specFinding()]),
     ).toEqual([true, true, true])
@@ -495,7 +535,11 @@ describe("basis", () => {
     const crowdedPatch = [`@@ -0,0 +1,${lines.length} @@`, ...lines.map((line) => `+${line}`)].join("\n")
     const crowded = new Map([["src/crowded.ts", commentableLines(crowdedPatch)]])
     const each = lines.map((quote, i) => finding({ path: "src/crowded.ts", line: i + 1, quote }))
-    const result = validateFindings([...each, finding({ ...each[0], title: "again" })], crowded, false)
+    const result = validateFindings(
+      [...each, finding({ ...each[0], title: "again" })],
+      crowded,
+      context({ hasLinkedIssues: false }),
+    )
     expect(result.accepted).toHaveLength(MAX_FINDINGS)
     expect(result.rejected.map((r) => [r.reason, r.unfounded])).toEqual([
       [`more than ${MAX_FINDINGS} findings; keep the most important`, false],
@@ -505,7 +549,7 @@ describe("basis", () => {
 
   it("counts a blocking standard finding as unfounded even when its quote matches no line, so it never holds approval back", () => {
     const standard = finding({ basis_kind: "standard", basis: "Feature Envy", quote: "const c = 4;" })
-    const { rejected } = validateFindings([standard], commentable, true)
+    const { rejected } = validateFindings([standard], commentable, context())
     expect(rejected).toEqual([{ finding: standard, reason: BLOCKING_STANDARD_OR_TEST, unfounded: true }])
     expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
   })
@@ -720,20 +764,24 @@ describe("chooseReviewEvent", () => {
       finding({ basis_kind: "test", basis: "checkout has no test" }),
     ]
     for (const rejectedFinding of blocking) {
-      const { rejected } = validateFindings([rejectedFinding], commentable, true)
+      const { rejected } = validateFindings([rejectedFinding], commentable, context())
       expect(rejected.map((r) => r.reason)).toEqual([BLOCKING_STANDARD_OR_TEST])
       expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
     }
   })
 
   it("approves an approve verdict when the only rejection is a spec finding on a pull request with no linked issue", () => {
-    const { rejected } = validateFindings([specFinding()], commentable, false)
+    const { rejected } = validateFindings([specFinding()], commentable, context({ hasLinkedIssues: false }))
     expect(rejected).toEqual([{ finding: specFinding(), reason: NO_LINKED_ISSUE, unfounded: true }])
     expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
   })
 
   it("requests changes when the only rejection is a blocking defect finding whose quote matches no line", () => {
-    const { rejected } = validateFindings([finding({ quote: "const c = 4;" })], commentable, false)
+    const { rejected } = validateFindings(
+      [finding({ quote: "const c = 4;" })],
+      commentable,
+      context({ hasLinkedIssues: false }),
+    )
     expect(rejected.map((r) => r.unfounded)).toEqual([false])
     expect(chooseReviewEvent(base, [], rejected, true)).toBe("REQUEST_CHANGES")
   })
@@ -834,7 +882,7 @@ describe("renderReviewBody", () => {
         finding({ title: "Total is NaN for an empty cart", quote: "const c = 4;" }),
       ],
       commentable,
-      false,
+      context({ hasLinkedIssues: false }),
     )
     expect(renderReviewBody("REQUEST_CHANGES", [], rejected)).toBe(
       "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
@@ -1676,21 +1724,28 @@ describe("a finding's check reference", () => {
   const withCheck = (exit_code: number) => finding({ check: { name: "test", paths: ["test/x.test.ts"], exit_code } })
 
   it("accepts a finding whose check names a run the review made, with its exit code", () => {
-    const result = validateFindings([withCheck(1)], commentable, true, known)
+    const result = validateFindings([withCheck(1)], commentable, context(), known)
     expect(result.accepted).toHaveLength(1)
     expect(result.accepted[0]?.check).toEqual({ name: "test", paths: ["test/x.test.ts"], exit_code: 1 })
   })
 
   it("rejects, as unfounded, a check that didn't run or an exit code the run didn't have", () => {
-    const unknown = validateFindings([finding({ check: { name: "lint", exit_code: 1 } })], commentable, true, known)
+    const unknown = validateFindings(
+      [finding({ check: { name: "lint", exit_code: 1 } })],
+      commentable,
+      context(),
+      known,
+    )
     expect(unknown.rejected.map((r) => [r.reason, r.unfounded])).toEqual([[CHECK_NOT_RUN, true]])
-    const wrongCode = validateFindings([withCheck(0)], commentable, true, known)
+    const wrongCode = validateFindings([withCheck(0)], commentable, context(), known)
     expect(wrongCode.rejected.map((r) => r.reason)).toEqual([CHECK_NOT_RUN])
-    expect(validateFindings([withCheck(1)], commentable, true).rejected.map((r) => r.reason)).toEqual([CHECK_NOT_RUN])
+    expect(validateFindings([withCheck(1)], commentable, context()).rejected.map((r) => r.reason)).toEqual([
+      CHECK_NOT_RUN,
+    ])
   })
 
   it("leaves a finding without a check alone, and the schema refuses a check it can't read", () => {
-    expect(validateFindings([finding()], commentable, true, known).accepted).toHaveLength(1)
+    expect(validateFindings([finding()], commentable, context(), known).accepted).toHaveLength(1)
     const submission: unknown = JSON.parse(
       JSON.stringify({ ...base, findings: [{ ...finding(), check: { name: "build", exit_code: 1 } }] }),
     )

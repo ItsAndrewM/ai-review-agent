@@ -11,7 +11,7 @@ import {
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
-import { pairingProblem } from "./basis.ts"
+import { pairingProblem, standardBasisProblem, type BasisContext } from "./basis.ts"
 
 export const Severity = Type.Union([
   Type.Literal("blocking"),
@@ -233,7 +233,7 @@ const ANCHOR_TOKEN = /^[RL]\d+\*?\s+/
 export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
-  hasLinkedIssues: boolean,
+  context: BasisContext,
   knownChecks: ReadonlyMap<string, number> = new Map(),
 ): ValidatedReview {
   const accepted: FindingInput[] = []
@@ -242,7 +242,7 @@ export function validateFindings(
   let relocated = 0
   let suggestionsDropped = 0
   for (const finding of findings) {
-    const checked = checkFinding(finding, commentable, hasLinkedIssues, knownChecks)
+    const checked = checkFinding(finding, commentable, context, knownChecks)
     if ("reason" in checked) {
       rejected.push({ finding, reason: checked.reason, unfounded: checked.unfounded })
       continue
@@ -271,10 +271,10 @@ export function validateFindings(
 function checkFinding(
   finding: FindingInput,
   commentable: ReadonlyMap<string, CommentableLines>,
-  hasLinkedIssues: boolean,
+  context: BasisContext,
   knownChecks: ReadonlyMap<string, number>,
 ): Checked {
-  const basisIssue = basisProblem(finding, hasLinkedIssues)
+  const basisIssue = basisProblem(finding, context)
   if (basisIssue !== undefined) return { reason: basisIssue, unfounded: true }
   if (finding.check !== undefined && knownChecks.get(findingCheckKey(finding.check)) !== finding.check.exit_code) {
     return { reason: CHECK_NOT_RUN, unfounded: true }
@@ -412,11 +412,12 @@ function contentProblem(finding: FindingInput): string | undefined {
   return suggestionProblem(finding) ?? commentSizeProblem(finding)
 }
 
-function basisProblem(finding: FindingInput, hasLinkedIssues: boolean): string | undefined {
+function basisProblem(finding: FindingInput, context: BasisContext): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
   const pairing = pairingProblem(finding)
   if (pairing !== undefined) return pairing
-  if (finding.basis_kind === "spec" && !hasLinkedIssues)
+  if (finding.basis_kind === "standard") return standardBasisProblem(finding.basis, context)
+  if (finding.basis_kind === "spec" && !context.hasLinkedIssues)
     return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
   return undefined
 }

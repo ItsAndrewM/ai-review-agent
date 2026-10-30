@@ -117,6 +117,7 @@ import {
   type WaitReason,
   type WorkflowState,
 } from "./review/approval.ts"
+import type { BasisContext } from "./review/basis.ts"
 import {
   budgetBlock,
   budgetNote,
@@ -932,12 +933,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<CheckedSubmission> {
     const files = await this.changedFiles()
     const scope = await this.scopeFor(pending.deliveryId)
-    const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
     const validated = withFilteredUnfounded(
       validateFindings(
         submission.findings,
         indexCommentableLines(scopedFiles(scope, files)),
-        hasLinkedIssues,
+        basisContextOf(pending),
         knownChecksOf(await this.#sandbox.checks(), pr.head.sha),
       ),
       scope,
@@ -1644,6 +1644,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       number: await this.storedNumber(),
       head: await this.pendingHead(),
       name,
+    })
+    const pending = await this.readPending()
+    if (pending === undefined) return
+    await this.ctx.storage.put<PendingReview>("pending", {
+      ...pending,
+      activated: [...(pending.activated ?? []), name],
     })
   }
 
@@ -2955,6 +2961,14 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function basisContextOf(pending: PendingReview): BasisContext {
+  return {
+    hasLinkedIssues: (pending.linkedIssues?.length ?? 0) > 0,
+    instructionFiles: pending.instructionFiles ?? [],
+    activatedSkills: pending.activated ?? [],
+  }
+}
 
 function promptFor(
   pr: PullRequestInfo,
