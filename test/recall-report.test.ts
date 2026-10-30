@@ -53,6 +53,13 @@ describe("resultsTable", () => {
     expect(table).toContain("Found 2/3 · false 1 · severity 2/3 · verdict 1/2 · $0.0070 a review · not posted 1")
     expect(table).toContain("@cf/zai-org/glm-5.3-flash at low, review@abcdef01")
   })
+
+  it("leaves out a head the run did not score", () => {
+    const unscored = headCase({ pr: 11, head: "d".repeat(40), expects: [expecting("11-1")] })
+    const table = resultsTable({ heads: [head, other, unscored] }, { ...score, partial: true })
+    expect(table).not.toContain("11-1")
+    expect(table).toContain("(partial run)")
+  })
 })
 
 describe("compareTable", () => {

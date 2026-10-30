@@ -48,13 +48,13 @@ export function footer(score: SetScore): string {
 }
 
 export function resultsTable(set: RecallSet, score: SetScore): string {
-  const rows = set.heads.flatMap((head) =>
-    headRows(
-      head,
-      score.heads.find(({ head: sha }) => sha === head.head),
-    ),
-  )
-  return [`## ${label(score)}`, "", ...HEADER, ...rows, "", `**${footer(score)}**`].join("\n")
+  const scored = new Map(score.heads.map((head) => [head.head, head]))
+  const rows = set.heads.flatMap((head) => {
+    const own = scored.get(head.head)
+    return own === undefined ? [] : headRows(head, own)
+  })
+  const title = score.partial ? `${label(score)} (partial run)` : label(score)
+  return [`## ${title}`, "", ...HEADER, ...rows, "", `**${footer(score)}**`].join("\n")
 }
 
 export function compareTable(baseline: SetScore, candidate: SetScore, verdict: BarVerdict): string {
