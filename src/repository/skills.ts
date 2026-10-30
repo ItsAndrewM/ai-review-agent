@@ -457,9 +457,17 @@ export const withActivationReport =
     report: ReportActivation,
   ) =>
   async (...args: Args): Promise<ToolExecutionResult | ContentOnlyResult> => {
-    if (Value.Check(ACTIVATION_ARGS, args[0])) await report(args[0].name)
-    return execute(...args)
+    const result = await execute(...args)
+    if (Value.Check(ACTIVATION_ARGS, args[0]) && activated(result)) await report(args[0].name)
+    return result
   }
+
+const SKILL_NOT_FOUND = "Skill not found:"
+
+function activated(result: ToolExecutionResult | ContentOnlyResult): boolean {
+  const parts = Value.Check(ContentOnlyResult, result) ? result.content : (result.output ?? [])
+  return !parts.some((part) => Value.Check(TextPart, part) && part.text.startsWith(SKILL_NOT_FOUND))
+}
 
 const toolWithOutput = (tool: ToolRegistration, report: ReportActivation): ToolRegistration => {
   const execute = tool.execute.bind(tool)

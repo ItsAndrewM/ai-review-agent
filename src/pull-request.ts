@@ -1663,12 +1663,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       head: await this.pendingHead(),
       name,
     })
-    const pending = await this.readPending()
-    if (pending === undefined) return
-    await this.ctx.storage.put<PendingReview>("pending", {
-      ...pending,
-      activated: [...(pending.activated ?? []), name],
-    })
+    try {
+      const pending = await this.readPending()
+      if (pending === undefined) return
+      await this.ctx.storage.put<PendingReview>("pending", {
+        ...pending,
+        activated: [...(pending.activated ?? []), name],
+      })
+    } catch (error) {
+      logError("skills.activation_unrecorded", { name, error: errorText(error) })
+    }
   }
 
   private async storedNumber(): Promise<number | undefined> {

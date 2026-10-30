@@ -795,8 +795,11 @@ describe("decideReviewVerdict", () => {
 
   it("waits for the checks when the threads couldn't be read, unless a blocking finding posts", () => {
     expect(decide({ openBlocking: "unknown" })).toBe("AWAITING_CHECKS")
-    expect(decide({ openBlocking: "unknown", reasons: [omitted] })).toBe("AWAITING_CHECKS")
     expect(decide({ openBlocking: "unknown", accepted: [finding()] })).toBe("REQUEST_CHANGES")
+  })
+
+  it("withholds over waiting for the checks when the threads couldn't be read, since a withheld review is never lifted", () => {
+    expect(decide({ openBlocking: "unknown", reasons: [omitted] })).toBe("WITHHELD")
   })
 
   it("comments when the workflow is off, whatever else holds", () => {

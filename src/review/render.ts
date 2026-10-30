@@ -525,9 +525,9 @@ export interface ReviewDecisionInput {
 export function decideReviewVerdict(input: ReviewDecisionInput): Verdict {
   if (!input.workflow) return "COMMENT"
   if (holdsBlocking(input.accepted, input.rejected)) return "REQUEST_CHANGES"
-  if (input.openBlocking === "unknown") return "AWAITING_CHECKS"
-  if (input.openBlocking > 0) return "REQUEST_CHANGES"
-  return input.reasons.length > 0 ? "WITHHELD" : "APPROVE"
+  if (input.openBlocking !== "unknown" && input.openBlocking > 0) return "REQUEST_CHANGES"
+  if (input.reasons.length > 0) return "WITHHELD"
+  return input.openBlocking === "unknown" ? "AWAITING_CHECKS" : "APPROVE"
 }
 
 export function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {
