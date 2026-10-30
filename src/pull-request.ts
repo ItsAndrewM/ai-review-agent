@@ -205,6 +205,7 @@ import {
   planThreads,
   promptFiles,
   resolveThreads,
+  stillOpen,
   ReviewedRecord,
   ReviewScope,
   scopedFiles,
@@ -243,6 +244,7 @@ import {
   reviewPrompt,
   summaryPrompt,
   threadAnswerPrompt,
+  type ThreadQuestion,
 } from "./review/prompt.ts"
 import {
   approvalBody,
@@ -276,7 +278,13 @@ import {
   type WrittenSummary,
 } from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
-import { resolveOutcomeText, type ResolveThreadArgs } from "./review/thread-resolution.ts"
+import {
+  answeringGuard,
+  evidenceProblem,
+  resolveOutcomeText,
+  type ResolveOutcome,
+  type ResolveThreadArgs,
+} from "./review/thread-resolution.ts"
 import {
   createReviewExtension,
   fileAt,
@@ -564,8 +572,32 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   #checkQueue: Promise<void> = Promise.resolve()
   #packageJson: { base: string; text: string | undefined } | undefined
 
-  async resolveThread(_args: ResolveThreadArgs, _conversationId: ConversationId): Promise<string> {
-    return resolveOutcomeText({ kind: "refused", refusal: "not_answering" })
+  #answering: { deliveryId: string; thread: ReviewThread; resolved: boolean } | undefined
+
+  async resolveThread(args: ResolveThreadArgs, _conversationId: ConversationId): Promise<string> {
+    return resolveOutcomeText(await this.#resolveAnswerThread(args))
+  }
+
+  async #resolveAnswerThread(args: ResolveThreadArgs): Promise<ResolveOutcome> {
+    const answering = this.#answering
+    const guard = answeringGuard(await this.runningRootOperation(), answering?.deliveryId)
+    if (guard !== undefined || answering === undefined) return { kind: "refused", refusal: "not_answering" }
+    const problem = evidenceProblem(args.evidence)
+    if (problem !== undefined) return { kind: "refused", refusal: problem }
+    if (answering.resolved) return { kind: "refused", refusal: "resolved_by_this_answer" }
+    const key = await this.key()
+    try {
+      const github = await this.github()
+      const live = threadOf(await github.listReviewThreads(key, key.number), answering.thread.firstCommentId)
+      if (live?.resolved) return { kind: "refused", refusal: "already_resolved" }
+      await github.resolveReviewThread(answering.thread.id)
+    } catch (cause) {
+      logError("thread.resolve_failed", { number: key.number, thread: answering.thread.id, error: errorText(cause) })
+      return { kind: "refused", refusal: "unreachable" }
+    }
+    answering.resolved = true
+    log("thread.resolved", { number: key.number, thread: answering.thread.id, reason: args.reason, by: "answer" })
+    return { kind: "resolved", reason: args.reason }
   }
 
   async runCheck(args: RunCheckArgs): Promise<string> {
@@ -1242,7 +1274,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async resolveAddressed(pr: PullRequestInfo, threads: readonly OpenThread[]): Promise<OpenThread[]> {
     if (threads.length === 0) return []
-    const { resolved, failed } = await resolveThreads(await this.github(), threads)
+    const github = await this.github()
+    const key = await this.key()
+    const { open, closed } = stillOpen(threads, await github.listReviewThreads(key, key.number))
+    for (const thread of closed) log("review.resolve_skipped", { number: pr.number, thread: thread.handle })
+    const { resolved, failed } = await resolveThreads(github, open)
     for (const { thread, error } of failed) {
       logError("review.resolve_failed", { number: pr.number, thread: thread.handle, step: "resolve", error })
     }
@@ -2655,16 +2691,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const operationId = `chat:${incoming.deliveryId}`
       const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
       const prompt = incoming.thread
-        ? threadAnswerPrompt(incoming.author, text, skill, {
-            path: incoming.thread.path,
-            line: incoming.thread.line,
-            diffHunk: incoming.thread.diffHunk,
-            opening: thread?.firstCommentBody,
-            severity: undefined,
-            title: undefined,
-            headSha: (await this.pullRequest()).head.sha,
-          })
+        ? threadAnswerPrompt(incoming.author, text, skill, await this.#threadQuestion(incoming.thread, thread))
         : answerPrompt(incoming.author, text, skill)
+      this.#answering =
+        incoming.thread && thread ? { deliveryId: incoming.deliveryId, thread, resolved: false } : undefined
       const result = await this.harness.prompt(prompt, { operationId })
       const answer =
         result.status === "done" && result.text?.trim()
@@ -2674,9 +2704,54 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
                 ? "the model returned nothing"
                 : describeFailure(result, await this.storedFailureDetail(operationId))
             }.`
-      await this.respond(github, key, incoming, `@${incoming.author} ${answer}`)
+      await this.#replyUnlessClosed(github, key, incoming, `@${incoming.author} ${answer}`)
     } finally {
+      this.#answering = undefined
       await this.#runs.end(key.number, "answer_end")
+    }
+  }
+
+  async #threadQuestion(context: ThreadContext, thread: ReviewThread | undefined): Promise<ThreadQuestion> {
+    const pr = await this.#headForAnswer()
+    const finding = (await this.storedFindings([context.rootId])).get(context.rootId)
+    return {
+      path: context.path,
+      line: context.line,
+      diffHunk: context.diffHunk,
+      opening: thread?.firstCommentBody,
+      severity: finding?.severity,
+      title: finding?.title,
+      headSha: pr.head.sha,
+    }
+  }
+
+  async #headForAnswer(): Promise<PullRequestInfo> {
+    try {
+      return await this.freshPullRequest()
+    } catch (cause) {
+      softenUnlessTransient(errorOf(cause))
+      logError("answer.head_unreadable", { error: errorText(cause) })
+      return this.pullRequest()
+    }
+  }
+
+  async #replyUnlessClosed(
+    github: GitHubClient,
+    key: PullRequestKey,
+    incoming: CommentIncoming,
+    body: string,
+  ): Promise<void> {
+    const answering = this.#answering
+    if (answering !== undefined && !answering.resolved) {
+      const live = await this.threadFor(github, key, incoming.thread)
+      if (live?.resolved) {
+        log("answer.skipped", { number: key.number, thread: answering.thread.id, reason: "thread_resolved" })
+        return
+      }
+    }
+    await this.respond(github, key, incoming, body)
+    if (answering?.resolved) {
+      await this.evaluateApproval("resolve", incoming.deliveryId, new Set([answering.thread.id]))
     }
   }
 
