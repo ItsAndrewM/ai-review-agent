@@ -4,6 +4,7 @@ import { promisify } from "node:util"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { linkedIssueNumbers, linkedIssuesFrom } from "../../src/review/linked-issues.ts"
+import { diffBase, type MergeBase } from "./base.ts"
 import { withoutGeneratedNotes } from "./body.ts"
 import { cases, type Case } from "./cases.ts"
 import { parseSet, REPOSITORY, type FrozenIssue, type HeadCase } from "./schema.ts"
@@ -17,6 +18,8 @@ const PullRequest = Type.Object({
   head: Type.Object({ ref: Type.String() }),
   base: Type.Object({ ref: Type.String() }),
   labels: Type.Array(Type.Object({ name: Type.String() })),
+  merged_at: Type.Union([Type.String(), Type.Null()]),
+  merge_commit_sha: Type.Union([Type.String(), Type.Null()]),
 })
 
 const Issue = Type.Object({
@@ -56,6 +59,8 @@ async function originalBase(pr: number): Promise<string> {
   return parent
 }
 
+const mergeBase: MergeBase = (left, right) => command("git", "merge-base", left, right)
+
 async function frozenIssue(number: number): Promise<FrozenIssue | undefined> {
   const value = JSON.parse(await api(`issues/${number}`))
   if (!Value.Check(Issue, value)) throw new Error(`Issue ${number} has unexpected fields`)
@@ -87,7 +92,8 @@ async function checkExpectedPaths(item: Case, base: string): Promise<void> {
 async function freeze(item: Case): Promise<HeadCase> {
   const pr = await pullRequest(item.pr)
   const body = withoutGeneratedNotes(pr.body)
-  const base = item.base ?? (await originalBase(item.pr))
+  const merge = { mergedAt: pr.merged_at, mergeCommitSha: pr.merge_commit_sha }
+  const base = item.base ?? (await diffBase(merge, item.head, await originalBase(item.pr), mergeBase))
   await checkExpectedPaths(item, base)
   const head: HeadCase = {
     pr: item.pr,

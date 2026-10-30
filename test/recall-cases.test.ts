@@ -29,6 +29,21 @@ describe("case patterns", () => {
       "The caller may pass undefined paths",
     ],
     ["151-1", "A path with a `..` segment leaves the repository", "The run continues... and then stops"],
+    [
+      "38-1",
+      "postedRetryText answers a boolean, so the host's refusal is only logged and reportUnpostedReview never says why",
+      "test/models.test.ts covers the wrapper, prompts and the empty-walkthrough refusal, but nothing covers the new behaviour in src/pull-request.ts that parses the retry's JSON and posts it as retry_text; a regression there (e.g. a swapped argument or a dropped isPosted check) would ship silently",
+    ],
+    [
+      "57-k1",
+      "The run's summary says Details opens the summary comment even when detailsUrl is undefined",
+      "The run's summary is one sentence pointing at Details; the Markdown the issue asks for never reaches the run, even when `detailsUrl` exists and the comment is one call away",
+    ],
+    [
+      "152-1",
+      "GitHub shows seven characters and the tests pin seven, so every rendered sha is now a character short",
+      "The PR changes the observable behaviour of shortSha (7→6 characters), but no test in test/ references shortSha, so no test fails if this change breaks or is reverted. Add a small unit test asserting the expected six-character literal, so a future edit to the length fails loudly.",
+    ],
   ])("%s matches the finding and not the decoy", (id, finding, decoy) => {
     expect(pattern(id).test(finding)).toBe(true)
     expect(pattern(id).test(decoy)).toBe(false)
