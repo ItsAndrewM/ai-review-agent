@@ -44,7 +44,6 @@ function onePathProblem(path: string): string | undefined {
   if (!SAFE_PATH.test(path))
     return `path "${path}" has a character a repository path can't: letters, digits, _ @ + . / - only`
   if (path.startsWith("/") || path.startsWith("-")) return `path "${path}" must be relative and not start with -`
-  if (path.split("/").includes("..")) return `path "${path}" leaves the repository`
   return undefined
 }
 

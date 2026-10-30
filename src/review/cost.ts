@@ -162,10 +162,11 @@ function sandboxPart(seconds: number | undefined): string[] {
 function durationText(seconds: number): string {
   const hours = Math.floor(seconds / 3600)
   const minutes = Math.floor((seconds % 3600) / 60)
-  const rest = seconds % 60
-  return [hours > 0 ? `${hours}h` : "", minutes > 0 || hours > 0 ? `${minutes}m` : "", `${rest}s`]
-    .filter((part) => part !== "")
-    .join(" ")
+  const parts: string[] = []
+  if (hours > 0) parts.push(`${hours}h`)
+  if (minutes > 0 || hours > 0) parts.push(`${minutes}m`)
+  parts.push(`${seconds % 60}s`)
+  return parts.join(" ")
 }
 
 function priceText(totals: SpendTotals, modelsWithTokens: number): string {
