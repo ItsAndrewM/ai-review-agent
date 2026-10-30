@@ -46,7 +46,7 @@ export const Finding = Type.Object({
     [Type.Literal("defect"), Type.Literal("spec"), Type.Literal("standard"), Type.Literal("test")],
     {
       description:
-        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. Grade a standard or test finding suggestion or nitpick.",
+        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. A defect or spec finding is blocking or major; a standard or test finding is suggestion or nitpick.",
     },
   ),
   basis: Type.String({
