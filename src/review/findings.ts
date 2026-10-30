@@ -11,6 +11,7 @@ import {
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
+import { pairingProblem } from "./basis.ts"
 
 export const Severity = Type.Union([
   Type.Literal("blocking"),
@@ -411,14 +412,10 @@ function contentProblem(finding: FindingInput): string | undefined {
   return suggestionProblem(finding) ?? commentSizeProblem(finding)
 }
 
-export function exceedsBasisCap(finding: FindingInput): boolean {
-  return finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test")
-}
-
 function basisProblem(finding: FindingInput, hasLinkedIssues: boolean): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
-  if (exceedsBasisCap(finding))
-    return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  const pairing = pairingProblem(finding)
+  if (pairing !== undefined) return pairing
   if (finding.basis_kind === "spec" && !hasLinkedIssues)
     return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
   return undefined

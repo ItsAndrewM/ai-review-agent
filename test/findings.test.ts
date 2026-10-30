@@ -60,7 +60,10 @@ function finding(overrides: Partial<FindingInput> = {}): FindingInput {
 }
 
 const BLOCKING_STANDARD_OR_TEST =
-  "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  "a standard or test finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+
+const WORKS_AS_IT_STANDS =
+  "a defect or spec finding is blocking or major, since its basis says the code fails; if the code works as it stands, give it the standard or test basis it rests on"
 
 const NO_LINKED_ISSUE =
   "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
@@ -403,6 +406,23 @@ describe("basis", () => {
     ])
   })
 
+  it("rejects a defect or spec finding graded suggestion or nitpick as unfounded, and accepts a major one", () => {
+    const result = validateFindings(
+      [
+        finding({ severity: "nitpick" }),
+        finding({ basis_kind: "spec", basis: "#7: totals are never NaN", severity: "suggestion" }),
+        finding({ severity: "major", line: 3, quote: "export { a, b };" }),
+      ],
+      commentable,
+      true,
+    )
+    expect(result.rejected.map((r) => [r.reason, r.unfounded])).toEqual([
+      [WORKS_AS_IT_STANDS, true],
+      [WORKS_AS_IT_STANDS, true],
+    ])
+    expect(result.accepted.map((f) => f.severity)).toEqual(["major"])
+  })
+
   it("fails the schema for an empty basis, so a tool call and written JSON alike come back for a fix", () => {
     const submission = {
       ...base,
@@ -448,7 +468,7 @@ describe("basis", () => {
   })
 
   it("rejects a spec finding with no linked issue whatever its grade", () => {
-    const result = validateFindings([specFinding(), specFinding({ severity: "nitpick" })], commentable, false)
+    const result = validateFindings([specFinding(), specFinding({ severity: "major" })], commentable, false)
     expect(result.rejected.map((r) => r.reason)).toEqual([NO_LINKED_ISSUE, NO_LINKED_ISSUE])
   })
 

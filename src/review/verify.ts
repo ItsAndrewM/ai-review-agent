@@ -3,9 +3,9 @@ import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import { MAX_PATCH_CHARS, truncateAtLine, type ChangedFile } from "../github/diff.ts"
 import { errorText, type LogFields } from "../log.ts"
+import { pairingProblem } from "./basis.ts"
 import { describeFailure, type TranscriptEntry } from "./failure.ts"
 import {
-  exceedsBasisCap,
   jsonIn,
   Severity,
   type FindingInput,
@@ -165,7 +165,7 @@ function decide(finding: FindingInput, verdict: VerdictInput | undefined): Decis
   if (!verdict.keep) return { kind: "dropped", reason }
   if (verdict.severity === finding.severity) return { kind: "kept" }
   const revised = { ...finding, severity: verdict.severity }
-  return exceedsBasisCap(revised) ? { kind: "capped", reason } : { kind: "changed", revised, reason }
+  return pairingProblem(revised) === undefined ? { kind: "changed", revised, reason } : { kind: "capped", reason }
 }
 
 function withDecisions(validated: ValidatedReview, decided: readonly Decided[]): ValidatedReview {

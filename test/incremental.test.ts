@@ -466,7 +466,7 @@ describe("path filters", () => {
       body: "b",
     })
     const validated = validateFindings(
-      [onFile("src/x.ts", "y", "suggestion"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
+      [onFile("src/x.ts", "y", "major"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
       indexCommentableLines(scopedFiles(scope, prFiles)),
       false,
     )
