@@ -1,3 +1,4 @@
+import { Type, type Static } from "typebox"
 import type { FindingInput, ReviewSubmissionInput } from "../../src/review/findings.ts"
 import type { ReviewAnswer } from "./conversation.ts"
 import { regexOf, type ExpectedFinding, type HeadCase, type KnownFinding, type RecallSet } from "./schema.ts"
@@ -19,12 +20,6 @@ export interface Matching {
   unmatched: UnmatchedFinding[]
 }
 
-export interface FalseCounts {
-  blocking: number
-  suggestion: number
-  nitpick: number
-}
-
 export interface RunScore {
   head: string
   run: number
@@ -35,37 +30,47 @@ export interface RunScore {
   summaryMatched: boolean | undefined
 }
 
-export interface ExpectedScore {
-  id: string
-  found: boolean
-  foundIn: number
-  severityMatched: boolean
-  runs: number
-}
+export const ExpectedScore = Type.Object({
+  id: Type.String(),
+  found: Type.Boolean(),
+  foundIn: Type.Integer(),
+  severityMatched: Type.Boolean(),
+  runs: Type.Integer(),
+})
+export type ExpectedScore = Static<typeof ExpectedScore>
 
-export interface HeadScore {
-  head: string
-  expects: ExpectedScore[]
-  falseBySeverity: FalseCounts
-  verdictMatched: boolean
-  summaryMatched: boolean | undefined
-  notPosted: number
-}
+export const FalseCounts = Type.Object({
+  blocking: Type.Integer(),
+  suggestion: Type.Integer(),
+  nitpick: Type.Integer(),
+})
+export type FalseCounts = Static<typeof FalseCounts>
 
-export interface SetScore {
-  model: string
-  thinking: string
-  skills: string
-  found: number
-  expected: number
-  falseCount: number
-  severityMatched: number
-  verdictMatched: number
-  heads: HeadScore[]
-  usd: number
-  costPerReview: number
-  reviews: number
-}
+export const HeadScore = Type.Object({
+  head: Type.String(),
+  expects: Type.Array(ExpectedScore),
+  falseBySeverity: FalseCounts,
+  verdictMatched: Type.Boolean(),
+  summaryMatched: Type.Optional(Type.Boolean()),
+  notPosted: Type.Integer(),
+})
+export type HeadScore = Static<typeof HeadScore>
+
+export const SetScore = Type.Object({
+  model: Type.String(),
+  thinking: Type.String(),
+  skills: Type.String(),
+  found: Type.Integer(),
+  expected: Type.Integer(),
+  falseCount: Type.Integer(),
+  severityMatched: Type.Integer(),
+  verdictMatched: Type.Integer(),
+  heads: Type.Array(HeadScore),
+  usd: Type.Number(),
+  costPerReview: Type.Number(),
+  reviews: Type.Integer(),
+})
+export type SetScore = Static<typeof SetScore>
 
 export interface BarVerdict {
   adopted: boolean
@@ -170,14 +175,15 @@ function majorityOf(values: readonly (boolean | undefined)[]): boolean | undefin
 
 function headScore(head: HeadCase, runs: readonly RunScore[]): HeadScore {
   const verdicts = runs.filter((run) => run.verdict === head.verdict).length
-  return {
+  const score: HeadScore = {
     head: head.head,
     expects: head.expects.map((expected) => expectedScore(expected, runs)),
     falseBySeverity: falseBySeverity(runs),
     verdictMatched: majority(verdicts, runs.length),
-    summaryMatched: head.summary === undefined ? undefined : majorityOf(runs.map((run) => run.summaryMatched)),
     notPosted: runs.filter((run) => run.answer.posted === undefined).length,
   }
+  const summaryMatched = head.summary === undefined ? undefined : majorityOf(runs.map((run) => run.summaryMatched))
+  return summaryMatched === undefined ? score : { ...score, summaryMatched }
 }
 
 function sum(values: readonly number[]): number {

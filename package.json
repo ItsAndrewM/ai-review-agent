@@ -9,6 +9,7 @@
     "deploy": "wrangler deploy",
     "types": "wrangler types",
     "verify:replay": "node --experimental-strip-types tools/verify-replay/replay.ts",
+    "recall": "node --experimental-strip-types tools/recall/replay.ts",
     "typecheck": "wrangler types && tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "lint": "oxlint --disable-nested-config . && oxfmt --disable-nested-config --check .",
     "format": "oxfmt --disable-nested-config .",
