@@ -22,6 +22,7 @@ export const StoredPending = Type.Object({
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
   configError: Type.Optional(Type.String()),
   verifyModel: Type.Optional(Type.String()),
+  activated: Type.Optional(Type.Array(Type.String())),
 })
 
 export type StoredPending = Static<typeof StoredPending>

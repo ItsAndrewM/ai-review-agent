@@ -87,6 +87,14 @@ describe("summarizedRecord", () => {
     merge_danger: { door: "two-way", blast_radius: "one module" },
   } satisfies SummarySubmissionInput
 
+  it("keeps the omitted requirements the last review carried, so the next incremental review still re-checks them", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    const record = summarizedRecord({ ...reviewed, omitted }, written, files)
+    expect(record.omitted).toEqual(omitted)
+    expect(record).not.toHaveProperty("since")
+    expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("omitted")
+  })
+
   it("replaces the summary, walkthrough and merge danger, drops the since section and keeps the head", () => {
     expect(summarizedRecord(reviewed, written, files)).toStrictEqual({
       headSha: "abc",
@@ -164,12 +172,11 @@ describe("recordedVerdict", () => {
     })
   })
 
-  it("shows a review's own approval as approved", () => {
+  it("shows a review's own approval as approved, with or without the model verdict older records kept", () => {
     const own = {
       reviewId: 3,
       event: "APPROVE",
       headSha: head,
-      verdict: "approve",
       shown: "APPROVE",
       counts: { blocking: 0, suggestion: 1, nitpick: 0 },
       heldBack: 0,
@@ -183,6 +190,15 @@ describe("recordedVerdict", () => {
       label: "Approved at `def5678`",
       counts: { blocking: 0, suggestion: 1, nitpick: 0 },
     })
+    expect(recordedVerdict({ ...own, verdict: "approve" }, stored, head)).toStrictEqual({
+      label: "Approved",
+      counts: { blocking: 0, suggestion: 1, nitpick: 0 },
+    })
+  })
+
+  it("shows a withheld approval as itself", () => {
+    const withheld = { ...requestedChanges, event: "COMMENT", shown: "WITHHELD", withheld: 1 } satisfies LastReview
+    expect(recordedVerdict(withheld, stored, head)).toStrictEqual({ label: "Approval withheld", counts })
   })
 
   it("shows a wait for the checks as itself", () => {
@@ -241,7 +257,7 @@ describe("renderSummaryRun", () => {
     const text = renderSummaryRun(run)
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain(
-      "**Head:** `def5678` · **Verdict:** Changes requested at `abc1234` · 🔴 1 blocking · 🟡 0 suggestions · ⚪ 2 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary\n\nnew",
+      "**Head:** `def5678` · **Verdict:** Changes requested at `abc1234` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary\n\nnew",
     )
     expect(text).toContain("### Summary\n\nnew\n\n### Walkthrough\n\n| File | Change |")
     expect(text).toContain("| File | Change |\n| --- | --- |\n| `a.ts` | new a |\n| `b.ts` | old \\| b |")
@@ -294,7 +310,7 @@ describe("renderSummaryRun", () => {
 
   it("can be rewritten as an approval later", () => {
     expect(withApprovedVerdict(renderSummaryRun(run), "fedcba9876")).toContain(
-      "**Head:** `def5678` · **Verdict:** Approved at `fedcba9` · 🔴 1 blocking · 🟡 0 suggestions · ⚪ 2 nitpicks\n",
+      "**Head:** `def5678` · **Verdict:** Approved at `fedcba9` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n",
     )
     const unreviewed = renderSummaryRun({ ...run, verdict: { label: "Not reviewed yet" } })
     expect(withApprovedVerdict(unreviewed, "fedcba9876")).toContain("**Verdict:** Approved at `fedcba9`\n")

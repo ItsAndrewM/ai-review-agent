@@ -117,6 +117,7 @@ import {
   type WaitReason,
   type WorkflowState,
 } from "./review/approval.ts"
+import type { BasisContext } from "./review/basis.ts"
 import {
   budgetBlock,
   budgetNote,
@@ -248,8 +249,16 @@ import {
   type ThreadQuestion,
 } from "./review/prompt.ts"
 import {
+  budgetReason,
+  checkReasons,
+  omittedIn,
+  type ApprovalReason,
+  type CheckedReasons,
+  type OmittedRequirementInput,
+} from "./review/reasons.ts"
+import {
   approvalBody,
-  chooseReviewEvent,
+  decideReviewVerdict,
   incompleteNote,
   renderReviewBody,
   renderSummaryComment,
@@ -387,11 +396,11 @@ interface CheckedSubmission {
   validated: ValidatedReview
   scoped: ScopedReview
   missing: string[]
+  reasons: CheckedReasons
 }
 
 interface Publication {
   checked: CheckedSubmission
-  verdict: ReviewSubmissionInput["verdict"]
   verify: VerifyDisplay | undefined
 }
 
@@ -909,9 +918,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pr.head.sha !== pending.headSha) return this.headMovedRefusal(pending, pr.head.sha)
     const checked = await this.checkSubmission(submission, pr, pending)
     const returned = [...checked.scoped.rejected, ...checked.scoped.duplicates]
-    if (pending.rejectionsReturned !== true && (returned.length > 0 || checked.missing.length > 0)) {
+    const reasonsRejected = checked.reasons.rejected
+    const problems = returned.length > 0 || checked.missing.length > 0 || reasonsRejected.length > 0
+    if (pending.rejectionsReturned !== true && problems) {
       await this.markRejectionsReturned(pending.deliveryId)
-      return { text: problemsText(returned, checked.missing), done: false }
+      return { text: problemsText(returned, checked.missing, reasonsRejected), done: false }
     }
     if (checked.missing.length > 0) return this.endIncomplete(pr, pending, checked.missing)
     return this.verifyAndPublish(pr, pending, submission, checked)
@@ -932,18 +943,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<CheckedSubmission> {
     const files = await this.changedFiles()
     const scope = await this.scopeFor(pending.deliveryId)
-    const hasLinkedIssues = (pending.linkedIssues?.length ?? 0) > 0
     const validated = withFilteredUnfounded(
       validateFindings(
         submission.findings,
         indexCommentableLines(scopedFiles(scope, files)),
-        hasLinkedIssues,
+        basisContextOf(pending),
         knownChecksOf(await this.#sandbox.checks(), pr.head.sha),
       ),
       scope,
     )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
+    const reasons = checkReasons(submission, {
+      linkedIssues: pending.linkedIssues ?? [],
+      title: pr.title,
+      body: pr.body,
+    })
     log("review.findings", {
       number: pr.number,
       head: shortSha(pr.head.sha),
@@ -954,9 +969,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       rejected: scoped.rejected.length,
       duplicates: scoped.duplicates.length,
       missingRows: missing.length,
+      reasons: reasons.accepted.length,
+      reasonsRejected: reasons.rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    return { scope, validated, scoped, missing }
+    return { scope, validated, scoped, missing, reasons }
   }
 
   private async endIncomplete(
@@ -985,7 +1002,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<SubmitOutcome> {
     const candidates = verifyCandidates(checked.scoped)
     const model = pending.verifyModel
-    const drafted = { checked, verdict: submission.verdict }
+    const drafted = { checked }
     if (model === undefined || candidates.length === 0) {
       return this.publishReview(pr, pending, submission, { ...drafted, verify: undefined })
     }
@@ -1024,11 +1041,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const fields = { ...verifyFields(run), ms: Date.now() - started, attempts: outcome.attempts }
     if (outcome.kind === "failed") {
       logError("verify.failed", { ...fields, reason: outcome.reason })
-      return {
-        checked: run.checked,
-        verdict: run.submission.verdict,
-        verify: unverifiedDisplay(run.model, outcome.failure),
-      }
+      return { checked: run.checked, verify: unverifiedDisplay(run.model, outcome.failure) }
     }
     const { checked, candidates } = run
     const draft = {
@@ -1037,14 +1050,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       scope: deltaScopeOf(checked.scope),
       candidates,
     }
-    const verified = verifiedReview(draft, outcome.verdicts, run.submission.verdict)
+    const verified = verifiedReview(draft, outcome.verdicts)
     for (const verdictLog of verdictFields(candidates, outcome.verdicts, verified.report)) {
       log("verify.verdict", { ...verifyFields(run), ...verdictLog })
     }
     log("verify.done", { ...fields, ...verifyCounts(candidates, verified.report) })
     return {
       checked: { ...checked, scoped: verified.scoped },
-      verdict: verified.verdict,
       verify: { kind: "verified", model: run.model, report: verified.report, leftOut: verified.leftOut },
     }
   }
@@ -1148,7 +1160,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     publication: Publication,
   ): Promise<SubmitOutcome> {
     const { scope, scoped } = publication.checked
-    const decided = { ...submission, verdict: publication.verdict }
+    const reasons = [...publication.checked.reasons.accepted, ...this.budgetReasons()]
     const unverified = publication.verify?.kind === "unverified"
     const { resolved, closed } = await this.resolveAddressed(
       pr,
@@ -1156,7 +1168,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
     const workflow = requestChangesWorkflow(pending.requestChangesWorkflow, this.env.REQUEST_CHANGES_WORKFLOW)
     const settled = [...resolved, ...closed]
-    const verdict = await this.reviewVerdict(pr, decided, scoped, openBlockingAfter(scope, settled), workflow)
+    const verdict = await this.reviewVerdict(pr, scoped, openBlockingAfter(scope, settled), workflow, reasons)
     const event = reviewEventOf(verdict)
     const key = await this.key()
     const github = await this.github()
@@ -1172,6 +1184,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       at: Date.now(),
       submission,
       resolved: resolved.length,
+      omitted: omittedIn(reasons),
     })
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
@@ -1202,29 +1215,29 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         scoped.accepted,
         scoped.rejected,
         coverageOf(scope, pr.head.sha, resolved.length),
+        reasons,
       ),
       comments: scoped.accepted.map(toReviewComment),
     })
-    await this.ctx.storage.put<LastReview>(
-      "lastReview",
-      lastReviewOf({
-        reviewId: review.id,
-        event,
-        headSha: pr.head.sha,
-        verdict: decided.verdict,
-        shown: verdict,
-        accepted: scoped.accepted,
-        rejected: scoped.rejected,
-        at: Date.now(),
-        requestChangesWorkflow: workflow,
-      }),
-    )
+    const lastReview = lastReviewOf({
+      reviewId: review.id,
+      event,
+      headSha: pr.head.sha,
+      withheld: reasons.length,
+      shown: verdict,
+      accepted: scoped.accepted,
+      rejected: scoped.rejected,
+      at: Date.now(),
+      requestChangesWorkflow: workflow,
+    })
+    await this.ctx.storage.put<LastReview>("lastReview", lastReview)
     await this.replyFixed(pr, resolved)
     await this.storeFindings(pr, scoped.accepted, review.id)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", reviewed)
     const posted: PostedReview = {
       reviewId: review.id,
       event,
+      shown: verdict,
       at: Date.now(),
       counts: countBySeverity(scoped.accepted),
       spend,
@@ -1238,7 +1251,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       pending.deliveryId,
       postedCheckRun(verdict, scoped.accepted, summary, await this.summaryCommentUrl(), Date.now(), unverified),
     )
-    if (evaluatesAfterReview(event, scoped.accepted)) {
+    if (evaluatesAfterReview(lastReview, scoped.accepted)) {
       this.ctx.waitUntil(this.evaluateApproval("review", pending.deliveryId))
     }
     const dropped =
@@ -1253,14 +1266,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async reviewVerdict(
     pr: PullRequestInfo,
-    submission: ReviewSubmissionInput,
     scoped: ScopedReview,
     openBlocking: number | "unknown",
     workflow: boolean,
+    reasons: readonly ApprovalReason[],
   ): Promise<Verdict> {
-    const event = chooseReviewEvent(submission, scoped.accepted, scoped.rejected, workflow, openBlocking)
-    const checks = event === "APPROVE" ? await this.checksOn(pr.head.sha) : undefined
-    return verdictAfterChecks(event, checks)
+    const { accepted, rejected } = scoped
+    const verdict = decideReviewVerdict({ accepted, rejected, workflow, openBlocking, reasons })
+    const checks = verdict === "APPROVE" ? await this.checksOn(pr.head.sha) : undefined
+    return verdictAfterChecks(verdict, checks)
+  }
+
+  private budgetReasons(): ApprovalReason[] {
+    const reason = budgetReason(this.#budgetBlocked, reviewBudgetOf(this.env.MAX_REVIEW_NEURONS))
+    return reason === undefined ? [] : [reason]
   }
 
   private async storeFindings(pr: PullRequestInfo, accepted: readonly FindingInput[], reviewId: number): Promise<void> {
@@ -1630,21 +1649,44 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
         skipped,
       )
-      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
-        this.reportActivation(name),
+      this.#catalog = await installCatalog(
+        this.registry,
+        this.#catalog,
+        sources,
+        skillsExtension,
+        (name, conversationId) => this.reportActivation(name, conversationId),
       )
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
     }
   }
 
-  private async reportActivation(name: string): Promise<void> {
+  private async reportActivation(name: string, conversationId: ConversationId | undefined): Promise<void> {
     this.#activated.push(name)
     log("skills.activated", {
       number: await this.storedNumber(),
       head: await this.pendingHead(),
       name,
     })
+    try {
+      const pending = await this.reviewActivating(conversationId)
+      if (pending === undefined) return
+      await this.ctx.storage.put<PendingReview>("pending", {
+        ...pending,
+        activated: [...(pending.activated ?? []), name],
+      })
+    } catch (error) {
+      logError("skills.activation_unrecorded", { name, error: errorText(error) })
+    }
+  }
+
+  private async reviewActivating(conversationId: ConversationId | undefined): Promise<PendingReview | undefined> {
+    if (conversationId === undefined) return undefined
+    const root = (await this.harness.conversation(ROOT_SESSION)).id
+    if (conversationId !== root) return undefined
+    const pending = await this.readPending()
+    if (pending === undefined) return undefined
+    return (await this.reviewIsRunning(pending)) ? pending : undefined
   }
 
   private async storedNumber(): Promise<number | undefined> {
@@ -1686,7 +1728,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
       const { scope, since } = await this.planReview(pr, reviewable, incoming, run)
-      const prompt = promptFor(pr, reviewable, scope, since, issues)
+      const prompt = promptFor(pr, reviewable, scope, since, issues, (await this.readReviewed())?.omitted ?? [])
       log("review.start", {
         number: pr.number,
         head: shortSha(pr.head.sha),
@@ -1877,8 +1919,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       BACKGROUND_CONTEXT,
     )
     const sources = catalogFor(source, skills.offered)
-    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
-      this.reportActivation(name),
+    this.#catalog = await installCatalog(
+      this.registry,
+      this.#catalog,
+      sources,
+      skillsExtension,
+      (name, conversationId) => this.reportActivation(name, conversationId),
     )
     return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }
@@ -2323,7 +2369,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async approvalNoteFor(outcome: ApprovalOutcome, number: number): Promise<string | undefined> {
     const lastReview = await this.readLastReview()
     if ((await this.noteWorkflow(lastReview, number)) === false) return undefined
-    return approvalNote(outcome, lastReview?.heldBack ?? 0, this.botLogin())
+    return approvalNote(outcome, lastReview, this.botLogin())
   }
 
   private async noteWorkflow(lastReview: LastReview | undefined, number: number): Promise<WorkflowState> {
@@ -2956,12 +3002,21 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
 
+function basisContextOf(pending: PendingReview): BasisContext {
+  return {
+    hasLinkedIssues: (pending.linkedIssues?.length ?? 0) > 0,
+    instructionFiles: pending.instructionFiles ?? [],
+    activatedSkills: pending.activated ?? [],
+  }
+}
+
 function promptFor(
   pr: PullRequestInfo,
   files: readonly ChangedFile[],
   scope: ReviewScope,
   since: readonly ChangedFile[],
   issues: readonly LinkedIssue[],
+  omitted: readonly OmittedRequirementInput[],
 ): string {
   if (scope.mode === "fresh") return reviewPrompt(pr, files, true, issues)
   const lists = threadLists(scope.open, scope.recheck)
@@ -2972,6 +3027,7 @@ function promptFor(
     ...promptFiles(files, since, scope),
     ...lists,
     issues,
+    omitted,
   })
 }
 

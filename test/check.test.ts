@@ -45,6 +45,13 @@ describe("checkRunTitle", () => {
     )
   })
 
+  it("counts major findings after blocking, and reads a stored count from before the grade existed", () => {
+    expect(checkRunTitle("REQUEST_CHANGES", { blocking: 1, major: 2, suggestion: 0, nitpick: 0 })).toBe(
+      "Changes requested: 1 blocking, 2 major",
+    )
+    expect(checkRunTitle("COMMENT", { blocking: 0, suggestion: 1, nitpick: 0 })).toBe("Commented: 1 suggestion")
+  })
+
   it("appends the non-zero counts, singular and plural, blocking first", () => {
     expect(checkRunTitle("APPROVE", countOf(["suggestion", "suggestion"]))).toBe("Approved: 2 suggestions")
     expect(checkRunTitle("REQUEST_CHANGES", countOf(["suggestion", "blocking", "suggestion"]))).toBe(
@@ -73,6 +80,18 @@ describe("postedEarlierCheckRun", () => {
         summary: "Review 9 was posted by an earlier run of this head. Details opens its summary comment.",
       },
     })
+  })
+
+  it("titles the run with the verdict the review showed, so a withheld or waiting review isn't retitled Commented", () => {
+    const withheld = {
+      reviewId: 9,
+      event: "COMMENT" as const,
+      shown: "WITHHELD" as const,
+      counts: countOf(["suggestion"]),
+    }
+    expect(postedEarlierCheckRun(withheld, undefined, at).output.title).toBe("Approval withheld: 1 suggestion")
+    const waiting = { reviewId: 9, event: "COMMENT" as const, shown: "AWAITING_CHECKS" as const }
+    expect(postedEarlierCheckRun(waiting, undefined, at).output.title).toBe("Approval waits for the checks")
   })
 
   it("titles the run with the verdict alone for a record from before reviews stored their counts", () => {

@@ -29,7 +29,7 @@ describe("scoreRuns", () => {
     })
   })
 
-  it.each([verdict("1", false), verdict("1", true, "suggestion")])(
+  it.each([verdict("1", false), verdict("1", true, "major")])(
     "fails if any run drops or demotes a true blocker: %j",
     (unsafe) => {
       const score = scoreRuns([passing(), passing(), run(unsafe)], labels)
@@ -44,7 +44,7 @@ describe("scoreRuns", () => {
   })
 
   it("counts a demotion or a drop toward the demote target", () => {
-    const one = run(verdict("2", true, "nitpick"), verdict("3", true), verdict("4", false))
+    const one = run(verdict("2", true, "major"), verdict("3", true), verdict("4", false))
     expect(scoreRuns([passing(), one, run()], labels).demoteFixed).toBe(true)
     expect(scoreRuns([one, run(), run()], labels).demoteFixed).toBe(false)
   })

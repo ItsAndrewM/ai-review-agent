@@ -107,6 +107,7 @@ describe("incrementalPrompt", () => {
     otherThreads,
     leftOut: 2,
     issues: [issue24],
+    omitted: [],
   })
 
   it("lists a file the push changed without a marked line as changed, apart from the unchanged ones", () => {
@@ -122,10 +123,32 @@ describe("incrementalPrompt", () => {
       otherThreads: [],
       leftOut: 0,
       issues: [],
+      omitted: [],
     })
     expect(withLogo).toContain(
       "- `logo.png`: changed since the last review, with no line to comment on; read_file if needed\n- `b.ts`: unchanged since the last review; read_file if needed",
     )
+  })
+
+  it("lists the last review's omitted requirements to re-check, inside the data block, and says what to do with them", () => {
+    const withOmitted = incrementalPrompt(pushed, {
+      from: "abc1234567",
+      covered,
+      marked: new Map([["a.ts", { right: new Set([2]), left: new Set([2]) }]]),
+      recheckOnly: [],
+      changedOutside: [],
+      others,
+      recheck,
+      otherThreads,
+      leftOut: 2,
+      issues: [issue24],
+      omitted: [{ issue: 24, requirement: "Review only what changed" }],
+    })
+    const { inside } = blockOf(withOmitted)
+    expect(inside).toContain(
+      "## Reasons to re-check\n- #24: Review only what changed\nList each again in omitted_requirements unless the new commits add it.",
+    )
+    expect(text).toContain("## Reasons to re-check\n(none)")
   })
 
   it("names the commit range and marks the lines changed since the last review", () => {
@@ -174,6 +197,7 @@ describe("incrementalPrompt with a thread to re-check outside the diff", () => {
     otherThreads: [],
     leftOut: 0,
     issues: [],
+    omitted: [],
   })
 
   it("shows what the new commits did to that file apart from the diff, with nothing to comment on", () => {
@@ -414,6 +438,18 @@ describe("problemsText", () => {
 
   it("returns the rejections and then the missing rows, a blank line apart, so both come back in the one reply", () => {
     expect(problemsText(rejected, ["logo.png", "src/b.ts"])).toBe(`${rejectionsText(rejected)}\n\n${missingRows}`)
+  })
+
+  it("adds the reasons the host couldn't check after the rows, each on its own line", () => {
+    const reasons = [
+      "omitted requirement for #7: #7 isn't a linked issue (linked: #24); name the linked issue or drop it",
+    ]
+    expect(problemsText([], [], reasons)).toBe(
+      "Reasons the host couldn't check:\n- omitted requirement for #7: #7 isn't a linked issue (linked: #24); name the linked issue or drop it\nFix or drop them, then call submit_review again with the whole review. They come back only this once; a reason the host can't check next time is dropped.",
+    )
+    expect(problemsText([], ["logo.png", "src/b.ts"], reasons)).toBe(
+      `${missingRows}\n\nReasons the host couldn't check:\n- ${reasons[0]}\nFix or drop them, then call submit_review again with the whole review. They come back only this once; a reason the host can't check next time is dropped.`,
+    )
   })
 })
 

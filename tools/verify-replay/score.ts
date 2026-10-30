@@ -1,4 +1,4 @@
-import { exceedsBasisCap } from "../../src/review/findings.ts"
+import { pairingProblem } from "../../src/review/basis.ts"
 import type { VerdictInput } from "../../src/review/verify.ts"
 import type { LabelledFinding } from "./schema.ts"
 
@@ -21,7 +21,7 @@ export function effectiveVerdict(entry: LabelledFinding, run: RunVerdicts): Verd
   const verdict = run.verdicts.find(({ finding }) => finding === entry.id)
   if (verdict === undefined || !verdict.keep) return verdict
   const revised = { ...entry.finding, severity: verdict.severity }
-  return exceedsBasisCap(revised) ? { ...verdict, severity: entry.finding.severity } : verdict
+  return pairingProblem(revised) === undefined ? verdict : { ...verdict, severity: entry.finding.severity }
 }
 
 export function fixesFinding(entry: LabelledFinding, run: RunVerdicts): boolean {

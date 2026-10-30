@@ -3,20 +3,13 @@ import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import { MAX_PATCH_CHARS, truncateAtLine, type ChangedFile } from "../github/diff.ts"
 import { errorText, type LogFields } from "../log.ts"
+import { pairingProblem } from "./basis.ts"
 import { describeFailure, type TranscriptEntry } from "./failure.ts"
-import {
-  exceedsBasisCap,
-  jsonIn,
-  Severity,
-  type FindingInput,
-  type Rejected,
-  type ReviewSubmissionInput,
-  type ValidatedReview,
-} from "./findings.ts"
+import { jsonIn, Severity, type FindingInput, type Rejected, type ValidatedReview } from "./findings.ts"
 import { applyDeltaPolicy, type DeltaScope, type ScopedReview } from "./incremental.ts"
 import type { LinkedIssue } from "./linked-issues.ts"
 import { dataBlock, fenceFor, MATERIAL_NOTE, neutraliseClosingTag, numberedLine } from "./prompt.ts"
-import { holdsApprovalBack, holdsBlocking, type VerifyDisplay } from "./render.ts"
+import { holdsApprovalBack, type VerifyDisplay } from "./render.ts"
 
 const MAX_REASON_CHARS = 300
 
@@ -104,16 +97,6 @@ export function applyVerdicts(
   return { validated: withDecisions(validated, decided), report: reportOf(decided, unknown) }
 }
 
-export function verdictAfterVerify(
-  verdict: ReviewSubmissionInput["verdict"],
-  before: ScopedReview,
-  after: ScopedReview,
-): ReviewSubmissionInput["verdict"] {
-  if (verdict !== "request_changes") return verdict
-  const cleared = holdsBlocking(before.accepted, before.rejected) && !holdsBlocking(after.accepted, after.rejected)
-  return cleared ? "approve" : verdict
-}
-
 export interface VerifyDraft {
   validated: ValidatedReview
   scoped: ScopedReview
@@ -123,24 +106,14 @@ export interface VerifyDraft {
 
 export interface Verified {
   scoped: ScopedReview
-  verdict: ReviewSubmissionInput["verdict"]
   report: VerifyReport
   leftOut: FindingInput[]
 }
 
-export function verifiedReview(
-  draft: VerifyDraft,
-  verdicts: readonly VerdictInput[],
-  verdict: ReviewSubmissionInput["verdict"],
-): Verified {
+export function verifiedReview(draft: VerifyDraft, verdicts: readonly VerdictInput[]): Verified {
   const applied = applyVerdicts(draft.validated, draft.candidates, verdicts)
   const scoped = applyDeltaPolicy(applied.validated, draft.scope)
-  return {
-    scoped,
-    verdict: verdictAfterVerify(verdict, draft.scoped, scoped),
-    report: applied.report,
-    leftOut: leftOutOf(applied.report, scoped),
-  }
+  return { scoped, report: applied.report, leftOut: leftOutOf(applied.report, scoped) }
 }
 
 export function leftOutOf(report: VerifyReport, scoped: ScopedReview): FindingInput[] {
@@ -165,7 +138,7 @@ function decide(finding: FindingInput, verdict: VerdictInput | undefined): Decis
   if (!verdict.keep) return { kind: "dropped", reason }
   if (verdict.severity === finding.severity) return { kind: "kept" }
   const revised = { ...finding, severity: verdict.severity }
-  return exceedsBasisCap(revised) ? { kind: "capped", reason } : { kind: "changed", revised, reason }
+  return pairingProblem(revised) === undefined ? { kind: "changed", revised, reason } : { kind: "capped", reason }
 }
 
 function withDecisions(validated: ValidatedReview, decided: readonly Decided[]): ValidatedReview {
@@ -483,7 +456,10 @@ function noAnswerWithin(ms: number): string {
   return `no answer in ${ms / MS_PER_MINUTE} minutes`
 }
 
-const SEVERITY_RANK = { nitpick: 0, suggestion: 1, blocking: 2 } satisfies Record<FindingInput["severity"], number>
+const SEVERITY_RANK = { nitpick: 0, suggestion: 1, major: 2, blocking: 3 } satisfies Record<
+  FindingInput["severity"],
+  number
+>
 
 export function verdictFields(
   candidates: readonly VerifyCandidate[],

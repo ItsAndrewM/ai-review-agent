@@ -1,5 +1,7 @@
+import { readFileSync } from "node:fs"
 import type { Context } from "@earendil-works/chord/context"
 import { Type } from "@earendil-works/pi-ai"
+import type { ConversationId } from "@earendil-works/pi-durable"
 import {
   createRegistry,
   defineExtension,
@@ -38,6 +40,7 @@ import {
   skillsStartFields,
   unlisted,
   unloadedSkillPaths,
+  SKILL_NOT_FOUND,
   withActivationReport,
   withContentAsOutput,
   withOutputFromContent,
@@ -1069,7 +1072,7 @@ describe("the catalog", () => {
       expect(CATALOG_OUTPUT_LIMITS.maxLines).toBeGreaterThanOrEqual(CATALOG_OUTPUT_LIMITS.maxBytes)
     })
 
-    it("reports the activated skill's name before running the activation, and reports nothing for a call without a name", async () => {
+    it("reports the activated skill's name once the activation ran, and reports nothing for a call without a name", async () => {
       const events: string[] = []
       const wrapped = withActivationReport(
         async (args: { name?: string | number }) => {
@@ -1083,10 +1086,10 @@ describe("the catalog", () => {
       await wrapped({ name: "lint" })
       await wrapped({})
       await wrapped({ name: 7 })
-      expect(events).toEqual(["reported lint", 'ran {"name":"lint"}', "ran {}", 'ran {"name":7}'])
+      expect(events).toEqual(['ran {"name":"lint"}', "reported lint", "ran {}", 'ran {"name":7}'])
     })
 
-    it("waits for an asynchronous report before running the activation, and returns the activation's own result", async () => {
+    it("waits for an asynchronous report after the activation, and returns the activation's own result", async () => {
       const events: string[] = []
       const answer = { content: [{ type: "text" as const, text: SDK_TEXT }] }
       const wrapped = withActivationReport(
@@ -1100,7 +1103,41 @@ describe("the catalog", () => {
         },
       )
       expect(await wrapped({ name: "lint" })).toBe(answer)
-      expect(events).toEqual(["reported lint", "ran"])
+      expect(events).toEqual(["ran", "reported lint"])
+    })
+
+    it("reports nothing when the SDK answers that the skill wasn't found, answers an error, or throws", async () => {
+      const { report, names } = activationRecorder()
+      const notFound = withActivationReport(
+        async (_args: { name: string }) => ({ content: [{ type: "text" as const, text: "Skill not found: lint" }] }),
+        report,
+      )
+      expect(await notFound({ name: "lint" })).toEqual({ content: [{ type: "text", text: "Skill not found: lint" }] })
+      const errored = withActivationReport(async (_args: { name: string }) => ({ isError: true, output: [] }), report)
+      await errored({ name: "lint" })
+      const throwing = withActivationReport(async (_args: { name: string }) => {
+        throw new Error("the loader broke")
+      }, report)
+      await expect(throwing({ name: "lint" })).rejects.toThrow("the loader broke")
+      expect(names).toEqual([])
+    })
+
+    it("hands the report the calling conversation, undefined when the tool is called without the harness", async () => {
+      const calls: [string, ConversationId | undefined][] = []
+      const wrapped = withActivationReport(
+        async (_args: { name: string }) => ({ output: [] }),
+        (name, conversationId) => {
+          calls.push([name, conversationId])
+        },
+      )
+      await wrapped({ name: "lint" })
+      expect(calls).toEqual([["lint", undefined]])
+    })
+
+    it("pins the not-found wording to the agents SDK this repository installs, so a reworded SDK fails here first", () => {
+      const sdk = readFileSync(new URL("../node_modules/agents/dist/skills/index.js", import.meta.url), "utf8")
+      expect(sdk).toContain("`Skill not found: ${name}`")
+      expect(SKILL_NOT_FOUND).toBe("Skill not found:")
     })
 
     it("wraps activate_skill with the activation report inside the content wrapper, so the SDK's content still reaches the model, and leaves read_skill_resource with the content wrapper alone, even for a call that carries a name", async () => {
