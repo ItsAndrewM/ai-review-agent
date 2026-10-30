@@ -27,8 +27,69 @@ export interface ChangeAt {
 }
 
 export interface GitHistory extends HistoricalFiles {
+  renameDiff(base: string, head: string, previousPath: string, path: string): Promise<string>
   changes(base: string, head: string): Promise<ChangeAt[]>
   tree(sha: string): Promise<TreeEntryAt[]>
+}
+
+const STATUS_OF = { A: "added", D: "removed", M: "modified", R: "renamed" } as const
+
+interface Counts {
+  additions: number
+  deletions: number
+}
+
+function statusOf(code: string): ChangeAt["status"] {
+  const letter = code[0]
+  return letter === "A" || letter === "D" || letter === "R" ? STATUS_OF[letter] : STATUS_OF.M
+}
+
+function countOf(text: string): number {
+  const count = Number(text)
+  return Number.isSafeInteger(count) ? count : 0
+}
+
+export function parseNameStatus(text: string): Omit<ChangeAt, "additions" | "deletions">[] {
+  const fields = text.split("\0").filter((field) => field !== "")
+  const changes: Omit<ChangeAt, "additions" | "deletions">[] = []
+  for (let index = 0; index < fields.length;) {
+    const code = fields[index] ?? ""
+    const status = statusOf(code)
+    if (code.startsWith("R") || code.startsWith("C")) {
+      const previousPath = fields[index + 1] ?? ""
+      changes.push({ path: fields[index + 2] ?? "", status, previousPath })
+      index += 3
+    } else {
+      changes.push({ path: fields[index + 1] ?? "", status })
+      index += 2
+    }
+  }
+  return changes
+}
+
+export function parseNumstat(text: string): Map<string, Counts> {
+  const counts = new Map<string, Counts>()
+  const fields = text.split("\0")
+  for (let index = 0; index < fields.length; index++) {
+    const field = fields[index] ?? ""
+    const [additions = "", deletions = "", path = ""] = field.split("\t")
+    if (additions === "") continue
+    const key = path === "" ? (fields[index + 2] ?? "") : path
+    if (path === "") index += 2
+    counts.set(key, { additions: countOf(additions), deletions: countOf(deletions) })
+  }
+  return counts
+}
+
+export function parseTree(text: string): TreeEntryAt[] {
+  return text
+    .split("\0")
+    .filter((line) => line !== "")
+    .flatMap((line) => {
+      const [meta = "", path = ""] = line.split("\t")
+      const [mode = "", type = "", sha = "", size = ""] = meta.split(/\s+/)
+      return type === "blob" ? [{ path, type, sha, size: countOf(size), mode }] : []
+    })
 }
 
 export class GitFiles implements GitHistory {
@@ -66,12 +127,24 @@ export class GitFiles implements GitHistory {
     return this.git("diff", base, head, "--", path)
   }
 
-  async changes(): Promise<ChangeAt[]> {
-    throw new Error("changes is not implemented yet")
+  renameDiff(base: string, head: string, previousPath: string, path: string): Promise<string> {
+    return this.git("diff", "-M", base, head, "--", previousPath, path)
   }
 
-  async tree(): Promise<TreeEntryAt[]> {
-    throw new Error("tree is not implemented yet")
+  async changes(base: string, head: string): Promise<ChangeAt[]> {
+    const [names, numbers] = await Promise.all([
+      this.git("diff", "-M", "--name-status", "-z", base, head),
+      this.git("diff", "-M", "--numstat", "-z", base, head),
+    ])
+    const counts = parseNumstat(numbers)
+    return parseNameStatus(names).map((change) => ({
+      ...change,
+      ...(counts.get(change.path) ?? { additions: 0, deletions: 0 }),
+    }))
+  }
+
+  async tree(sha: string): Promise<TreeEntryAt[]> {
+    return parseTree(await this.git("ls-tree", "-r", "-l", "-z", sha))
   }
 }
 
