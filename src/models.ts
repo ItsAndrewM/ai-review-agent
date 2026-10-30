@@ -4,12 +4,11 @@ import {
   type AssistantMessage,
   type Message,
   type Model,
-  type ModelThinkingLevel,
   type Provider,
   type TranscriptContext,
 } from "@earendil-works/pi-ai"
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
-import { Type } from "typebox"
+import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import { BUDGET_REFUSAL } from "./review/budget.ts"
 import { ReviewSubmission, SummarySubmission } from "./review/findings.ts"
@@ -122,7 +121,9 @@ const ThinkingLevelSetting = Type.Union([
   Type.Literal("max"),
 ])
 
-export function reviewThinkingLevel(setting: string): ModelThinkingLevel {
+export type ThinkingLevelSetting = Static<typeof ThinkingLevelSetting>
+
+export function reviewThinkingLevel(setting: string): ThinkingLevelSetting {
   if (Value.Check(ThinkingLevelSetting, setting)) return setting
   throw new Error(
     `REVIEW_THINKING_LEVEL is "${setting}"; it must be one of off, minimal, low, medium, high, xhigh or max.`,

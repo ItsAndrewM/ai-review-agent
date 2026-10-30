@@ -10,12 +10,9 @@ import {
 } from "../../src/review/tools.ts"
 import { createVerifyExtension, VERIFY_TOOL_BUDGET, type VerifyHost } from "../../src/review/verify-tools.ts"
 import { VerdictsSubmission, type VerdictInput } from "../../src/review/verify.ts"
+import type { ReplaySource } from "../replay/snapshot.ts"
 
-export interface ReplaySource {
-  readFile(args: ReadFileArgs): Promise<string>
-  grep(args: GrepArgs): Promise<string>
-  tree(args: TreeArgs): Promise<string>
-}
+export type { ReplaySource } from "../replay/snapshot.ts"
 
 export class ReplayTools {
   readonly #source: ReplaySource

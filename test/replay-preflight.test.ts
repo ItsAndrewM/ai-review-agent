@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { checkWorkersAiAccess } from "../tools/verify-replay/preflight.ts"
+import { checkWorkersAiAccess } from "../tools/replay/preflight.ts"
 
 describe("checkWorkersAiAccess", () => {
   it("accepts an authorized Workers AI model search", async () => {

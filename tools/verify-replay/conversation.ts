@@ -1,7 +1,7 @@
 import type { AssistantMessage, Context, ToolCall } from "@earendil-works/pi-ai"
 import { errorText } from "../../src/log.ts"
 import { parseVerdictsText, type VerdictInput } from "../../src/review/verify.ts"
-import { ReplaySpendCapError } from "./budget.ts"
+import { ReplaySpendCapError } from "../replay/budget.ts"
 import { ReplayTools } from "./tools.ts"
 
 const MAX_TURNS = 16

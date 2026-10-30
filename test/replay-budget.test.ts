@@ -3,7 +3,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fauxAssistantMessage, fauxText } from "@earendil-works/pi-ai"
 import { afterEach, describe, expect, it } from "vitest"
-import { ReplaySpendCapError, SpendBudget, requirePricedModel } from "../tools/verify-replay/budget.ts"
+import { ReplaySpendCapError, SpendBudget, requirePricedModel } from "../tools/replay/budget.ts"
 import { attemptReplay } from "../tools/verify-replay/conversation.ts"
 import { ReplayTools } from "../tools/verify-replay/tools.ts"
 

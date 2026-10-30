@@ -5,11 +5,13 @@ import { cloudflareWorkersAIProvider } from "@earendil-works/pi-ai/providers/clo
 import { outputLimitOf, reviewThinkingLevel } from "../../src/models.ts"
 import { renderSkillWithResources, buildSkillManifest, manifestSource } from "../../src/review/skills.ts"
 import { verifyPrompt, type VerdictInput } from "../../src/review/verify.ts"
-import { SpendBudget, requirePricedModel } from "./budget.ts"
-import { GitFiles, replayContexts, replaySource } from "./checkout.ts"
+import { SpendBudget, requirePricedModel } from "../replay/budget.ts"
+import { GitFiles } from "../replay/git.ts"
+import { checkWorkersAiAccess } from "../replay/preflight.ts"
+import { snapshotSource } from "../replay/snapshot.ts"
+import { replayContexts } from "./checkout.ts"
 import { attemptReplay, type ReplayAnswer } from "./conversation.ts"
 import { corpusProblems } from "./coverage.ts"
-import { checkWorkersAiAccess } from "./preflight.ts"
 import { parseSet, type LabelledFinding } from "./schema.ts"
 import { fixedByMajority, scoreRuns, type RunVerdicts } from "./score.ts"
 import { ReplayTools } from "./tools.ts"
@@ -134,7 +136,7 @@ async function measure(
       const first = group[0]
       if (first === undefined) continue
       const contexts = await replayContexts(group, files)
-      const source = await replaySource(first.head, first.base, files)
+      const source = await snapshotSource(first.head, first.base, files)
       const tools = new ReplayTools(source)
       const answer = await attemptReplay(system, verifyPrompt(contexts), tools, (context) => {
         const maxTokens = outputLimitOf(process.env.MAX_OUTPUT_TOKENS ?? "16000")
