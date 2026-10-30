@@ -1,7 +1,7 @@
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderChanges, renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
 import { shortSha } from "../sha.ts"
-import type { Rejected } from "./findings.ts"
+import type { FindingInput, Rejected } from "./findings.ts"
 import type { OpenThread, ThreadLists } from "./incremental.ts"
 import type { LinkedIssue } from "./linked-issues.ts"
 
@@ -235,6 +235,14 @@ export interface ThreadQuestion {
   line: number | null
   diffHunk: string
   opening: string | undefined
+  severity: FindingInput["severity"] | undefined
+  title: string | undefined
+  headSha: string
+}
+
+function findingLine(thread: ThreadQuestion): string {
+  if (thread.severity === undefined || thread.title === undefined) return ""
+  return `The thread is andabot's ${thread.severity} finding "${thread.title}"; the head is now \`${shortSha(thread.headSha)}\`.\n\n`
 }
 
 export function threadAnswerPrompt(author: string, text: string, skill: string, thread: ThreadQuestion): string {
@@ -244,7 +252,7 @@ export function threadAnswerPrompt(author: string, text: string, skill: string, 
       : `on \`${thread.path}\` line ${thread.line}`
   const fence = fenceFor(thread.diffHunk)
   const opening = thread.opening === undefined ? "" : `The thread opens with this comment:\n\n${thread.opening}\n\n`
-  return `${skill}\n\n${author} replies in a review thread ${where}:\n\n${fence}diff\n${thread.diffHunk}\n${fence}\n\n${opening}${author}'s reply:\n\n${text}\n\nAnswer them directly, in text.`
+  return `${skill}\n\n${author} replies in a review thread ${where}:\n\n${fence}diff\n${thread.diffHunk}\n${fence}\n\n${opening}${findingLine(thread)}${author}'s reply:\n\n${text}\n\nAnswer them directly, in text.`
 }
 
 export function fenceFor(text: string): string {

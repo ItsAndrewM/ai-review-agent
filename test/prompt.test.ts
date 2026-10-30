@@ -468,6 +468,9 @@ describe("threadAnswerPrompt", () => {
     line: 12,
     diffHunk: "@@ -10,3 +10,3 @@\n-a\n+b",
     opening: "**🔴 Blocking: x**\n\nThe caller drops it.",
+    severity: undefined,
+    title: undefined,
+    headSha: "abc1234def",
   }
 
   it("puts the thread's file, line, hunk and opening comment before the question", () => {
@@ -478,6 +481,21 @@ describe("threadAnswerPrompt", () => {
     )
     expect(text).toContain("The thread opens with this comment:\n\n**🔴 Blocking: x**")
     expect(text.endsWith("why?\n\nAnswer them directly, in text.")).toBe(true)
+  })
+
+  it("names the finding's severity and title and the head's sha when the finding is known, and neither when it isn't", () => {
+    const known = { ...thread, severity: "blocking" as const, title: "The caller drops it", headSha: "abc1234def" }
+    const text = threadAnswerPrompt("andrew", "fixed in abc1234", skill, known)
+    expect(text).toContain(
+      'The thread is andabot\'s blocking finding "The caller drops it"; the head is now `abc1234`.',
+    )
+    const unknown = threadAnswerPrompt("andrew", "why?", skill, {
+      ...thread,
+      severity: undefined,
+      title: undefined,
+      headSha: "abc1234def",
+    })
+    expect(unknown).not.toContain("the head is now")
   })
 
   it("calls a thread with no line outdated", () => {

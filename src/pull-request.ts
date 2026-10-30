@@ -2660,6 +2660,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
             line: incoming.thread.line,
             diffHunk: incoming.thread.diffHunk,
             opening: thread?.firstCommentBody,
+            severity: undefined,
+            title: undefined,
+            headSha: (await this.pullRequest()).head.sha,
           })
         : answerPrompt(incoming.author, text, skill)
       const result = await this.harness.prompt(prompt, { operationId })
