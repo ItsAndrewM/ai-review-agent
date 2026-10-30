@@ -131,6 +131,9 @@ describe("checkText and refusalText", () => {
     expect(checkText({ name: "lint", paths: [], outcome: exited(0, "", false), ms: 1300 })).toBe(
       "lint exited 0 in 1.3s\n\n(no output)",
     )
+    expect(checkText({ name: "lint", paths: [], outcome: exited(0, "", false), ms: 450 })).toBe(
+      "lint exited 0 in 450 ms\n\n(no output)",
+    )
     expect(checkText({ name: "test", paths: [], outcome: exited(0, "x", true), ms: 1000 })).toContain(
       "(output cut to its last 8 KiB)",
     )
