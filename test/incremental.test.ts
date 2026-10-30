@@ -42,6 +42,7 @@ import {
   isTestPath,
   matchesThreadFile,
   MOST_LISTED_THREADS,
+  stillOpen,
 } from "../src/review/incremental.ts"
 import { holdsApprovalBack } from "../src/review/render.ts"
 
@@ -970,5 +971,33 @@ describe("matching a thread's file", () => {
     expect(matchesThreadFile("src/review/cost.ts", "test/cost.test.ts")).toBe(true)
     expect(matchesThreadFile("src/review/cost.ts", "test/other.test.ts")).toBe(false)
     expect(matchesThreadFile("src/review/cost.ts", "src/cost.ts")).toBe(false)
+  })
+})
+
+describe("stillOpen", () => {
+  const liveThread = (id: string, resolved: boolean): ReviewThread => ({
+    id,
+    resolved,
+    outdated: false,
+    path: "a.ts",
+    line: 3,
+    side: "RIGHT",
+    firstCommentId: 1,
+    firstCommentBody: "**🟡 Suggestion: x**",
+    authorLogin: "andabot",
+    authorIsBot: true,
+  })
+
+  it("keeps a thread the live list shows open, and sets aside one it shows resolved", () => {
+    const addressed = [open("T1", { threadId: "id-1" }), open("T2", { threadId: "id-2" })]
+    const { open: stillThere, closed } = stillOpen(addressed, [liveThread("id-1", false), liveThread("id-2", true)])
+    expect(stillThere.map((t) => t.handle)).toEqual(["T1"])
+    expect(closed.map((t) => t.handle)).toEqual(["T2"])
+  })
+
+  it("counts a thread the live list lacks as open, since the read is a snapshot, not an oracle", () => {
+    const { open: stillThere, closed } = stillOpen([open("T3", { threadId: "id-3" })], [])
+    expect(stillThere.map((t) => t.handle)).toEqual(["T3"])
+    expect(closed).toEqual([])
   })
 })

@@ -370,6 +370,19 @@ export function addressedThreads(
   return { resolve, unknown }
 }
 
+export interface ThreadPartition {
+  open: OpenThread[]
+  closed: OpenThread[]
+}
+
+export function stillOpen(threads: readonly OpenThread[], live: readonly ReviewThread[]): ThreadPartition {
+  const resolvedIds = new Set(live.filter((thread) => thread.resolved).map((thread) => thread.id))
+  return {
+    open: threads.filter((thread) => !resolvedIds.has(thread.threadId)),
+    closed: threads.filter((thread) => resolvedIds.has(thread.threadId)),
+  }
+}
+
 export async function resolveThreads(
   resolver: ThreadResolver,
   threads: readonly OpenThread[],
