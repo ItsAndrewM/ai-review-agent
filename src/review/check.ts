@@ -45,12 +45,12 @@ export function postedCheckRun(
 }
 
 export function postedEarlierCheckRun(
-  posted: Pick<PostedReview, "reviewId" | "event" | "counts" | "unverified">,
+  posted: Pick<PostedReview, "reviewId" | "event" | "shown" | "counts" | "unverified">,
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  const verdictTitle =
-    posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
+  const shown = posted.shown ?? posted.event
+  const verdictTitle = posted.counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, posted.counts)
   const title = markedUnverified(verdictTitle, posted.unverified === true)
   const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
   const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`

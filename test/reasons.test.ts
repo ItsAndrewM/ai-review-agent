@@ -50,6 +50,18 @@ describe("checkReasons", () => {
     ])
   })
 
+  it("rejects a blank requirement and a blank not_for_merging quote, which would otherwise match anything", () => {
+    const checked = checkReasons(
+      { omitted_requirements: [{ issue: 121, requirement: "  " }], not_for_merging: " \t" },
+      sources,
+    )
+    expect(checked.accepted).toEqual([])
+    expect(checked.rejected).toEqual([
+      "omitted requirement for #121: the requirement is blank; quote the issue's requirement or drop it",
+      'not_for_merging " \t": not found in the title or description; quote a line from them exactly, or omit it',
+    ])
+  })
+
   it("reads an absent omitted_requirements as none", () => {
     expect(checkReasons({}, sources)).toEqual({ accepted: [], rejected: [] })
   })

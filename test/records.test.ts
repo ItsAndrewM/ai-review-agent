@@ -42,6 +42,12 @@ describe("PostedReview", () => {
     expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, suggestion: 2, nitpick: 0 } })).toBe(true)
   })
 
+  it("accepts the verdict the review showed, and refuses one a summary can't show", () => {
+    expect(Value.Check(PostedReview, { ...posted, shown: "WITHHELD" })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, shown: "AWAITING_CHECKS" })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, shown: "approve" })).toBe(false)
+  })
+
   it("accepts the counts with the major grade, and without it from before the grade existed", () => {
     expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, major: 1, suggestion: 2, nitpick: 0 } })).toBe(
       true,

@@ -116,7 +116,7 @@ export const ReviewSubmission = Type.Object({
   omitted_requirements: Type.Optional(
     Type.Array(OmittedRequirement, {
       description:
-        "Each requirement of a linked issue the diff leaves out, in the issue's words, with the issue's number; [] when none.",
+        "Each requirement of a linked issue the diff leaves out, in the issue's words, with the issue's number, listed here even when the summary also names it; [] when none. The host withholds approval for each entry.",
     }),
   ),
   not_for_merging: Type.Optional(

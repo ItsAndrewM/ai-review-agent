@@ -1237,6 +1237,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const posted: PostedReview = {
       reviewId: review.id,
       event,
+      shown: verdict,
       at: Date.now(),
       counts: countBySeverity(scoped.accepted),
       spend,
@@ -1648,15 +1649,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         pending === undefined ? { pending: false } : { pending: true, fingerprint: pending.repoSkillsFingerprint },
         skipped,
       )
-      this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
-        this.reportActivation(name),
+      this.#catalog = await installCatalog(
+        this.registry,
+        this.#catalog,
+        sources,
+        skillsExtension,
+        (name, conversationId) => this.reportActivation(name, conversationId),
       )
     } catch (error) {
       logError("skills.restore_failed", { number, error: errorText(error) })
     }
   }
 
-  private async reportActivation(name: string): Promise<void> {
+  private async reportActivation(name: string, conversationId: ConversationId | undefined): Promise<void> {
     this.#activated.push(name)
     log("skills.activated", {
       number: await this.storedNumber(),
@@ -1664,7 +1669,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       name,
     })
     try {
-      const pending = await this.readPending()
+      const pending = await this.reviewActivating(conversationId)
       if (pending === undefined) return
       await this.ctx.storage.put<PendingReview>("pending", {
         ...pending,
@@ -1673,6 +1678,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } catch (error) {
       logError("skills.activation_unrecorded", { name, error: errorText(error) })
     }
+  }
+
+  private async reviewActivating(conversationId: ConversationId | undefined): Promise<PendingReview | undefined> {
+    if (conversationId === undefined) return undefined
+    const root = (await this.harness.conversation(ROOT_SESSION)).id
+    if (conversationId !== root) return undefined
+    const pending = await this.readPending()
+    if (pending === undefined) return undefined
+    return (await this.reviewIsRunning(pending)) ? pending : undefined
   }
 
   private async storedNumber(): Promise<number | undefined> {
@@ -1905,8 +1919,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       BACKGROUND_CONTEXT,
     )
     const sources = catalogFor(source, skills.offered)
-    this.#catalog = await installCatalog(this.registry, this.#catalog, sources, skillsExtension, (name) =>
-      this.reportActivation(name),
+    this.#catalog = await installCatalog(
+      this.registry,
+      this.#catalog,
+      sources,
+      skillsExtension,
+      (name, conversationId) => this.reportActivation(name, conversationId),
     )
     return (await root.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
   }

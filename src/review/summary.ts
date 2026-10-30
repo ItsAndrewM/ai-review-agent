@@ -55,7 +55,7 @@ export function summarizedRecord(
   summary: SummarySubmissionInput,
   files: readonly ChangedFile[],
 ): SummarizedRecord {
-  return {
+  const record: SummarizedRecord = {
     headSha: reviewed.headSha,
     baseRef: reviewed.baseRef,
     at: reviewed.at,
@@ -64,6 +64,8 @@ export function summarizedRecord(
     walkthrough: summarizedRows(reviewed.walkthrough, summary.walkthrough, files),
     merge_danger: summary.merge_danger,
   }
+  if (reviewed.omitted !== undefined) record.omitted = reviewed.omitted
+  return record
 }
 
 function summarizedRows(

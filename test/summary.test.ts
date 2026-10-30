@@ -87,6 +87,14 @@ describe("summarizedRecord", () => {
     merge_danger: { door: "two-way", blast_radius: "one module" },
   } satisfies SummarySubmissionInput
 
+  it("keeps the omitted requirements the last review carried, so the next incremental review still re-checks them", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    const record = summarizedRecord({ ...reviewed, omitted }, written, files)
+    expect(record.omitted).toEqual(omitted)
+    expect(record).not.toHaveProperty("since")
+    expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("omitted")
+  })
+
   it("replaces the summary, walkthrough and merge danger, drops the since section and keeps the head", () => {
     expect(summarizedRecord(reviewed, written, files)).toStrictEqual({
       headSha: "abc",

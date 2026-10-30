@@ -1,18 +1,10 @@
 import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
-import { SeverityCounts } from "../records.ts"
+import { SeverityCounts, ShownVerdict } from "../records.ts"
 import { configStatus, requestChangesWorkflow, type ConfigRead, type ReviewTrigger } from "../repository/config.ts"
 import { countBySeverity, type FindingInput, type Rejected } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
 import { holdsApprovalBack, type Verdict } from "./render.ts"
-
-export const ShownVerdict = Type.Union([
-  Type.Literal("APPROVE"),
-  Type.Literal("REQUEST_CHANGES"),
-  Type.Literal("COMMENT"),
-  Type.Literal("AWAITING_CHECKS"),
-  Type.Literal("WITHHELD"),
-])
 
 export const LastReview = Type.Object({
   reviewId: Type.Integer(),

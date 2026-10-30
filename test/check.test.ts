@@ -82,6 +82,18 @@ describe("postedEarlierCheckRun", () => {
     })
   })
 
+  it("titles the run with the verdict the review showed, so a withheld or waiting review isn't retitled Commented", () => {
+    const withheld = {
+      reviewId: 9,
+      event: "COMMENT" as const,
+      shown: "WITHHELD" as const,
+      counts: countOf(["suggestion"]),
+    }
+    expect(postedEarlierCheckRun(withheld, undefined, at).output.title).toBe("Approval withheld: 1 suggestion")
+    const waiting = { reviewId: 9, event: "COMMENT" as const, shown: "AWAITING_CHECKS" as const }
+    expect(postedEarlierCheckRun(waiting, undefined, at).output.title).toBe("Approval waits for the checks")
+  })
+
   it("titles the run with the verdict alone for a record from before reviews stored their counts", () => {
     expect(postedEarlierCheckRun({ reviewId: 9, event: "APPROVE" }, "https://example.test", at).output.title).toBe(
       "Approved",

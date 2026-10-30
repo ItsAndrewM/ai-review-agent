@@ -14,6 +14,14 @@ export const SummaryCommentId = Type.Integer()
 
 export const StoredSessionId = Type.String()
 
+export const ShownVerdict = Type.Union([
+  Type.Literal("APPROVE"),
+  Type.Literal("REQUEST_CHANGES"),
+  Type.Literal("COMMENT"),
+  Type.Literal("AWAITING_CHECKS"),
+  Type.Literal("WITHHELD"),
+])
+
 export const SeverityCounts = Type.Object({
   blocking: Type.Integer(),
   major: Type.Optional(Type.Integer()),
@@ -37,6 +45,7 @@ export type CheckRecord = Static<typeof CheckRecord>
 export const PostedReview = Type.Object({
   reviewId: Type.Integer(),
   event: Type.Union([Type.Literal("APPROVE"), Type.Literal("REQUEST_CHANGES"), Type.Literal("COMMENT")]),
+  shown: Type.Optional(ShownVerdict),
   at: Type.Integer(),
   fingerprint: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),

@@ -43,6 +43,9 @@ export function checkReasons(submission: ReasonFields, sources: ReasonSources): 
 }
 
 function omittedProblem(omitted: OmittedRequirementInput, linkedIssues: readonly number[]): string | undefined {
+  if (omitted.requirement.trim() === "") {
+    return `omitted requirement for #${omitted.issue}: the requirement is blank; quote the issue's requirement or drop it`
+  }
   if (linkedIssues.length === 0) {
     return `omitted requirement for #${omitted.issue}: no issue is linked to this pull request, so nothing can be omitted; drop omitted_requirements`
   }
@@ -53,6 +56,7 @@ function omittedProblem(omitted: OmittedRequirementInput, linkedIssues: readonly
 
 function quotedFrom(quote: string, sources: ReasonSources): boolean {
   const needle = comparable(quote)
+  if (needle === "") return false
   return comparable(sources.title).includes(needle) || comparable(sources.body ?? "").includes(needle)
 }
 

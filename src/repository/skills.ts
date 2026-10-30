@@ -1,4 +1,10 @@
-import type { Extension, Registry, ToolExecutionResult, ToolRegistration } from "@earendil-works/pi-durable"
+import type {
+  ConversationId,
+  Extension,
+  Registry,
+  ToolExecutionResult,
+  ToolRegistration,
+} from "@earendil-works/pi-durable"
 import type { SkillManifestEntry, SkillSource } from "agents/skills"
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
@@ -71,7 +77,7 @@ export type RestoreGuard = { pending: false } | { pending: true; fingerprint: st
 
 export type ReportSkippedRestore = (records: number, reason: "records" | "fingerprint") => void
 
-export type ReportActivation = (name: string) => void | Promise<void>
+export type ReportActivation = (name: string, conversationId: ConversationId | undefined) => void | Promise<void>
 
 type SkillContext = Pick<RepositoryContext, "tree" | "files">
 
@@ -458,15 +464,19 @@ export const withActivationReport =
   ) =>
   async (...args: Args): Promise<ToolExecutionResult | ContentOnlyResult> => {
     const result = await execute(...args)
-    if (Value.Check(ACTIVATION_ARGS, args[0]) && activated(result)) await report(args[0].name)
+    if (Value.Check(ACTIVATION_ARGS, args[0]) && activated(result)) await report(args[0].name, args[1]?.conversationId)
     return result
   }
 
-const SKILL_NOT_FOUND = "Skill not found:"
+export const SKILL_NOT_FOUND = "Skill not found:"
 
 function activated(result: ToolExecutionResult | ContentOnlyResult): boolean {
-  const parts = Value.Check(ContentOnlyResult, result) ? result.content : (result.output ?? [])
-  return !parts.some((part) => Value.Check(TextPart, part) && part.text.startsWith(SKILL_NOT_FOUND))
+  if (Value.Check(ContentOnlyResult, result)) return !saysNotFound(result.content)
+  return result.isError !== true && !saysNotFound(result.output ?? [])
+}
+
+function saysNotFound(parts: readonly unknown[]): boolean {
+  return parts.some((part) => Value.Check(TextPart, part) && part.text.startsWith(SKILL_NOT_FOUND))
 }
 
 const toolWithOutput = (tool: ToolRegistration, report: ReportActivation): ToolRegistration => {
