@@ -12,6 +12,7 @@ import {
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
 import { pairingProblem, standardBasisProblem, type BasisContext } from "./basis.ts"
+import { OmittedRequirement } from "./reasons.ts"
 
 export const Severity = Type.Union([
   Type.Literal("blocking"),
@@ -112,10 +113,19 @@ export const ReviewSubmission = Type.Object({
   }),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
-  verdict: Type.Union([Type.Literal("approve"), Type.Literal("request_changes"), Type.Literal("comment")], {
-    description:
-      "approve when nothing blocking remains and the change is sound; request_changes when any finding is blocking; comment otherwise.",
-  }),
+  omitted_requirements: Type.Optional(
+    Type.Array(OmittedRequirement, {
+      description:
+        "Each requirement of a linked issue the diff leaves out, in the issue's words, with the issue's number; [] when none.",
+    }),
+  ),
+  not_for_merging: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "A line from the title or description that asks not to merge this pull request yet, quoted exactly; omit when there is none.",
+    }),
+  ),
   merge_danger: MergeDanger,
   addressed_threads: Type.Optional(
     Type.Array(

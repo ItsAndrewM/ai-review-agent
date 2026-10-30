@@ -2,7 +2,7 @@ import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
 import { SeverityCounts } from "../records.ts"
 import { configStatus, requestChangesWorkflow, type ConfigRead, type ReviewTrigger } from "../repository/config.ts"
-import { countBySeverity, type FindingInput, type Rejected, type ReviewSubmissionInput } from "./findings.ts"
+import { countBySeverity, type FindingInput, type Rejected } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
 import { holdsApprovalBack, type Verdict } from "./render.ts"
 
@@ -11,6 +11,7 @@ export const ShownVerdict = Type.Union([
   Type.Literal("REQUEST_CHANGES"),
   Type.Literal("COMMENT"),
   Type.Literal("AWAITING_CHECKS"),
+  Type.Literal("WITHHELD"),
 ])
 
 export const LastReview = Type.Object({
@@ -23,6 +24,7 @@ export const LastReview = Type.Object({
   shown: Type.Optional(ShownVerdict),
   counts: Type.Optional(SeverityCounts),
   heldBack: Type.Integer(),
+  withheld: Type.Optional(Type.Integer()),
   at: Type.Integer(),
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
 })
@@ -78,7 +80,7 @@ export interface ReviewFacts {
   reviewId: number
   event: ReviewEvent
   headSha: string
-  verdict: ReviewSubmissionInput["verdict"]
+  withheld: number
   shown: Verdict
   accepted: readonly FindingInput[]
   rejected: readonly Rejected[]
@@ -141,8 +143,9 @@ function checksWait(checks: ChecksState): DecidedWait | undefined {
 }
 
 export function awaitsApproval(last: LastReview): boolean {
-  if (last.heldBack > 0) return false
-  return last.event === "REQUEST_CHANGES" || (last.event === "COMMENT" && last.verdict === "approve")
+  if (last.heldBack > 0 || (last.withheld ?? 0) > 0) return false
+  if (last.event === "REQUEST_CHANGES") return true
+  return last.event === "COMMENT" && (last.shown === "AWAITING_CHECKS" || last.verdict === "approve")
 }
 
 export function checksState(runs: readonly CheckRunSummary[], botLogin: string): Exclude<ChecksState, "unknown"> {
@@ -169,10 +172,10 @@ export function lastReviewOf(facts: ReviewFacts): LastReview {
     reviewId: facts.reviewId,
     event: facts.event,
     headSha: facts.headSha,
-    verdict: facts.verdict,
     shown: facts.shown,
     counts: countBySeverity(facts.accepted),
     heldBack: facts.rejected.filter(holdsApprovalBack).length,
+    withheld: facts.withheld,
     at: facts.at,
     requestChangesWorkflow: facts.requestChangesWorkflow,
   }
@@ -210,12 +213,12 @@ export function evaluatesReviewedHead(pr: PullRequestStanding, trigger: ReviewTr
   return trigger === "push" && pr.state === "open" && pr.draft !== true
 }
 
-export function verdictAfterChecks(event: ReviewEvent, checks: ChecksState | undefined): Verdict {
-  return event === "APPROVE" && checks !== "passing" ? "AWAITING_CHECKS" : event
+export function verdictAfterChecks(verdict: Verdict, checks: ChecksState | undefined): Verdict {
+  return verdict === "APPROVE" && checks !== "passing" ? "AWAITING_CHECKS" : verdict
 }
 
-export function evaluatesAfterReview(event: ReviewEvent, accepted: readonly FindingInput[]): boolean {
-  return event !== "APPROVE" && countBySeverity(accepted).blocking === 0
+export function evaluatesAfterReview(last: LastReview, accepted: readonly FindingInput[]): boolean {
+  return awaitsApproval(last) && countBySeverity(accepted).blocking === 0
 }
 
 export const RecheckJob = Type.Object({

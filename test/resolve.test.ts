@@ -70,10 +70,11 @@ describe("resolveRefusal", () => {
 })
 
 describe("approvalNote", () => {
-  const waiting = (reason: WaitReason, heldBack = 0) => approvalNote({ kind: "wait", reason }, heldBack, "andabot")
+  const waiting = (reason: WaitReason, heldBack = 0, withheld = 0) =>
+    approvalNote({ kind: "wait", reason }, { heldBack, withheld }, "andabot")
 
   it("says what approval does next", () => {
-    expect(approvalNote({ kind: "approved", head: "def5678901" }, 0, "andabot")).toBe("Approved `def5678`.")
+    expect(approvalNote({ kind: "approved", head: "def5678901" }, undefined, "andabot")).toBe("Approved `def5678`.")
     expect(waiting("paused")).toBe("Approval waits until `@andabot resume`.")
     expect(waiting("review_stands", 1)).toBe(
       "Approval still waits: my last review holds back 1 blocking finding that isn't in a thread; push a fix or ask for a `full review`.",
@@ -83,13 +84,23 @@ describe("approvalNote", () => {
     )
     expect(waiting("review_stands", 0)).toBe("Approval waits for my next review, since my last one only commented.")
     expect(waiting("workflow_off")).toBeUndefined()
-    expect(approvalNote({ kind: "failed", transient: false }, 0, "andabot")).toBe(
+    expect(approvalNote({ kind: "failed", transient: false }, undefined, "andabot")).toBe(
       "I couldn't check approval this time.",
     )
   })
 
+  it("says the last review withheld approval, unless it also holds a finding back", () => {
+    expect(waiting("review_stands", 0, 2)).toBe(
+      "Approval waits for my next review, since my last one withheld it; its body says why.",
+    )
+    expect(waiting("review_stands", 1, 2)).toContain("holds back 1 blocking finding")
+    expect(approvalNote({ kind: "wait", reason: "review_stands" }, undefined, "andabot")).toBe(
+      "Approval waits for my next review, since my last one only commented.",
+    )
+  })
+
   it("names the bot that has to resume", () => {
-    expect(approvalNote({ kind: "wait", reason: "paused" }, 0, "reviewer-bot")).toBe(
+    expect(approvalNote({ kind: "wait", reason: "paused" }, undefined, "reviewer-bot")).toBe(
       "Approval waits until `@reviewer-bot resume`.",
     )
   })

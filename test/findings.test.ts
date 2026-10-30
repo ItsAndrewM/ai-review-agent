@@ -16,9 +16,10 @@ import {
   type FindingInput,
   type ReviewSubmissionInput,
 } from "../src/review/findings.ts"
+import type { ApprovalReason } from "../src/review/reasons.ts"
 import {
   approvalBody,
-  chooseReviewEvent,
+  decideReviewVerdict,
   holdsBlocking,
   incompleteNote,
   mergeWalkthrough,
@@ -30,7 +31,9 @@ import {
   SUMMARY_MARKER,
   withApprovedVerdict,
   MOST_CHECK_TAIL_BLOCKS,
+  VERDICT_LABEL,
   type ChecksDisplay,
+  type ReviewDecisionInput,
   type VerifyDisplay,
 } from "../src/review/render.ts"
 import type { Changed, VerifyReport } from "../src/review/verify.ts"
@@ -42,7 +45,6 @@ const base: ReviewSubmissionInput = {
   summary: "s",
   walkthrough: [],
   findings: [],
-  verdict: "approve",
   merge_danger: { door: "two-way", blast_radius: "one module" },
 }
 
@@ -551,7 +553,9 @@ describe("basis", () => {
     const standard = finding({ basis_kind: "standard", basis: "Feature Envy", quote: "const c = 4;" })
     const { rejected } = validateFindings([standard], commentable, context())
     expect(rejected).toEqual([{ finding: standard, reason: BLOCKING_STANDARD_OR_TEST, unfounded: true }])
-    expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
+    expect(decideReviewVerdict({ accepted: [], rejected, workflow: true, openBlocking: 0, reasons: [] })).toBe(
+      "APPROVE",
+    )
   })
 
   it("renders the basis after the body and before the suggestion", () => {
@@ -595,7 +599,6 @@ describe("parseWrittenReview", () => {
     summary: "Changes b from 2 to 3.",
     walkthrough: [{ path: "src/x.ts", summary: "b is now 3." }],
     findings: [finding({ severity: "suggestion", body: "Name it:\n```ts\nconst three = 3\n```" })],
-    verdict: "comment",
     merge_danger: { door: "two-way", blast_radius: "one module" },
   } satisfies ReviewSubmissionInput
   const submittedJson = JSON.stringify(submitted, null, 2)
@@ -630,8 +633,8 @@ describe("parseWrittenReview", () => {
   })
 
   it("holds back JSON that doesn't fit ReviewSubmission and says where it fails", () => {
-    const written = parseWrittenReview(JSON.stringify({ ...submitted, verdict: "approved" }))
-    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("/verdict") })
+    const written = parseWrittenReview(JSON.stringify({ ...submitted, merge_danger: { door: "revolving" } }))
+    expect(written).toEqual({ kind: "unfit", problem: expect.stringContaining("/merge_danger") })
   })
 
   it('holds back an approval with no walkthrough, the shell gpt-oss-120b put around "Review submitted." when held to JSON', () => {
@@ -698,6 +701,20 @@ describe("the major grade", () => {
     ).toBe(false)
   })
 
+  it("takes the linked-issue requirements the diff leaves out, each with its issue, and a not-for-merging line", () => {
+    const rows = [{ path: "src/x.ts", summary: "s" }]
+    const withReasons = {
+      ...base,
+      walkthrough: rows,
+      omitted_requirements: [{ issue: 121, requirement: "Unit tests cover the basis check" }],
+      not_for_merging: "Not for merging",
+    }
+    expect(Value.Check(ReviewSubmission, withReasons)).toBe(true)
+    expect(Value.Check(ReviewSubmission, { ...withReasons, omitted_requirements: [{ issue: 121 }] })).toBe(false)
+    expect(Value.Check(ReviewSubmission, { ...withReasons, not_for_merging: "" })).toBe(false)
+    expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows })).toBe(true)
+  })
+
   it("labels a major finding 🟠 Major", () => {
     expect(toReviewComment(finding({ severity: "major" })).body).toMatch(/^\*\*🟠 Major: b changed\*\*/)
   })
@@ -733,29 +750,59 @@ describe("the major grade", () => {
   })
 })
 
-describe("chooseReviewEvent", () => {
-  it("requests changes on a blocking finding, approves a clean approve verdict, else comments", () => {
-    expect(chooseReviewEvent(base, [finding()], [], true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(base, [finding({ severity: "nitpick" })], [], true)).toBe("APPROVE")
-    expect(chooseReviewEvent({ ...base, verdict: "comment" }, [], [], true)).toBe("COMMENT")
-    expect(chooseReviewEvent(base, [finding()], [], false)).toBe("COMMENT")
-  })
+describe("decideReviewVerdict", () => {
+  const decide = (over: Partial<ReviewDecisionInput>) =>
+    decideReviewVerdict({ accepted: [], rejected: [], workflow: true, openBlocking: 0, reasons: [], ...over })
+  const omitted: ApprovalReason = {
+    kind: "omitted_requirement",
+    issue: 121,
+    requirement: "Unit tests cover the basis check",
+  }
+  const notForMerging: ApprovalReason = { kind: "not_for_merging", quote: "Not for merging" }
+  const budgetCut: ApprovalReason = { kind: "budget_cut", budget: 10_000 }
 
-  it("never approves while a blocking finding stands rejected, so a mis-anchored one still blocks", () => {
-    expect(chooseReviewEvent(base, [], [{ finding: finding(), reason: "r", unfounded: false }], true)).toBe(
-      "REQUEST_CHANGES",
-    )
-    expect(
-      chooseReviewEvent(base, [], [{ finding: finding({ severity: "nitpick" }), reason: "r", unfounded: false }], true),
-    ).toBe("APPROVE")
-  })
-
-  it("holds approval back for a blocking defect or spec finding rejected for anything but its basis", () => {
-    const rejectedAs = (kind: FindingInput["basis_kind"]) => [
-      { finding: finding({ basis_kind: kind }), reason: "r", unfounded: false },
+  it("approves nitpicks, suggestions and major findings, to wait for the checks", () => {
+    const accepted = [
+      finding({ severity: "nitpick" }),
+      finding({ severity: "major", line: 3, quote: "export { a, b };" }),
+      finding({ severity: "suggestion", basis_kind: "test", basis: "no test", line: 1, quote: "const a = 1;" }),
     ]
-    expect(chooseReviewEvent(base, [], rejectedAs("defect"), true)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(base, [], rejectedAs("spec"), true)).toBe("REQUEST_CHANGES")
+    expect(decide({ accepted })).toBe("APPROVE")
+    expect(decide({})).toBe("APPROVE")
+  })
+
+  it("requests changes on a blocking finding, posted or held back, or an open blocking thread", () => {
+    expect(decide({ accepted: [finding()] })).toBe("REQUEST_CHANGES")
+    expect(decide({ rejected: [{ finding: finding(), reason: "r", unfounded: false }] })).toBe("REQUEST_CHANGES")
+    expect(decide({ openBlocking: 2 })).toBe("REQUEST_CHANGES")
+  })
+
+  it("never lets a rejected finding that holds nothing back request changes", () => {
+    expect(decide({ rejected: [{ finding: finding(), reason: "r", unfounded: true }] })).toBe("APPROVE")
+    expect(decide({ rejected: [{ finding: finding({ severity: "nitpick" }), reason: "r", unfounded: false }] })).toBe(
+      "APPROVE",
+    )
+  })
+
+  it("withholds approval for an omitted requirement, a not-for-merging line or a budget cut", () => {
+    for (const reason of [omitted, notForMerging, budgetCut]) expect(decide({ reasons: [reason] })).toBe("WITHHELD")
+  })
+
+  it("requests changes over a reason when a blocking finding is there too", () => {
+    expect(decide({ accepted: [finding()], reasons: [omitted] })).toBe("REQUEST_CHANGES")
+    expect(decide({ openBlocking: 1, reasons: [budgetCut] })).toBe("REQUEST_CHANGES")
+  })
+
+  it("waits for the checks when the threads couldn't be read, unless a blocking finding posts", () => {
+    expect(decide({ openBlocking: "unknown" })).toBe("AWAITING_CHECKS")
+    expect(decide({ openBlocking: "unknown", reasons: [omitted] })).toBe("AWAITING_CHECKS")
+    expect(decide({ openBlocking: "unknown", accepted: [finding()] })).toBe("REQUEST_CHANGES")
+  })
+
+  it("comments when the workflow is off, whatever else holds", () => {
+    expect(decide({ workflow: false, accepted: [finding()] })).toBe("COMMENT")
+    expect(decide({ workflow: false, reasons: [omitted] })).toBe("COMMENT")
+    expect(decide({ workflow: false })).toBe("COMMENT")
   })
 
   it("never lets a blocking standard or test finding hold approval back, since validation rejects it for that grade", () => {
@@ -766,14 +813,14 @@ describe("chooseReviewEvent", () => {
     for (const rejectedFinding of blocking) {
       const { rejected } = validateFindings([rejectedFinding], commentable, context())
       expect(rejected.map((r) => r.reason)).toEqual([BLOCKING_STANDARD_OR_TEST])
-      expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
+      expect(decide({ rejected })).toBe("APPROVE")
     }
   })
 
-  it("approves an approve verdict when the only rejection is a spec finding on a pull request with no linked issue", () => {
+  it("approves when the only rejection is a spec finding on a pull request with no linked issue", () => {
     const { rejected } = validateFindings([specFinding()], commentable, context({ hasLinkedIssues: false }))
     expect(rejected).toEqual([{ finding: specFinding(), reason: NO_LINKED_ISSUE, unfounded: true }])
-    expect(chooseReviewEvent(base, [], rejected, true)).toBe("APPROVE")
+    expect(decide({ rejected })).toBe("APPROVE")
   })
 
   it("requests changes when the only rejection is a blocking defect finding whose quote matches no line", () => {
@@ -783,26 +830,72 @@ describe("chooseReviewEvent", () => {
       context({ hasLinkedIssues: false }),
     )
     expect(rejected.map((r) => r.unfounded)).toEqual([false])
-    expect(chooseReviewEvent(base, [], rejected, true)).toBe("REQUEST_CHANGES")
+    expect(decide({ rejected })).toBe("REQUEST_CHANGES")
+  })
+})
+
+describe("the reasons block of the review body", () => {
+  const reasons: ApprovalReason[] = [
+    { kind: "omitted_requirement", issue: 121, requirement: "Unit tests cover the basis check" },
+    { kind: "not_for_merging", quote: "Not for merging" },
+    { kind: "budget_cut", budget: 10_000 },
+  ]
+
+  it("says why approval is withheld when there are no findings", () => {
+    expect(renderReviewBody("WITHHELD", [], [], undefined, reasons)).toBe(
+      [
+        "No findings. Approval is withheld for the reasons below; a human review is still required to merge.",
+        "",
+        "Not approved because:",
+        "- #121 asks for “Unit tests cover the basis check”, and the diff leaves it out.",
+        "- The description says “Not for merging”.",
+        "- The review stopped reading early at its budget of 10,000 neurons; ask for a `full review` to review it in full.",
+      ].join("\n"),
+    )
   })
 
-  it("requests changes while one of its blocking threads stays open, and approves once none does", () => {
-    expect(chooseReviewEvent(base, [], [], true, 2)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(base, [], [], true, 0)).toBe("APPROVE")
-    expect(chooseReviewEvent(base, [], [], false, 2)).toBe("COMMENT")
+  it("follows the counts line and precedes the held-back list when changes are requested", () => {
+    const body = renderReviewBody(
+      "REQUEST_CHANGES",
+      [finding()],
+      [{ finding: finding({ title: "Total is NaN" }), reason: "r", unfounded: false }],
+      { mode: "full", to: "0123456789", files: 1, resolved: 0 },
+      reasons.slice(0, 1),
+    )
+    expect(body).toBe(
+      [
+        "1 blocking finding(s) to address before approval. Blocking findings are marked 🔴 and gate approval; the others don't.",
+        "",
+        "Not approved because:",
+        "- #121 asks for “Unit tests cover the basis check”, and the diff leaves it out.",
+        "",
+        "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
+        "",
+        "<sub>Full review.</sub>",
+      ].join("\n"),
+    )
   })
 
-  it("never approves when its open threads couldn't be read", () => {
-    expect(chooseReviewEvent(base, [], [], true, "unknown")).toBe("COMMENT")
-    expect(chooseReviewEvent(base, [finding()], [], true, "unknown")).toBe("REQUEST_CHANGES")
+  it("names a single neuron in the singular", () => {
+    expect(renderReviewBody("WITHHELD", [], [], undefined, [{ kind: "budget_cut", budget: 1 }])).toContain(
+      "its budget of 1 neuron;",
+    )
   })
 
-  it("holds approval back for an open blocking thread even when the only rejected finding is a standard one", () => {
-    const standard = [
-      { finding: finding({ basis_kind: "standard" }), reason: BLOCKING_STANDARD_OR_TEST, unfounded: true },
-    ]
-    expect(chooseReviewEvent(base, [], standard, true, 1)).toBe("REQUEST_CHANGES")
-    expect(chooseReviewEvent(base, [], standard, true, 0)).toBe("APPROVE")
+  it("labels a withheld approval on the status line and posts it as a comment", () => {
+    expect(VERDICT_LABEL.WITHHELD).toBe("Approval withheld")
+    expect(reviewEventOf("WITHHELD")).toBe("COMMENT")
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "WITHHELD",
+      submission: base,
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+    })
+    expect(text).toContain("`0123456` · **Verdict:** Approval withheld · 🔴 0 blocking")
   })
 })
 
@@ -990,7 +1083,7 @@ describe("renderSummaryComment", () => {
       botLogin: "andabot",
       headSha: "def5678901",
       event: "COMMENT",
-      submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+      submission: { ...base, summary: "The whole PR." },
       accepted: [],
       droppedCount: 0,
       linkedIssues: [],
@@ -1012,7 +1105,7 @@ describe("renderSummaryComment", () => {
       botLogin: "andabot",
       headSha: "def5678901",
       event: "COMMENT",
-      submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+      submission: { ...base, summary: "The whole PR." },
       accepted: [],
       droppedCount: 0,
       linkedIssues: [24],
@@ -1043,7 +1136,6 @@ describe("renderSummaryComment", () => {
         summary: "Changes b.",
         walkthrough: [{ path: "src/x.ts", summary: "b is | now 3" }],
         findings: [],
-        verdict: "request_changes",
         merge_danger: { door: "two-way", blast_radius: "one module" },
       },
       accepted: [finding()],
@@ -1311,7 +1403,7 @@ describe("renderSummaryComment", () => {
         botLogin: "andabot",
         headSha: "def5678901",
         event: "COMMENT",
-        submission: { ...base, summary: "The whole PR.", verdict: "comment" },
+        submission: { ...base, summary: "The whole PR." },
         accepted: [],
         droppedCount: 2,
         linkedIssues: [],
@@ -1490,7 +1582,7 @@ describe("withApprovedVerdict", () => {
     botLogin: "andabot",
     headSha: "0123456789abcdef",
     event: "REQUEST_CHANGES",
-    submission: { ...base, verdict: "request_changes" },
+    submission: base,
     accepted: [finding()],
     droppedCount: 0,
     linkedIssues: [],
@@ -1632,7 +1724,7 @@ describe("the Checks line", () => {
       botLogin: "andabot",
       headSha: "0123456789abcdef",
       event: "COMMENT",
-      submission: { ...base, walkthrough: [{ path: "src/x.ts", summary: "b" }], verdict: "comment" },
+      submission: { ...base, walkthrough: [{ path: "src/x.ts", summary: "b" }] },
       accepted: [],
       droppedCount: 1,
       linkedIssues: [],
@@ -1696,7 +1788,7 @@ describe("the Checks line", () => {
       botLogin: "andabot",
       headSha: "0123456789abcdef",
       event: "COMMENT",
-      submission: { ...base, verdict: "comment" },
+      submission: base,
       accepted: [],
       droppedCount: 0,
       linkedIssues: [],

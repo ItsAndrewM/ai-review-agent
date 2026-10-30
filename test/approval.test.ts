@@ -128,18 +128,28 @@ describe("decideApproval", () => {
 })
 
 describe("awaitsApproval", () => {
-  it("lifts a request for changes whatever the model's verdict", () => {
-    for (const verdict of ["approve", "request_changes", "comment"] as const) {
-      expect(awaitsApproval({ ...requested, verdict })).toBe(true)
-    }
+  it("lifts a request for changes that carried no reason", () => {
+    expect(awaitsApproval(requested)).toBe(true)
+    expect(awaitsApproval({ ...requested, withheld: 0 })).toBe(true)
   })
 
-  it("lifts a comment only when the model meant to approve", () => {
+  it("never lifts a review that withheld approval for a reason, whatever its event", () => {
+    expect(awaitsApproval({ ...requested, withheld: 1 })).toBe(false)
+    expect(awaitsApproval({ ...requested, event: "COMMENT", shown: "WITHHELD", withheld: 2 })).toBe(false)
+  })
+
+  it("lifts a comment whose approval waits for the checks", () => {
+    const commented: LastReview = { reviewId: 1, event: "COMMENT", headSha: "bbb", heldBack: 0, at: 1 }
+    expect(awaitsApproval({ ...commented, shown: "AWAITING_CHECKS" })).toBe(true)
+    expect(awaitsApproval({ ...commented, shown: "COMMENT" })).toBe(false)
+    expect(awaitsApproval(commented)).toBe(false)
+  })
+
+  it("lifts an old comment whose model verdict was approve, even one shown as a plain comment", () => {
     const commented: LastReview = { reviewId: 1, event: "COMMENT", headSha: "bbb", heldBack: 0, at: 1 }
     expect(awaitsApproval({ ...commented, verdict: "approve" })).toBe(true)
+    expect(awaitsApproval({ ...commented, shown: "COMMENT", verdict: "approve" })).toBe(true)
     expect(awaitsApproval({ ...commented, verdict: "comment" })).toBe(false)
-    expect(awaitsApproval({ ...commented, verdict: "request_changes" })).toBe(false)
-    expect(awaitsApproval(commented)).toBe(false)
   })
 
   it("never lifts a review that held a finding back", () => {
@@ -218,6 +228,23 @@ function finding(severity: FindingInput["severity"]): FindingInput {
 }
 
 describe("lastReviewOf", () => {
+  it("records the count of reasons the review withheld approval for", () => {
+    const record = lastReviewOf({
+      reviewId: 9,
+      event: "COMMENT",
+      headSha: "bbb",
+      withheld: 2,
+      shown: "WITHHELD",
+      accepted: [],
+      rejected: [],
+      at: 5,
+      requestChangesWorkflow: true,
+    })
+    expect(record.withheld).toBe(2)
+    expect(record.shown).toBe("WITHHELD")
+    expect(record).not.toHaveProperty("verdict")
+  })
+
   it("counts only the rejections that hold approval back", () => {
     const rejected = [
       { finding: finding("blocking"), reason: "r", unfounded: false },
@@ -229,7 +256,7 @@ describe("lastReviewOf", () => {
         reviewId: 9,
         event: "REQUEST_CHANGES",
         headSha: "bbb",
-        verdict: "request_changes",
+        withheld: 0,
         shown: "REQUEST_CHANGES",
         accepted: [finding("blocking"), finding("nitpick")],
         rejected,
@@ -240,7 +267,7 @@ describe("lastReviewOf", () => {
       reviewId: 9,
       event: "REQUEST_CHANGES",
       headSha: "bbb",
-      verdict: "request_changes",
+      withheld: 0,
       shown: "REQUEST_CHANGES",
       counts: { blocking: 1, major: 0, suggestion: 0, nitpick: 1 },
       heldBack: 1,
@@ -255,7 +282,7 @@ describe("lastReviewOf", () => {
         reviewId: 9,
         event: "COMMENT",
         headSha: "bbb",
-        verdict: "approve",
+        withheld: 0,
         shown: "AWAITING_CHECKS",
         accepted: [],
         rejected: [],
@@ -266,7 +293,7 @@ describe("lastReviewOf", () => {
       reviewId: 9,
       event: "COMMENT",
       headSha: "bbb",
-      verdict: "approve",
+      withheld: 0,
       shown: "AWAITING_CHECKS",
       counts: { blocking: 0, major: 0, suggestion: 0, nitpick: 0 },
       heldBack: 0,
@@ -280,7 +307,7 @@ describe("lastReviewOf", () => {
       reviewId: 9,
       event: "COMMENT",
       headSha: "bbb",
-      verdict: "approve",
+      withheld: 0,
       shown: "COMMENT",
       accepted: [],
       rejected: [],
@@ -347,6 +374,11 @@ describe("LastReview", () => {
     expect(Value.Check(LastReview, { ...stored, shown: "AWAITING_CHECKS", counts })).toBe(true)
     expect(Value.Check(LastReview, { ...stored, shown: "approve" })).toBe(false)
     expect(Value.Check(LastReview, { ...stored, counts: { ...counts, blocking: "0" } })).toBe(false)
+  })
+
+  it("reads the count of reasons a review withheld approval for, and the withheld verdict it showed", () => {
+    expect(Value.Check(LastReview, { ...stored, shown: "WITHHELD", withheld: 2 })).toBe(true)
+    expect(Value.Check(LastReview, { ...stored, withheld: "2" })).toBe(false)
   })
 
   it("reads a record written before the workflow was kept, and refuses a workflow that isn't a boolean", () => {
@@ -437,11 +469,18 @@ describe("verdictAfterChecks", () => {
 })
 
 describe("evaluatesAfterReview", () => {
-  it("evaluates after a review that didn't approve, unless it just posted a blocking finding", () => {
-    expect(evaluatesAfterReview("APPROVE", [])).toBe(false)
-    expect(evaluatesAfterReview("REQUEST_CHANGES", [finding("blocking")])).toBe(false)
-    expect(evaluatesAfterReview("REQUEST_CHANGES", [finding("suggestion")])).toBe(true)
-    expect(evaluatesAfterReview("COMMENT", [])).toBe(true)
+  const awaiting: LastReview = { ...requested, event: "COMMENT", shown: "AWAITING_CHECKS" }
+
+  it("evaluates after a review the evaluation could lift, unless it just posted a blocking finding", () => {
+    expect(evaluatesAfterReview(awaiting, [])).toBe(true)
+    expect(evaluatesAfterReview(requested, [finding("suggestion")])).toBe(true)
+    expect(evaluatesAfterReview(requested, [finding("blocking")])).toBe(false)
+  })
+
+  it("skips a review that approved, withheld approval or held a finding back", () => {
+    expect(evaluatesAfterReview({ ...requested, event: "APPROVE" }, [])).toBe(false)
+    expect(evaluatesAfterReview({ ...awaiting, shown: "WITHHELD", withheld: 1 }, [])).toBe(false)
+    expect(evaluatesAfterReview({ ...requested, heldBack: 1 }, [])).toBe(false)
   })
 })
 

@@ -164,12 +164,11 @@ describe("recordedVerdict", () => {
     })
   })
 
-  it("shows a review's own approval as approved", () => {
+  it("shows a review's own approval as approved, with or without the model verdict older records kept", () => {
     const own = {
       reviewId: 3,
       event: "APPROVE",
       headSha: head,
-      verdict: "approve",
       shown: "APPROVE",
       counts: { blocking: 0, suggestion: 1, nitpick: 0 },
       heldBack: 0,
@@ -183,6 +182,15 @@ describe("recordedVerdict", () => {
       label: "Approved at `def5678`",
       counts: { blocking: 0, suggestion: 1, nitpick: 0 },
     })
+    expect(recordedVerdict({ ...own, verdict: "approve" }, stored, head)).toStrictEqual({
+      label: "Approved",
+      counts: { blocking: 0, suggestion: 1, nitpick: 0 },
+    })
+  })
+
+  it("shows a withheld approval as itself", () => {
+    const withheld = { ...requestedChanges, event: "COMMENT", shown: "WITHHELD", withheld: 1 } satisfies LastReview
+    expect(recordedVerdict(withheld, stored, head)).toStrictEqual({ label: "Approval withheld", counts })
   })
 
   it("shows a wait for the checks as itself", () => {

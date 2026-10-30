@@ -44,6 +44,7 @@ import {
   MOST_LISTED_THREADS,
   stillOpen,
 } from "../src/review/incremental.ts"
+import type { OmittedRequirementInput } from "../src/review/reasons.ts"
 import { holdsApprovalBack } from "../src/review/render.ts"
 
 const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
@@ -801,6 +802,12 @@ describe("ReviewedRecord", () => {
     expect(Value.Check(ReviewedRecord, stored)).toBe(true)
   })
 
+  it("accepts the omitted requirements the last review carried, and a record from before it kept them", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    expect(Value.Check(ReviewedRecord, { ...stored, omitted })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, omitted: [{ issue: 121 }] })).toBe(false)
+  })
+
   it("accepts a merge danger and refuses a malformed one", () => {
     expect(Value.Check(ReviewedRecord, { ...stored, merge_danger: oneWay })).toBe(true)
     expect(Value.Check(ReviewedRecord, { ...stored, merge_danger: { door: "sideways", blast_radius: "x" } })).toBe(
@@ -815,7 +822,6 @@ describe("nextReviewed", () => {
     summary: "This push fixes the total.",
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
-    verdict: "comment",
     merge_danger: twoWay,
   }
   const previous: ReviewedRecord = {
@@ -831,8 +837,30 @@ describe("nextReviewed", () => {
   }
   const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
   const incremental = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
-  const reviewedAfter = (before: ReviewedRecord, scope: ReviewScope, pushed: ReviewSubmissionInput = submission) =>
-    nextReviewed({ previous: before, scope, headSha: "bbb", baseRef: "main", at: 2, submission: pushed, resolved: 1 })
+  const reviewedAfter = (
+    before: ReviewedRecord,
+    scope: ReviewScope,
+    pushed: ReviewSubmissionInput = submission,
+    omitted: OmittedRequirementInput[] = [],
+  ) =>
+    nextReviewed({
+      previous: before,
+      scope,
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      submission: pushed,
+      resolved: 1,
+      omitted,
+    })
+
+  it("keeps the omitted requirements this review accepted, on a full and on an incremental review", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    const full = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(reviewedAfter(previous, full, submission, omitted).omitted).toEqual(omitted)
+    expect(reviewedAfter({ ...previous, omitted }, incremental, submission, []).omitted).toEqual([])
+    expect(reviewedAfter(previous, incremental, submission, omitted).omitted).toEqual(omitted)
+  })
 
   it("starts over from a full review's summary, walkthrough and merge danger", () => {
     const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
@@ -844,6 +872,7 @@ describe("nextReviewed", () => {
       summary: "This push fixes the total.",
       walkthrough: [{ path: "a.ts", summary: "new a" }],
       merge_danger: twoWay,
+      omitted: [],
     })
   })
 
@@ -871,6 +900,7 @@ describe("nextReviewed", () => {
       ],
       merge_danger: twoWay,
       since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
+      omitted: [],
     })
   })
 
@@ -906,6 +936,7 @@ describe("nextReviewed", () => {
       headSha: "bbb",
       baseRef: "main",
       at: 2,
+      omitted: [],
       submission: withLogo,
       resolved: 0,
     })
@@ -922,7 +953,6 @@ describe("submissionFromRecord", () => {
     summary: "This push fixes the total.",
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
-    verdict: "comment",
     merge_danger: { door: "two-way", blast_radius: "the total" },
   }
   const record: ReviewedRecord = {

@@ -99,7 +99,7 @@ function lastReviewLabel(last: LastReview, headSha: string): string {
 }
 
 function approvedByEvaluation(last: LastReview): boolean {
-  return last.event === "APPROVE" && last.verdict === undefined
+  return last.event === "APPROVE" && last.shown === undefined && last.verdict === undefined
 }
 
 function atHead(label: string, headSha: string): string {
