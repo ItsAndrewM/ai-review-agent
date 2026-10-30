@@ -584,9 +584,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   async #resolveAnswerThread(args: ResolveThreadArgs): Promise<ResolveOutcome> {
     const answering = answeringFor(await this.runningRootOperation(), this.#answers)
     if (answering === undefined) return { kind: "refused", refusal: "not_answering" }
+    if (answering.resolved) return { kind: "refused", refusal: "resolved_by_this_answer" }
     const problem = evidenceProblem(args.evidence)
     if (problem !== undefined) return { kind: "refused", refusal: problem }
-    if (answering.resolved) return { kind: "refused", refusal: "resolved_by_this_answer" }
     const key = await this.key()
     try {
       const github = await this.github()

@@ -42,7 +42,7 @@ export function startAnswering(
   botLogin: string,
   deliveryId: string,
 ): Answering | undefined {
-  if (!opensWithBot(thread, botLogin) || thread === undefined) return undefined
+  if (thread === undefined || !opensWithBot(thread, botLogin)) return undefined
   return { deliveryId, thread, resolved: false }
 }
 
