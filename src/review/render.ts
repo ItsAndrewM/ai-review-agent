@@ -173,7 +173,7 @@ function statusLine(headSha: string, verdict: VerdictLine): string {
   const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${verdict.label}`
   const { counts } = verdict
   if (counts === undefined) return status
-  return `${status} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
+  return `${status} · 🔴 ${counts.blocking} blocking · 🟠 ${counts.major ?? 0} major · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
 }
 
 function walkthroughTable(rows: readonly WalkthroughInput[]): string {
@@ -478,9 +478,10 @@ function countsLine(accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking finding(s) to address before approval`)
+  if (counts.major > 0) parts.push(`${counts.major} major finding(s) worth fixing`)
   if (counts.suggestion > 0) parts.push(`${counts.suggestion} suggestion(s)`)
   if (counts.nitpick > 0) parts.push(`${counts.nitpick} nitpick(s)`)
-  return `${parts.join(", ")}. Blocking findings are marked 🔴; the others are optional.`
+  return `${parts.join(", ")}. Blocking findings are marked 🔴 and gate approval; the others don't.`
 }
 
 export function chooseReviewEvent(

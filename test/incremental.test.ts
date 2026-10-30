@@ -181,11 +181,13 @@ describe("openBotThreads", () => {
         botThread("labelled", { firstCommentId: 2 }),
         botThread("suggestion", { firstCommentId: 3, firstCommentBody: "**🟡 Suggestion: Rename it**\n\nWhy." }),
         botThread("unlabelled", { firstCommentId: 4, firstCommentBody: "Something else entirely" }),
+        botThread("major", { firstCommentId: 5, firstCommentBody: "**🟠 Major: Escape it**\n\nWhy." }),
       ],
       new Map([[1, stored]]),
       "andabot",
     )
     expect(threads.map((t) => [t.title, t.blocking, t.quote])).toEqual([
+      ["Escape it", false, undefined],
       ["Something else entirely", false, undefined],
       ["Rename it", false, undefined],
       ["Total is NaN", true, undefined],

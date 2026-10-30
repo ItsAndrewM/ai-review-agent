@@ -1,5 +1,5 @@
 import type { CheckRunConclusion, CheckRunOutput, CreateCheckRun, RepoRef, UpdateCheckRun } from "../github/client.ts"
-import type { PostedReview } from "../records.ts"
+import type { PostedReview, SeverityCounts } from "../records.ts"
 import { shortSha } from "../sha.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
 import { VERDICT_LABEL, type Verdict } from "./render.ts"
@@ -81,9 +81,11 @@ export function replacedCheckRun(completedAt: number): UpdateCheckRun {
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
-export function checkRunTitle(event: Verdict, counts: Record<FindingInput["severity"], number>): string {
+export function checkRunTitle(event: Verdict, counts: SeverityCounts): string {
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking`)
+  const major = counts.major ?? 0
+  if (major > 0) parts.push(`${major} major`)
   if (counts.suggestion > 0) parts.push(counted(counts.suggestion, "suggestion"))
   if (counts.nitpick > 0) parts.push(counted(counts.nitpick, "nitpick"))
   const label = VERDICT_LABEL[event]

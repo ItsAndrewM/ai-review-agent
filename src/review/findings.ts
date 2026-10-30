@@ -12,7 +12,12 @@ import {
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
 
-export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
+export const Severity = Type.Union([
+  Type.Literal("blocking"),
+  Type.Literal("major"),
+  Type.Literal("suggestion"),
+  Type.Literal("nitpick"),
+])
 
 export const Finding = Type.Object({
   path: Type.String({ description: "Path of the changed file, exactly as listed." }),
@@ -447,6 +452,7 @@ export function rowPath(path: string): string {
 
 export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
+  major: "🟠 Major",
   suggestion: "🟡 Suggestion",
   nitpick: "⚪ Nitpick",
 } satisfies Record<FindingInput["severity"], string>
@@ -468,7 +474,7 @@ export function toReviewComment(finding: FindingInput): ReviewComment {
 }
 
 export function countBySeverity(findings: readonly FindingInput[]) {
-  const counts = { blocking: 0, suggestion: 0, nitpick: 0 } satisfies Record<FindingInput["severity"], number>
+  const counts = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 } satisfies Record<FindingInput["severity"], number>
   for (const finding of findings) counts[finding.severity]++
   return counts
 }

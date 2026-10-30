@@ -42,6 +42,13 @@ describe("PostedReview", () => {
     expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, suggestion: 2, nitpick: 0 } })).toBe(true)
   })
 
+  it("accepts the counts with the major grade, and without it from before the grade existed", () => {
+    expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, major: 1, suggestion: 2, nitpick: 0 } })).toBe(
+      true,
+    )
+    expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, suggestion: 2, nitpick: 0 } })).toBe(true)
+  })
+
   it("accepts the spend the summary's cost line was rendered from", () => {
     const spend = [
       {

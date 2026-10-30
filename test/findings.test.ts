@@ -9,6 +9,7 @@ import {
   parseWrittenReview,
   ReviewSubmission,
   toReviewComment,
+  countBySeverity,
   validateFindings,
   walkthroughPaths,
   type FindingInput,
@@ -622,6 +623,52 @@ describe("toReviewComment", () => {
   })
 })
 
+describe("the major grade", () => {
+  it("accepts major as a severity and no fifth grade", () => {
+    const rows = [{ path: "src/x.ts", summary: "s" }]
+    expect(
+      Value.Check(ReviewSubmission, { ...base, walkthrough: rows, findings: [finding({ severity: "major" })] }),
+    ).toBe(true)
+    expect(
+      Value.Check(ReviewSubmission, { ...base, walkthrough: rows, findings: [{ ...finding(), severity: "critical" }] }),
+    ).toBe(false)
+  })
+
+  it("labels a major finding 🟠 Major", () => {
+    expect(toReviewComment(finding({ severity: "major" })).body).toMatch(/^\*\*🟠 Major: b changed\*\*/)
+  })
+
+  it("counts major findings", () => {
+    expect(countBySeverity([finding({ severity: "major" }), finding({ severity: "nitpick" })])).toEqual({
+      blocking: 0,
+      major: 1,
+      suggestion: 0,
+      nitpick: 1,
+    })
+  })
+
+  it("shows the major count on the status line between blocking and suggestions", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "APPROVE",
+      submission: base,
+      accepted: [finding({ severity: "major" })],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+    })
+    expect(text).toContain("· 🔴 0 blocking · 🟠 1 major · 🟡 0 suggestions · ⚪ 0 nitpicks")
+  })
+
+  it("counts major findings as worth fixing in the review body, and says only blocking ones gate approval", () => {
+    const body = renderReviewBody("REQUEST_CHANGES", [finding(), finding({ severity: "major", line: 3 })], [])
+    expect(body).toBe(
+      "1 blocking finding(s) to address before approval, 1 major finding(s) worth fixing. Blocking findings are marked 🔴 and gate approval; the others don't.",
+    )
+  })
+})
+
 describe("chooseReviewEvent", () => {
   it("requests changes on a blocking finding, approves a clean approve verdict, else comments", () => {
     expect(chooseReviewEvent(base, [finding()], [], true)).toBe("REQUEST_CHANGES")
@@ -781,7 +828,7 @@ describe("renderReviewBody", () => {
       [{ finding: finding({ title: "Total is NaN" }), reason: "r", unfounded: false }],
     )
     expect(body).toBe(
-      "1 nitpick(s). Blocking findings are marked 🔴; the others are optional.\n\n1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
+      "1 nitpick(s). Blocking findings are marked 🔴 and gate approval; the others don't.\n\n1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
     )
   })
 
@@ -1365,7 +1412,7 @@ describe("renderReviewBody when approval waits for the checks", () => {
 
   it("keeps the findings line and adds the wait", () => {
     expect(renderReviewBody("AWAITING_CHECKS", [finding({ severity: "suggestion" })], [])).toBe(
-      "1 suggestion(s). Blocking findings are marked 🔴; the others are optional. I'll approve once the head's checks pass.",
+      "1 suggestion(s). Blocking findings are marked 🔴 and gate approval; the others don't. I'll approve once the head's checks pass.",
     )
   })
 })
@@ -1384,7 +1431,9 @@ describe("withApprovedVerdict", () => {
 
   it("rewrites a request for changes as the approval of its head and keeps the rest of the line", () => {
     const rewritten = withApprovedVerdict(requested, "def5678901")
-    expect(rewritten).toContain("`0123456` · **Verdict:** Approved at `def5678` · 🔴 1 blocking · 🟡 0 suggestions")
+    expect(rewritten).toContain(
+      "`0123456` · **Verdict:** Approved at `def5678` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions",
+    )
     expect(rewritten?.replace("Approved at `def5678`", "Changes requested")).toBe(requested)
   })
 

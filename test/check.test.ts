@@ -45,6 +45,13 @@ describe("checkRunTitle", () => {
     )
   })
 
+  it("counts major findings after blocking, and reads a stored count from before the grade existed", () => {
+    expect(checkRunTitle("REQUEST_CHANGES", { blocking: 1, major: 2, suggestion: 0, nitpick: 0 })).toBe(
+      "Changes requested: 1 blocking, 2 major",
+    )
+    expect(checkRunTitle("COMMENT", { blocking: 0, suggestion: 1, nitpick: 0 })).toBe("Commented: 1 suggestion")
+  })
+
   it("appends the non-zero counts, singular and plural, blocking first", () => {
     expect(checkRunTitle("APPROVE", countOf(["suggestion", "suggestion"]))).toBe("Approved: 2 suggestions")
     expect(checkRunTitle("REQUEST_CHANGES", countOf(["suggestion", "blocking", "suggestion"]))).toBe(

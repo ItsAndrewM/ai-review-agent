@@ -241,7 +241,7 @@ describe("renderSummaryRun", () => {
     const text = renderSummaryRun(run)
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain(
-      "**Head:** `def5678` · **Verdict:** Changes requested at `abc1234` · 🔴 1 blocking · 🟡 0 suggestions · ⚪ 2 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary\n\nnew",
+      "**Head:** `def5678` · **Verdict:** Changes requested at `abc1234` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary\n\nnew",
     )
     expect(text).toContain("### Summary\n\nnew\n\n### Walkthrough\n\n| File | Change |")
     expect(text).toContain("| File | Change |\n| --- | --- |\n| `a.ts` | new a |\n| `b.ts` | old \\| b |")
@@ -294,7 +294,7 @@ describe("renderSummaryRun", () => {
 
   it("can be rewritten as an approval later", () => {
     expect(withApprovedVerdict(renderSummaryRun(run), "fedcba9876")).toContain(
-      "**Head:** `def5678` · **Verdict:** Approved at `fedcba9` · 🔴 1 blocking · 🟡 0 suggestions · ⚪ 2 nitpicks\n",
+      "**Head:** `def5678` · **Verdict:** Approved at `fedcba9` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n",
     )
     const unreviewed = renderSummaryRun({ ...run, verdict: { label: "Not reviewed yet" } })
     expect(withApprovedVerdict(unreviewed, "fedcba9876")).toContain("**Verdict:** Approved at `fedcba9`\n")

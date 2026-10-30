@@ -483,7 +483,10 @@ function noAnswerWithin(ms: number): string {
   return `no answer in ${ms / MS_PER_MINUTE} minutes`
 }
 
-const SEVERITY_RANK = { nitpick: 0, suggestion: 1, blocking: 2 } satisfies Record<FindingInput["severity"], number>
+const SEVERITY_RANK = { nitpick: 0, suggestion: 1, major: 2, blocking: 3 } satisfies Record<
+  FindingInput["severity"],
+  number
+>
 
 export function verdictFields(
   candidates: readonly VerifyCandidate[],

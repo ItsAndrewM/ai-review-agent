@@ -16,6 +16,7 @@ export const StoredSessionId = Type.String()
 
 export const SeverityCounts = Type.Object({
   blocking: Type.Integer(),
+  major: Type.Optional(Type.Integer()),
   suggestion: Type.Integer(),
   nitpick: Type.Integer(),
 })
