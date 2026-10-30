@@ -17,6 +17,7 @@ import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
 import { BUDGET_REFUSAL_MARKER, numberedLine, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
+import { RESOLVE_THREAD_TOOL, ResolveThreadParameters, type ResolveThreadArgs } from "./thread-resolution.ts"
 
 export interface SubmitOutcome {
   readonly text: string
@@ -39,6 +40,7 @@ export interface ReviewHost {
   submitReview(submission: ReviewSubmissionInput, conversationId: ConversationId): Promise<SubmitOutcome>
   repositorySearch(tool: "grep" | "tree"): Promise<SearchAccess>
   runCheck(args: RunCheckArgs): Promise<string>
+  resolveThread(args: ResolveThreadArgs, conversationId: ConversationId): Promise<string>
   loadedSnapshot(): SnapshotFiles | undefined
   budgetBlockFor(toolName: string, conversationId: ConversationId): Promise<string | undefined>
   requestBudget(conversationId: ConversationId): Promise<RequestBudget>
@@ -145,9 +147,23 @@ export function runCheckTool(run: (args: RunCheckArgs) => Promise<string>) {
   })
 }
 
+export function resolveThreadTool(run: (args: ResolveThreadArgs, conversationId: ConversationId) => Promise<string>) {
+  return defineTool({
+    name: RESOLVE_THREAD_TOOL,
+    description:
+      "Resolve the thread you are answering in, one of your own, once you verified at the head that its finding is fixed, or once the reply showed the finding was mistaken. Give the head's path:line as evidence. Never on the author's word alone.",
+    parameters: ResolveThreadParameters,
+    replay: "unsafe",
+    async execute(args, context) {
+      return text(await run(args, context.conversationId))
+    },
+  })
+}
+
 export function createReviewExtension(host: ReviewHost): Extension {
   const readFile = readFileTool((args) => readFileText(host, args))
   const runCheck = runCheckTool((args) => host.runCheck(args))
+  const resolveThread = resolveThreadTool((args, conversationId) => host.resolveThread(args, conversationId))
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
@@ -200,7 +216,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
         tag: false,
       },
     ],
-    tools: [readFile, listChangedFiles, getIssue, grepFiles, listTree, runCheck, submitReview],
+    tools: [readFile, listChangedFiles, getIssue, grepFiles, listTree, runCheck, resolveThread, submitReview],
     hooks: [
       hook(ToolTask, {
         beforeTool: async (call, api) => blockOrNothing(await host.budgetBlockFor(call.name, api.conversationId)),

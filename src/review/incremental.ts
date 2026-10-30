@@ -268,9 +268,34 @@ export function threadsToRecheck(
   if (mode === "fresh") return []
   if (mode === "full") return open.filter((thread) => thread.outdated).slice(0, MOST_LISTED_THREADS)
   const changes = new Map(since.map((file) => [file.filename, deltaLines(file.patch)]))
+  const changedPaths = since.map((file) => file.filename)
   return open
-    .filter((thread) => onMarkedLine(thread, covered) || (thread.outdated && touchedByPush(thread, changes)))
+    .filter(
+      (thread) =>
+        onMarkedLine(thread, covered) ||
+        (thread.outdated && touchedByPush(thread, changes)) ||
+        changedPaths.some((path) => matchesThreadFile(thread.path, path)),
+    )
     .slice(0, MOST_LISTED_THREADS)
+}
+
+const TEST_SEGMENTS = new Set(["test", "tests", "__tests__", "spec"])
+
+export function fileStem(path: string): string {
+  const base = path.slice(path.lastIndexOf("/") + 1)
+  const withoutExtension = base.replace(/\.[^.]+$/, "")
+  return withoutExtension.replace(/\.(test|spec)$/, "")
+}
+
+export function isTestPath(path: string): boolean {
+  const segments = path.split("/")
+  const name = segments[segments.length - 1] ?? ""
+  return segments.slice(0, -1).some((segment) => TEST_SEGMENTS.has(segment)) || /\.(test|spec)\./.test(name)
+}
+
+export function matchesThreadFile(threadPath: string, changedPath: string): boolean {
+  if (threadPath === changedPath) return true
+  return isTestPath(changedPath) && fileStem(changedPath) === fileStem(threadPath)
 }
 
 function touchedByPush(thread: OpenThread, changes: ReadonlyMap<string, DeltaLines>): boolean {
@@ -343,6 +368,24 @@ export function addressedThreads(
     else unknown.push(handle)
   }
   return { resolve, unknown }
+}
+
+export interface ThreadPartition {
+  open: OpenThread[]
+  closed: OpenThread[]
+}
+
+export interface AddressedResolution {
+  resolved: OpenThread[]
+  closed: OpenThread[]
+}
+
+export function stillOpen(threads: readonly OpenThread[], live: readonly ReviewThread[] | undefined): ThreadPartition {
+  const resolvedIds = new Set((live ?? []).filter((thread) => thread.resolved).map((thread) => thread.id))
+  return {
+    open: threads.filter((thread) => !resolvedIds.has(thread.threadId)),
+    closed: threads.filter((thread) => resolvedIds.has(thread.threadId)),
+  }
 }
 
 export async function resolveThreads(

@@ -38,6 +38,11 @@ import {
   withFilteredUnfounded,
   type OpenThread,
   type StoredFinding,
+  fileStem,
+  isTestPath,
+  matchesThreadFile,
+  MOST_LISTED_THREADS,
+  stillOpen,
 } from "../src/review/incremental.ts"
 import { holdsApprovalBack } from "../src/review/render.ts"
 
@@ -242,13 +247,32 @@ describe("threadsToRecheck", () => {
     changed("e.ts", ["@@ -1 +1,2 @@", " a", "+guard()"].join("\n")),
   ]
 
-  it("re-checks threads on marked lines and outdated threads whose code the push changed", () => {
+  it("re-checks threads on marked lines, outdated threads whose code the push changed, and every open thread in a file the push changed", () => {
     expect(threadsToRecheck(threads, "incremental", covered, since).map((t) => t.handle)).toEqual([
       "T1",
       "T2",
+      "T3",
+      "T5",
       "T7",
       "T8",
     ])
+  })
+
+  it("re-checks a thread whose file's test file the push changed, and not one in an unrelated file", () => {
+    const onCost = [
+      open("C1", { path: "src/review/cost.ts", line: 40 }),
+      open("C2", { path: "src/review/render.ts", line: 4 }),
+    ]
+    const testPush = [changed("test/cost.test.ts", ["@@ -1 +1,2 @@", " a", "+it()"].join("\n"))]
+    expect(threadsToRecheck(onCost, "incremental", new Map(), testPush).map((t) => t.handle)).toEqual(["C1"])
+    const otherPush = [changed("src/other.ts", ["@@ -1 +1 @@", "-x", "+y"].join("\n"))]
+    expect(threadsToRecheck(onCost, "incremental", new Map(), otherPush)).toEqual([])
+  })
+
+  it("keeps the cap on the wider selection", () => {
+    const many = Array.from({ length: 40 }, (_, i) => open(`M${i}`, { path: "big.ts", line: i + 1 }))
+    const bigPush = [changed("big.ts", ["@@ -1 +1 @@", "-x", "+y"].join("\n"))]
+    expect(threadsToRecheck(many, "incremental", new Map(), bigPush)).toHaveLength(MOST_LISTED_THREADS)
   })
 
   it("takes every outdated thread in a full review, and none when starting over", () => {
@@ -918,5 +942,69 @@ describe("submissionFromRecord", () => {
 
   it("keeps the push's merge danger when the record predates the field", () => {
     expect(submissionFromRecord(pushed, record).merge_danger).toEqual(pushed.merge_danger)
+  })
+})
+
+describe("matching a thread's file", () => {
+  it("strips the extension and a test suffix to the stem", () => {
+    expect(fileStem("src/review/cost.ts")).toBe("cost")
+    expect(fileStem("test/cost.test.ts")).toBe("cost")
+    expect(fileStem("a/b.spec.tsx")).toBe("b")
+  })
+
+  it("knows a test path by its segment or its name", () => {
+    for (const path of [
+      "test/x.ts",
+      "src/__tests__/x.ts",
+      "src/x.test.ts",
+      "spec/x.ts",
+      "tests/x.ts",
+      "src/x.spec.ts",
+    ]) {
+      expect(isTestPath(path)).toBe(true)
+    }
+    expect(isTestPath("src/x.ts")).toBe(false)
+  })
+
+  it("matches the same path or a test file with the thread file's stem, never another source file", () => {
+    expect(matchesThreadFile("src/review/cost.ts", "src/review/cost.ts")).toBe(true)
+    expect(matchesThreadFile("src/review/cost.ts", "test/cost.test.ts")).toBe(true)
+    expect(matchesThreadFile("src/review/cost.ts", "test/other.test.ts")).toBe(false)
+    expect(matchesThreadFile("src/review/cost.ts", "src/cost.ts")).toBe(false)
+  })
+})
+
+describe("stillOpen", () => {
+  const liveThread = (id: string, resolved: boolean): ReviewThread => ({
+    id,
+    resolved,
+    outdated: false,
+    path: "a.ts",
+    line: 3,
+    side: "RIGHT",
+    firstCommentId: 1,
+    firstCommentBody: "**🟡 Suggestion: x**",
+    authorLogin: "andabot",
+    authorIsBot: true,
+  })
+
+  it("keeps a thread the live list shows open, and sets aside one it shows resolved", () => {
+    const addressed = [open("T1", { threadId: "id-1" }), open("T2", { threadId: "id-2" })]
+    const { open: stillThere, closed } = stillOpen(addressed, [liveThread("id-1", false), liveThread("id-2", true)])
+    expect(stillThere.map((t) => t.handle)).toEqual(["T1"])
+    expect(closed.map((t) => t.handle)).toEqual(["T2"])
+  })
+
+  it("counts every thread open when the live list couldn't be read, the behaviour before the read existed", () => {
+    const addressed = [open("T1", { threadId: "id-1" }), open("T2", { threadId: "id-2" })]
+    const { open: stillThere, closed } = stillOpen(addressed, undefined)
+    expect(stillThere.map((t) => t.handle)).toEqual(["T1", "T2"])
+    expect(closed).toEqual([])
+  })
+
+  it("counts a thread the live list lacks as open, since the read is a snapshot, not an oracle", () => {
+    const { open: stillThere, closed } = stillOpen([open("T3", { threadId: "id-3" })], [])
+    expect(stillThere.map((t) => t.handle)).toEqual(["T3"])
+    expect(closed).toEqual([])
   })
 })

@@ -298,3 +298,15 @@ describe("bundledSkills", () => {
     expect(verify?.body).toContain(`\`${SUBMIT_VERDICTS_TOOL}\``)
   })
 })
+
+describe("the answer skill", () => {
+  it("tells the model when to resolve its own thread, and never on the author's word alone", async () => {
+    const skill = await (await bundledSkills()).source.load("answer")
+    if (skill === null) throw new Error("the answer skill is missing")
+    const text = renderActivatedSkill(skill)
+    expect(text).toContain("resolve_thread")
+    expect(text).toContain("withdrawn")
+    expect(text).toContain("Never resolve on the author's word alone")
+    expect(text).toContain('version="2"')
+  })
+})

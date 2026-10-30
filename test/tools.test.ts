@@ -15,6 +15,7 @@ import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import { BUDGET_REFUSAL, budgetBlock } from "../src/review/budget.ts"
 import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
+import type { ResolveThreadArgs } from "../src/review/thread-resolution.ts"
 import {
   changedFilesText,
   createReviewExtension,
@@ -73,6 +74,7 @@ const host = {
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
   runCheck: async (args: RunCheckArgs) => `ran ${args.name} on ${(args.paths ?? []).join(" ") || "nothing"}`,
+  resolveThread: async (args: ResolveThreadArgs) => `resolved as ${args.reason} on ${args.evidence}`,
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
   budgetBlockFor: async (): Promise<string | undefined> => undefined,
   requestBudget: async (): Promise<RequestBudget> => "allow",
@@ -143,7 +145,7 @@ describe("changedFilesText", () => {
 })
 
 describe("createReviewExtension", () => {
-  it("offers the model seven tools, with submit_review last", () => {
+  it("offers the model eight tools, with submit_review last", () => {
     expect(createReviewExtension(host).tools?.map((tool) => tool.name)).toEqual([
       "read_file",
       "list_changed_files",
@@ -151,8 +153,18 @@ describe("createReviewExtension", () => {
       "grep",
       "tree",
       "run_check",
+      "resolve_thread",
       "submit_review",
     ])
+  })
+
+  it("offers resolve_thread with a reason and evidence, replayed unsafe, and hands the call to the host", async () => {
+    const resolveThread = createReviewExtension(host).tools?.find((tool) => tool.name === "resolve_thread")
+    const parameters = JSON.stringify(resolveThread?.parameters)
+    expect(parameters).toContain('"withdrawn"')
+    expect(parameters).toContain('"evidence"')
+    expect(resolveThread?.replay).toBe("unsafe")
+    expect(resolveThread?.description).toContain("path:line")
   })
 
   it("offers run_check with the three check names and optional paths, replayed unsafe like grep", () => {
