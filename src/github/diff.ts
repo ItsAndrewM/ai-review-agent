@@ -69,7 +69,7 @@ export interface MarkedLines {
 }
 
 export function comparableText(text: string): string {
-  return text.trim().replace(/\s+/g, " ")
+  return text.replace(/\s+/g, " ")
 }
 
 export function deltaLines(patch: string | undefined): DeltaLines {
