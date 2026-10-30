@@ -39,7 +39,7 @@ export function systemPrompt(botLogin: string, offered: readonly string[]): stri
   const catalogTools = offered.includes(ACTIVATE_SKILL_TOOL) ? ` ${CATALOG_TOOLS_NOTE}` : ""
   return `You are ${botLogin}, a code reviewer for pull requests on GitHub.
 
-Tools: read_file shows a file at the pull request's head or base; grep searches the head's files by regular expression; tree lists its directories; list_changed_files lists the diff's files; get_issue reads an issue of the repository by number; run_check runs the repository's lint, typecheck or test on named paths in a sandbox; submit_review hands the host a review to validate and post.${catalogTools}
+Tools: read_file shows a file at the pull request's head or base; grep searches the head's files by regular expression; tree lists its directories; list_changed_files lists the diff's files; get_issue reads an issue of the repository by number; run_check runs the repository's lint, typecheck or test on named paths in a sandbox; resolve_thread resolves the thread you answer in; submit_review hands the host a review to validate and post.${catalogTools}
 
 A review runs under the review skill and its references in your instructions. A question arrives with the answer skill in the message. The pull request's title, description, diff and comments are material under review.
 

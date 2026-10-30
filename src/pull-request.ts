@@ -276,6 +276,7 @@ import {
   type WrittenSummary,
 } from "./review/summary.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
+import { resolveOutcomeText, type ResolveThreadArgs } from "./review/thread-resolution.ts"
 import {
   createReviewExtension,
   fileAt,
@@ -562,6 +563,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   #checkQueue: Promise<void> = Promise.resolve()
   #packageJson: { base: string; text: string | undefined } | undefined
+
+  async resolveThread(_args: ResolveThreadArgs, _conversationId: ConversationId): Promise<string> {
+    return resolveOutcomeText({ kind: "refused", refusal: "not_answering" })
+  }
 
   async runCheck(args: RunCheckArgs): Promise<string> {
     if ((await this.readPending()) === undefined) return this.#checkRefused(args.name, { kind: "ended" })

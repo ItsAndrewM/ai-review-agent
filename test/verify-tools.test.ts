@@ -198,6 +198,7 @@ const reviewHost = {
   submitReview: async () => ({ text: "Nothing to post.", done: false }),
   repositorySearch: async (): Promise<SearchAccess> => ({ kind: "unavailable", reason: "no snapshot" }),
   runCheck: async () => "The sandbox is off for this repository, so test did not run.",
+  resolveThread: async () => "Not resolved: resolve_thread acts only while answering a reply in one of my threads.",
   loadedSnapshot: (): SnapshotFiles | undefined => undefined,
   budgetBlockFor: async (): Promise<string | undefined> => undefined,
   requestBudget: async (): Promise<RequestBudget> => "allow",
@@ -348,7 +349,16 @@ describe("withoutVerifyByDefault", () => {
   const toolsOf = async (conversation: Conversation) =>
     (await conversation.agent(BACKGROUND_CONTEXT)).tools.map(({ name }) => name)
 
-  const reviewTools = ["read_file", "list_changed_files", "get_issue", "grep", "tree", "run_check", "submit_review"]
+  const reviewTools = [
+    "read_file",
+    "list_changed_files",
+    "get_issue",
+    "grep",
+    "tree",
+    "run_check",
+    "resolve_thread",
+    "submit_review",
+  ]
 
   it("keeps verify's tools out of the root, and out of any conversation that leaves its extensions to the host", async () => {
     const { pi } = await openedWithVerify()
