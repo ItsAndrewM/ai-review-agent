@@ -375,8 +375,13 @@ export interface ThreadPartition {
   closed: OpenThread[]
 }
 
-export function stillOpen(threads: readonly OpenThread[], live: readonly ReviewThread[]): ThreadPartition {
-  const resolvedIds = new Set(live.filter((thread) => thread.resolved).map((thread) => thread.id))
+export interface AddressedResolution {
+  resolved: OpenThread[]
+  closed: OpenThread[]
+}
+
+export function stillOpen(threads: readonly OpenThread[], live: readonly ReviewThread[] | undefined): ThreadPartition {
+  const resolvedIds = new Set((live ?? []).filter((thread) => thread.resolved).map((thread) => thread.id))
   return {
     open: threads.filter((thread) => !resolvedIds.has(thread.threadId)),
     closed: threads.filter((thread) => resolvedIds.has(thread.threadId)),

@@ -995,6 +995,13 @@ describe("stillOpen", () => {
     expect(closed.map((t) => t.handle)).toEqual(["T2"])
   })
 
+  it("counts every thread open when the live list couldn't be read, the behaviour before the read existed", () => {
+    const addressed = [open("T1", { threadId: "id-1" }), open("T2", { threadId: "id-2" })]
+    const { open: stillThere, closed } = stillOpen(addressed, undefined)
+    expect(stillThere.map((t) => t.handle)).toEqual(["T1", "T2"])
+    expect(closed).toEqual([])
+  })
+
   it("counts a thread the live list lacks as open, since the read is a snapshot, not an oracle", () => {
     const { open: stillThere, closed } = stillOpen([open("T3", { threadId: "id-3" })], [])
     expect(stillThere.map((t) => t.handle)).toEqual(["T3"])

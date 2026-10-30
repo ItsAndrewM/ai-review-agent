@@ -101,3 +101,12 @@ The guard is the running root operation, not a flag: `resolve_thread` acts only 
 ### Tests
 
 Unit: the stem match and the files rule (same file, matching test file in `test/`, `__tests__/` and `.spec.`, an unrelated file, the cap); `resolve_thread`'s parameters, refusals (no evidence, not in a thread) and its outcome text; the skip-when-resolved decision as a pure function over a thread list; the thread-answer prompt's new fields. Live: a fixture pull request on this repository with two planted findings; a push that adds the asked-for test further down the file resolves the first with one "Fixed in" reply; a reply arguing the second finding away gets andabot's withdrawal, resolved by the tool, one reply; a reply "Fixed in `sha`" on a thread whose fix is not there gets a reply saying what is still wrong and no resolution.
+
+### Rulings after the review
+
+- The answer holds a thread for the tool only when andabot opened it (`opensWithBot`), so `@andabot` free text under a human reviewer's comment can never resolve that thread; the spec's "one of its own threads" is enforced by the host, not the skill.
+- Answers in flight are kept per delivery (a map keyed by delivery id, looked up by the root session's running `chat:<id>` operation), since two thread replies seconds apart interleave in the object and a single slot would refuse the second's tool calls and attribute the first's logs to the wrong thread.
+- A live read of the threads that fails before the review resolves falls back to treating every addressed thread as open, logged `review.resolve_unchecked`, so a GraphQL error at that moment can't abort the post of a review that is otherwise ready.
+- A thread the answer closed meanwhile counts as settled in the review's own verdict, so the review doesn't post a non-approving event that the approval re-evaluation reverses seconds later.
+- The answer reads the head with `currentPullRequest`, which touches no cache, so a reply during a push's review no longer clears the review's pull request and file caches; a final failure there answers from the cached pull request as the spec says.
+- Left as they are: the starred-line and touched-quote branches of the selection are subsumed by the files rule (dead code to collapse later); `isTestPath` matches a `.snap` or a file under `docs/spec`, bounded by the stem match and the cap; the answer skill's version bump changes every review footer's fingerprint; a thread resolved by the tool whose model run then fails gets "I could not answer that" as its reply.

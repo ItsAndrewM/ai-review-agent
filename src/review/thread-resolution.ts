@@ -1,4 +1,6 @@
 import { Type, type Static } from "typebox"
+import type { ReviewThread } from "../github/client.ts"
+import { opensWithBot } from "./thread-question.ts"
 
 export const RESOLVE_THREAD_TOOL = "resolve_thread"
 
@@ -29,12 +31,27 @@ export function evidenceProblem(evidence: string): "no_evidence" | undefined {
   return evidence.trim() === "" ? "no_evidence" : undefined
 }
 
-export function answeringGuard(
+export interface Answering {
+  readonly deliveryId: string
+  readonly thread: ReviewThread
+  resolved: boolean
+}
+
+export function startAnswering(
+  thread: ReviewThread | undefined,
+  botLogin: string,
+  deliveryId: string,
+): Answering | undefined {
+  if (!opensWithBot(thread, botLogin) || thread === undefined) return undefined
+  return { deliveryId, thread, resolved: false }
+}
+
+export function answeringFor(
   runningOperation: string | undefined,
-  answerDeliveryId: string | undefined,
-): "not_answering" | undefined {
-  if (answerDeliveryId === undefined || runningOperation !== `chat:${answerDeliveryId}`) return "not_answering"
-  return undefined
+  answers: ReadonlyMap<string, Answering>,
+): Answering | undefined {
+  if (runningOperation === undefined || !runningOperation.startsWith("chat:")) return undefined
+  return answers.get(runningOperation.slice("chat:".length))
 }
 
 export function resolveOutcomeText(outcome: ResolveOutcome): string {
