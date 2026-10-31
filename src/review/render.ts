@@ -8,6 +8,7 @@ import {
   checkLabel,
   countBySeverity,
   type FindingInput,
+  type MergeDangerInput,
   type Rejected,
   type ReviewSubmissionInput,
   rowPath,
@@ -211,9 +212,15 @@ function sinceLines(since: SinceSection | undefined): string[] {
     `### Since \`${since.from.slice(0, 7)}\``,
     "",
     since.summary.trim(),
+    ...pushDangerLines(since.merge_danger),
     "",
     `Files: ${files}. Resolved ${since.resolved} thread(s).`,
   ]
+}
+
+function pushDangerLines(danger: MergeDangerInput | undefined): string[] {
+  if (danger === undefined) return []
+  return ["", `This push: ${danger.door} door · ${oneLine(danger.blast_radius)}.`]
 }
 
 export const MOST_CHECK_TAIL_CHARS = 2000

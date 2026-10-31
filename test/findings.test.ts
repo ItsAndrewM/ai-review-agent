@@ -1097,10 +1097,29 @@ describe("renderSummaryComment", () => {
         summary: "Fixed the total.",
         files: ["a.ts", "b.ts"],
         resolved: 1,
+        merge_danger: { door: "two-way", blast_radius: "docs | only" },
       },
     })
     expect(text).toContain("### Summary\n\nThe whole PR.")
-    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread(s).")
+    expect(text).toContain(
+      "### Since `abc1234`\n\nFixed the total.\n\nThis push: two-way door · docs \\| only.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread(s).",
+    )
+  })
+
+  it("prints no push line for a since section stored before the push judged itself", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "COMMENT",
+      submission: { ...base, summary: "The whole PR." },
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+      since: { from: "abc1234567", to: "def5678901", summary: "Fixed the total.", files: ["a.ts"], resolved: 0 },
+    })
+    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`. Resolved 0 thread(s).")
+    expect(text).not.toContain("This push:")
   })
 
   it("keeps the merge danger under the verdict and the linked issues in the footer when it adds the since section", () => {
