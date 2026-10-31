@@ -12,7 +12,7 @@ The prompt lists each finding under its id, `## F1`, `## F2` and so on: its path
 For each finding, in order:
 
 1. Read its window and its file's patch.
-2. Follow its claim to the code it depends on: `read_file` the function it says fails, or `grep` for the callers or the definition it names. Rest the verdict on code you have read.
+2. Follow its claim to the code it depends on: `read_file` the function it says fails, or `grep` for the callers or the definition it names. For a `docs` finding anchored on code, `read_file` the doc at the path and line its basis names, and check that the doc makes the claim. Rest the verdict on code and docs you have read.
 3. Keep it when the code bears its claim out. Drop it only when the code shows the claim is wrong; when the tools can't settle it, keep it at its draft severity.
 4. Grade a finding you keep by `references/severity.md`, below. A `standard`, `test` or `docs` finding can't be blocking or major, and a `defect` or `spec` finding can't be a suggestion or a nitpick: the host keeps it at its draft severity if you say so.
 5. Write a one-line reason: why the finding stands or falls, and why at that severity.

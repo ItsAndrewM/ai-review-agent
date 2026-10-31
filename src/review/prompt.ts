@@ -182,7 +182,8 @@ function otherFiles(changedOutside: readonly ChangedFile[], unchanged: readonly 
 const ADDED_HISTORY_NOTE = "(added in this pull request: check only its claims about this pull request's changes)"
 const SEARCH_UNAVAILABLE = "The repository search wasn't available, so no docs were searched."
 const SEARCH_SPENT = "The repository search's budget was spent, so no docs were searched."
-const SEARCH_STOPPED = "The docs search stopped early at its budget, so later changed files weren't searched."
+const SEARCH_STOPPED =
+  "The docs search didn't finish: a budget ran out, a changed file couldn't be searched or a doc was missing from the snapshot, so some mentions may not be listed."
 
 function docsData(docs: DocsSections): string {
   return neutraliseClosingTag([renderDocsUnderReview(docs.under), renderMentions(docs)].join("\n\n"))

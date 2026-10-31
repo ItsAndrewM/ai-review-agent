@@ -1,8 +1,8 @@
 import { Minimatch } from "minimatch"
-import { isGenerated, type ChangedFile } from "../github/diff.ts"
+import { deltaLines, isGenerated, type ChangedFile } from "../github/diff.ts"
 import type { LogFields } from "../log.ts"
-import { grepMentions, MAX_SEARCH_WORK, type GrepWork, type MentionHit } from "./search.ts"
-import type { SnapshotFiles } from "./snapshot.ts"
+import { grepMentions, MAX_SEARCH_WORK, type GrepWork, type MentionHit, type MentionSearch } from "./search.ts"
+import type { SnapshotFiles, SnapshotRecord } from "./snapshot.ts"
 
 export const DEFAULT_DOC_GLOBS = [
   "**/README*",
@@ -52,6 +52,7 @@ export interface DocMentions {
 export type ChangedLinesByDoc = ReadonlyMap<string, ReadonlySet<number>>
 
 const GLOB_OPTIONS = { dot: true }
+const EXCLUDE_GLOB_OPTIONS = { ...GLOB_OPTIONS, nonegate: true }
 const EXCLUDE_MARK = "!"
 const MIN_BASENAME_CHARS = 4
 const COMMON_BASENAMES = new Set(["index", "main", "mod", "utils", "readme"])
@@ -62,11 +63,13 @@ const historyMatchers = HISTORY_GLOBS.map((glob) => new Minimatch(glob, GLOB_OPT
 
 const toMatcher = (glob: string): Minimatch => new Minimatch(glob, GLOB_OPTIONS)
 
+const toExcludeMatcher = (glob: string): Minimatch => new Minimatch(glob, EXCLUDE_GLOB_OPTIONS)
+
 function partition(globs: readonly string[]) {
   const includes = globs.filter((glob) => !glob.startsWith(EXCLUDE_MARK))
   const excludes = globs.filter((glob) => glob.startsWith(EXCLUDE_MARK)).map((glob) => glob.slice(1))
   const effective = includes.length === 0 ? [...DEFAULT_DOC_GLOBS] : includes
-  return { includes: effective.map(toMatcher), excludes: excludes.map(toMatcher) }
+  return { includes: effective.map(toMatcher), excludes: excludes.map(toExcludeMatcher) }
 }
 
 export function docMatcher(globs: readonly string[]): DocMatcher {
@@ -86,7 +89,16 @@ export function docsInChange(files: readonly ChangedFile[], isDoc: DocMatcher): 
 
 function bucketOf(file: ChangedFile, isDoc: DocMatcher): keyof DocsInChange {
   if (isHistory(file.filename)) return file.status === "added" ? "under" : "history"
+  if (file.status === "removed") return "code"
   return isDoc(file.filename) && !isGenerated(file.filename) ? "under" : "code"
+}
+
+export function searchableCode(code: readonly ChangedFile[]): ChangedFile[] {
+  return code.filter((file) => !isGenerated(file.filename))
+}
+
+export function changedLinesByDoc(under: readonly ChangedFile[]): ChangedLinesByDoc {
+  return new Map(under.map((file) => [file.filename, deltaLines(file.patch).added]))
 }
 
 export function docMentions(
@@ -97,17 +109,28 @@ export function docMentions(
   under: ChangedLinesByDoc,
 ): DocMentions {
   const selected = (path: string): boolean => isDoc(path) && !isHistory(path)
-  const searchable = code.filter((file) => !isGenerated(file.filename))
+  const searchable = searchableCode(code)
   const startUnits = work.units()
   const perFile: MentionHit[][] = []
+  let stopped = snapshotMissesDocs(files, selected)
   for (const file of searchable) {
     if (work.spent() || work.units() - startUnits > MAX_SEARCH_WORK) break
-    const hits = mentionsOf(files, work, selected, file.filename)
-    perFile.push(hits.filter((hit) => !under.get(hit.path)?.has(hit.line)))
+    const found = mentionsOf(files, work, selected, file.filename)
+    stopped ||= found.stopped
+    perFile.push(found.hits.filter((hit) => !under.get(hit.path)?.has(hit.line)))
   }
   const { kept, overflow } = roundRobin(perFile)
-  return { mentions: kept, overflow, searched: perFile.length, stopped: perFile.length < searchable.length }
+  return { mentions: kept, overflow, searched: perFile.length, stopped: stopped || perFile.length < searchable.length }
 }
+
+function snapshotMissesDocs(files: SnapshotFiles, selected: DocMatcher): boolean {
+  const record = files.record()
+  if (record !== undefined && isIncomplete(record)) return true
+  for (const entry of files.leftOut()) if (selected(entry.path)) return true
+  return false
+}
+
+const isIncomplete = (record: SnapshotRecord): boolean => record.capped || record.treeTruncated
 
 function roundRobin(perFile: readonly MentionHit[][]) {
   const queues = perFile.map((hits) => hits.slice(0, MAX_MENTIONS_PER_FILE))
@@ -129,17 +152,20 @@ function roundRobin(perFile: readonly MentionHit[][]) {
   return { kept, overflow }
 }
 
-function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, path: string): MentionHit[] {
+function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, path: string): MentionSearch {
   const seen = new Set<string>()
   const hits: MentionHit[] = []
+  let stopped = false
   for (const pattern of mentionPatterns(path)) {
-    for (const hit of grepMentions(files, selected, pattern, work).sort(byPlace)) {
+    const found = grepMentions(files, selected, pattern, work)
+    stopped ||= found.stopped
+    for (const hit of found.hits.sort(byPlace)) {
       if (seen.has(placeOf(hit))) continue
       seen.add(placeOf(hit))
       hits.push(hit)
     }
   }
-  return hits
+  return { hits, stopped }
 }
 
 const placeOf = (hit: MentionHit): string => `${hit.path}:${hit.line}`
@@ -150,9 +176,11 @@ const byPlace = (a: MentionHit, b: MentionHit): number => {
 }
 
 export function docPathsAtHead(paths: Iterable<string>, isDoc: DocMatcher, under: readonly string[]): string[] {
-  const kept = new Set(under)
-  for (const path of paths) if (isDoc(path) && !isHistory(path)) kept.add(path)
-  return [...kept].sort().slice(0, MAX_DOC_PATHS)
+  const reserved = new Set(under)
+  const others = new Set<string>()
+  for (const path of paths) if (isDoc(path) && !isHistory(path) && !reserved.has(path)) others.add(path)
+  const room = Math.max(0, MAX_DOC_PATHS - reserved.size)
+  return [...reserved, ...[...others].sort().slice(0, room)].sort()
 }
 
 export function docsStartFields(sorted: DocsInChange, found: DocMentions | undefined, search: DocsSearch): LogFields {

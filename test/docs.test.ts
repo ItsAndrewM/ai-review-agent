@@ -3,9 +3,11 @@ import type { ChangedFile } from "../src/github/diff.ts"
 import {
   DEFAULT_DOC_GLOBS,
   docMatcher,
+  changedLinesByDoc,
   docMentions,
   docPathsAtHead,
   docsInChange,
+  searchableCode,
   MAX_DOC_PATHS,
   docsStartFields,
   isHistory,
@@ -14,7 +16,7 @@ import {
   mentionPatterns,
 } from "../src/repository/docs.ts"
 import { GrepWork } from "../src/repository/search.ts"
-import { MemorySnapshotFiles } from "../src/repository/snapshot.ts"
+import { MemorySnapshotFiles, type LeftOut } from "../src/repository/snapshot.ts"
 
 const changed = (filename: string, status = "modified"): ChangedFile => ({
   filename,
@@ -58,6 +60,12 @@ describe("docMatcher", () => {
     expect(wiki("docs/design.md")).toBe(false)
   })
 
+  it("reads a doubled ! as a literal, as path_filters do, rather than a negation that would exclude everything else", () => {
+    const literal = docMatcher(["!!docs/odd.md"])
+    expect(literal("docs/design.md")).toBe(true)
+    expect(literal("!docs/odd.md")).toBe(false)
+  })
+
   it("narrows the defaults with an excludes-only list, so the check isn't turned off by mistake", () => {
     const narrowed = docMatcher(["!docs/archive/**"])
     expect(narrowed("docs/design.md")).toBe(true)
@@ -89,11 +97,34 @@ describe("docsInChange", () => {
     expect(sorted.history.map((file) => file.filename)).toEqual(["docs/superpowers/specs/2026-10-24-verify-design.md"])
     expect(sorted.code.map((file) => file.filename)).toEqual(["pnpm-lock.yaml", "src/review/tools.ts"])
   })
+
+  it("puts a removed doc with the code, so its stale links are searched for and nothing checks its deleted claims", () => {
+    const sorted = docsInChange([changed("docs/old.md", "removed")], docMatcher(DEFAULT_DOC_GLOBS))
+    expect(sorted.under).toEqual([])
+    expect(sorted.code.map((file) => file.filename)).toEqual(["docs/old.md"])
+  })
 })
 
-function snapshotOf(contents: Record<string, string>): MemorySnapshotFiles {
+describe("searchableCode", () => {
+  it("leaves out generated and lock files, so a push of only those loads no snapshot", () => {
+    const code = [changed("pnpm-lock.yaml"), changed("src/review/tools.ts")]
+    expect(searchableCode(code).map((file) => file.filename)).toEqual(["src/review/tools.ts"])
+  })
+})
+
+describe("changedLinesByDoc", () => {
+  it("holds the lines the push added or changed, not the unchanged context lines of the hunk", () => {
+    const patch = "@@ -1,3 +1,3 @@\n context one\n-old\n+new\n context three"
+    const lines = changedLinesByDoc([{ ...changed("docs/design.md"), patch }])
+    expect([...(lines.get("docs/design.md") ?? [])]).toEqual([2])
+  })
+})
+
+function snapshotOf(contents: Record<string, string>, leftOut: readonly LeftOut[] = []): MemorySnapshotFiles {
   const files = new MemorySnapshotFiles()
   files.add(Object.entries(contents).map(([path, content]) => ({ path, content })))
+  files.leaveOut(leftOut)
+  files.finish({ sha: "abc", files: 0, bytes: 0, gapFilled: 0, leftOut: {}, capped: false, treeTruncated: false })
   return files
 }
 
@@ -159,6 +190,34 @@ describe("docMentions", () => {
     expect([...perDoc.values()]).toEqual(Array.from({ length: 8 }, () => 5))
   })
 
+  it("counts a place already listed as kept, not as an unlisted mention, when two changed files share a doc line", () => {
+    const names = Array.from({ length: 7 }, (_, i) => `src/area/file${i}.ts`)
+    const code = names.map((name) => changed(name))
+    const lines = (name: string, count: number) => Array.from({ length: count }, () => name)
+    const docsByFile = Object.fromEntries(
+      names.map((name, i) => [`docs/d${i}.md`, lines(name, i === 0 ? 5 : 6).join("\n")]),
+    )
+    docsByFile["docs/d6.md"] = [...lines("src/area/file6.ts", 5), "src/area/file6.ts src/area/file0.ts"].join("\n")
+    const found = docMentions(snapshotOf(docsByFile), new GrepWork(), isDoc, code, new Map())
+    expect(found.mentions).toHaveLength(MAX_MENTIONS)
+    expect(found.overflow).toBe(1)
+  })
+
+  it("reports a search that stopped inside a file or skipped a pattern as stopped, and a doc left out of the snapshot too", () => {
+    const leftOut = docMentions(
+      snapshotOf({ "docs/design.md": "src/review/tools.ts\n" }, [{ path: "README.md", reason: "too_large" }]),
+      new GrepWork(),
+      isDoc,
+      [tools],
+      new Map(),
+    )
+    expect(leftOut.mentions).toHaveLength(1)
+    expect(leftOut.stopped).toBe(true)
+    const long = changed(`src/${"a".repeat(600)}.ts`)
+    const refused = docMentions(snapshotOf({ "README.md": "nothing\n" }), new GrepWork(), isDoc, [long], new Map())
+    expect(refused.stopped).toBe(true)
+  })
+
   it("stops when the search work is spent and says so, instead of answering that nothing mentions the change", () => {
     const work = new GrepWork()
     work.charge(Number.MAX_SAFE_INTEGER)
@@ -209,6 +268,9 @@ describe("docPathsAtHead", () => {
       (_, i) => `packages/p${String(i).padStart(4, "0")}/README.md`,
     )
     expect(docPathsAtHead(many, docMatcher(DEFAULT_DOC_GLOBS), [])).toHaveLength(MAX_DOC_PATHS)
+    const kept = docPathsAtHead(many, docMatcher(DEFAULT_DOC_GLOBS), ["zzz/README.md"])
+    expect(kept).toHaveLength(MAX_DOC_PATHS)
+    expect(kept).toContain("zzz/README.md")
   })
 })
 

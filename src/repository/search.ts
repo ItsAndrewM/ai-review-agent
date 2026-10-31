@@ -264,11 +264,17 @@ const present = (part: string): boolean => part !== ""
 
 const joined = (parts: readonly string[]): string => parts.filter(present).join("\n")
 
-export function grepMentions(files: SnapshotFiles, selected: Selector, pattern: string, work: GrepWork): MentionHit[] {
-  if (work.spent() || patternProblem(pattern) !== undefined) return []
+export interface MentionSearch {
+  hits: MentionHit[]
+  stopped: boolean
+}
+
+export function grepMentions(files: SnapshotFiles, selected: Selector, pattern: string, work: GrepWork): MentionSearch {
+  if (work.spent() || patternProblem(pattern) !== undefined) return { hits: [], stopped: true }
   const found = search(files, selected, engineFor(compile(pattern).regex))
   work.charge(found.work)
-  return found.hits.map(({ path, line, content }) => ({ path, line, text: content }))
+  const hits = found.hits.map(({ path, line, content }) => ({ path, line, text: content }))
+  return { hits, stopped: found.stopped }
 }
 
 export function grep(files: SnapshotFiles, query: GrepQuery, work: GrepWork): string {

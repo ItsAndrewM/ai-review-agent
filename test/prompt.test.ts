@@ -431,7 +431,7 @@ describe("the docs sections", () => {
     )
     const stopped = reviewPrompt(pr, [], false, [], { ...docs, search: "stopped" })
     expect(stopped).toContain(
-      "docs/design.md:112: The snapshot is dropped when the review ends.\nThe docs search stopped early at its budget, so later changed files weren't searched.",
+      "docs/design.md:112: The snapshot is dropped when the review ends.\nThe docs search didn't finish: a budget ran out, a changed file couldn't be searched or a doc was missing from the snapshot, so some mentions may not be listed.",
     )
   })
 

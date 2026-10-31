@@ -141,7 +141,8 @@ describe("grepMentions", () => {
 
   it("answers structured hits, path then line, for the files the selector accepts", () => {
     const work = new GrepWork()
-    const hits = grepMentions(docs, (path) => path.endsWith(".md"), "src/review/tools.ts", work)
+    const { hits, stopped } = grepMentions(docs, (path) => path.endsWith(".md"), "src/review/tools.ts", work)
+    expect(stopped).toBe(false)
     expect(hits).toEqual([
       { path: "README.md", line: 1, text: "See src/review/tools.ts for the tools." },
       { path: "docs/design.md", line: 1, text: "The tools live in src/review/tools.ts." },
@@ -153,7 +154,11 @@ describe("grepMentions", () => {
   it("answers nothing once the review's search work is spent", () => {
     const work = new GrepWork()
     work.charge(Number.MAX_SAFE_INTEGER)
-    expect(grepMentions(docs, () => true, "tools", work)).toEqual([])
+    expect(grepMentions(docs, () => true, "tools", work)).toEqual({ hits: [], stopped: true })
+  })
+
+  it("reports a pattern it refuses as a stop, so the caller never reads it as no mentions", () => {
+    expect(grepMentions(docs, () => true, "x".repeat(600), new GrepWork())).toEqual({ hits: [], stopped: true })
   })
 })
 

@@ -35,7 +35,6 @@ import {
   type UpdateCheckRun,
 } from "./github/client.ts"
 import {
-  commentableLines,
   everyFileFiltered,
   indexCommentableLines,
   reviewableFiles,
@@ -87,8 +86,9 @@ import {
   docMentions,
   docPathsAtHead,
   docsInChange,
+  changedLinesByDoc,
   docsStartFields,
-  type ChangedLinesByDoc,
+  searchableCode,
   type DocMatcher,
   type DocMentions,
   type DocsInChange,
@@ -1748,7 +1748,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async searchDocs(sorted: DocsInChange, isDoc: DocMatcher): Promise<SearchedDocs> {
     const underPaths = sorted.under.map((file) => file.filename).sort()
-    if (sorted.code.length === 0) return { found: undefined, search: "ready", headDocs: underPaths }
+    if (searchableCode(sorted.code).length === 0) return { found: undefined, search: "ready", headDocs: underPaths }
     const access = await this.repositorySearch("grep")
     if (access.kind !== "ready") return { found: undefined, search: docsSearchOf(access.kind), headDocs: underPaths }
     const found = docMentions(access.files, access.work, isDoc, sorted.code, changedLinesByDoc(sorted.under))
@@ -3056,10 +3056,6 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
-
-function changedLinesByDoc(under: readonly ChangedFile[]): ChangedLinesByDoc {
-  return new Map(under.map((file) => [file.filename, new Set(commentableLines(file.patch).right.keys())]))
-}
 
 function docsSearchOf(kind: SearchAccess["kind"]): DocsSearch {
   if (kind === "ready") return "ready"
