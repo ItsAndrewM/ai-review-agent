@@ -1,6 +1,15 @@
 import { readFileSync } from "node:fs"
 import { describe, expect, it } from "vitest"
-import { pairingProblem, SMELLS, standardBasisProblem, type BasisContext } from "../src/review/basis.ts"
+import {
+  docsBasisProblem,
+  pairingProblem,
+  SMELLS,
+  standardBasisProblem,
+  type BasisContext,
+} from "../src/review/basis.ts"
+
+const NEW_CAP =
+  "a standard, test or docs finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
 
 describe("SMELLS", () => {
   it("names every smell bullet of references/smells.md and nothing else", () => {
@@ -16,6 +25,7 @@ describe("standardBasisProblem", () => {
     hasLinkedIssues: false,
     instructionFiles: ["CLAUDE.md", ".github/instructions/lint.instructions.md", ".andabot.yaml: src/**"],
     activatedSkills: [],
+    docs: [],
   }
 
   it("passes a basis naming a standards file by path or basename, in any case", () => {
@@ -49,7 +59,7 @@ describe("standardBasisProblem", () => {
   })
 
   it("offers only the smells when there are no standards files and no activation", () => {
-    const bare = { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [] }
+    const bare = { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [], docs: [] }
     expect(standardBasisProblem("the project convention", bare)).toBe(
       "a standard finding must name a repository standards file (none is listed), a smell from references/smells.md, or a repository skill this review activated (none was); if the code is wrong on its own terms, make it a defect with its failure scenario",
     )
@@ -61,6 +71,48 @@ describe("standardBasisProblem", () => {
     expect(standardBasisProblem("the team prefers it", activated)).toContain(
       "a repository skill this review activated (react-conventions, api-style)",
     )
+  })
+})
+
+describe("docsBasisProblem", () => {
+  const context: BasisContext = {
+    hasLinkedIssues: false,
+    instructionFiles: [],
+    activatedSkills: [],
+    docs: ["docs/design.md", "README.md", "docs/superpowers/plans/2026-10-31-new.md"],
+  }
+
+  it("passes a basis naming one of the pull request's docs by path or basename, in any case", () => {
+    expect(
+      docsBasisProblem("docs/design.md:112 says the snapshot is dropped; src/x.ts:40 keeps it", context),
+    ).toBeUndefined()
+    expect(docsBasisProblem("readme.md:3 names grep, src/x.ts:9 renamed it", context)).toBeUndefined()
+    expect(docsBasisProblem("the plan docs/superpowers/plans/2026-10-31-new.md:8 says X", context)).toBeUndefined()
+  })
+
+  it("refuses a basis that names a code file or a modified plan, listing the docs it may name", () => {
+    const refused = docsBasisProblem("src/x.ts:40 contradicts the comment above it", context)
+    expect(refused).toBe(
+      "a docs finding must name one of the pull request's docs (docs/design.md, README.md, docs/superpowers/plans/2026-10-31-new.md); if the code is wrong on its own terms, make it a defect with its failure scenario",
+    )
+    expect(docsBasisProblem("docs/superpowers/plans/2026-10-17-old.md:3 says Y", context)).toBe(refused)
+    expect(docsBasisProblem("anything", { ...context, docs: [] })).toContain("(none is known)")
+  })
+
+  it("matches a doc's name only at a path boundary, so a spec ending in -design.md doesn't pass as design.md", () => {
+    expect(
+      docsBasisProblem("docs/superpowers/specs/2026-10-24-verify-design.md:40 says the bar is 2 of 3", context),
+    ).toContain("a docs finding must name")
+    expect(docsBasisProblem("`design.md:3` says X; src/a.ts:9 does Y", context)).toBeUndefined()
+    expect(docsBasisProblem("(docs/design.md:3) X", context)).toBeUndefined()
+    expect(docsBasisProblem("see docs/design.md:3, which says X", context)).toBeUndefined()
+  })
+
+  it("lists at most ten docs in the refusal", () => {
+    const many = Array.from({ length: 14 }, (_, i) => `packages/p${i}/README.md`)
+    const refused = docsBasisProblem("src/a.ts:1 contradicts nothing", { ...context, docs: many })
+    expect(refused).toContain("packages/p9/README.md, and 4 more")
+    expect(refused).not.toContain("packages/p10/README.md")
   })
 })
 
@@ -88,11 +140,18 @@ describe("pairingProblem", () => {
     }
   })
 
+  it("allows a docs finding at suggestion or nitpick and refuses it at blocking or major", () => {
+    expect(pairingProblem({ basis_kind: "docs", severity: "suggestion" })).toBeUndefined()
+    expect(pairingProblem({ basis_kind: "docs", severity: "nitpick" })).toBeUndefined()
+    expect(pairingProblem({ basis_kind: "docs", severity: "major" })).toBe(NEW_CAP)
+    expect(pairingProblem({ basis_kind: "docs", severity: "blocking" })).toBe(NEW_CAP)
+  })
+
   it("refuses a standard or test finding graded blocking or major", () => {
     for (const basis_kind of ["standard", "test"] as const) {
       for (const severity of ["blocking", "major"] as const) {
         expect(pairingProblem({ basis_kind, severity })).toBe(
-          "a standard or test finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on",
+          "a standard, test or docs finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on",
         )
       }
     }

@@ -81,6 +81,19 @@ import {
   type RepositoryContext,
   type ReviewRepository,
 } from "./repository/context.ts"
+import {
+  docMatcher,
+  docMentions,
+  docPathsAtHead,
+  docsInChange,
+  changedLinesByDoc,
+  docsStartFields,
+  searchableCode,
+  type DocMatcher,
+  type DocMentions,
+  type DocsInChange,
+  type DocsSearch,
+} from "./repository/docs.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
 import { loadSnapshot } from "./repository/load-snapshot.ts"
 import {
@@ -241,6 +254,7 @@ import {
   answerPrompt,
   fullPrompt,
   incrementalPrompt,
+  type DocsSections,
   problemsText,
   resubmitPrompt,
   reviewPrompt,
@@ -397,6 +411,12 @@ interface CheckedSubmission {
   scoped: ScopedReview
   missing: string[]
   reasons: CheckedReasons
+}
+
+interface SearchedDocs {
+  found: DocMentions | undefined
+  search: DocsSearch
+  headDocs: string[]
 }
 
 interface Publication {
@@ -1707,6 +1727,43 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
+  private async docsFor(
+    pr: PullRequestInfo,
+    files: readonly ChangedFile[],
+    since: readonly ChangedFile[],
+    scope: ReviewScope,
+    globs: readonly string[],
+    pathFilters: readonly string[],
+    deliveryId: string,
+  ): Promise<DocsSections> {
+    const isDoc = docMatcher(globs, pathFilters)
+    const incremental = scope.mode === "incremental" && scope.from !== undefined
+    const sorted = docsInChange(incremental ? promptFiles(files, since, scope).covered : files, isDoc)
+    const searched = await this.searchDocs(sorted, isDoc)
+    await this.recordDocs(deliveryId, searched.headDocs)
+    const fields = docsStartFields(sorted, searched.found, searched.search)
+    log("review.docs", { number: pr.number, head: shortSha(pr.head.sha), ...fields })
+    const { found, search } = searched
+    const mentions = found?.mentions ?? []
+    return { under: sorted.under, mentions, overflow: found?.overflow ?? 0, search, longLines: found?.longLines ?? 0 }
+  }
+
+  private async searchDocs(sorted: DocsInChange, isDoc: DocMatcher): Promise<SearchedDocs> {
+    const underPaths = sorted.under.map((file) => file.filename).sort()
+    if (searchableCode(sorted.code).length === 0) return { found: undefined, search: "ready", headDocs: underPaths }
+    const access = await this.repositorySearch("grep")
+    if (access.kind !== "ready") return { found: undefined, search: docsSearchOf(access.kind), headDocs: underPaths }
+    const found = docMentions(access.files, access.work, isDoc, sorted.code, changedLinesByDoc(sorted.under))
+    const mentioned = found.mentions.map((mention) => mention.path)
+    const headDocs = docPathsAtHead(access.files.paths(), isDoc, [...underPaths, ...mentioned])
+    return { found, search: found.stopped ? "stopped" : "ready", headDocs }
+  }
+
+  private async recordDocs(deliveryId: string, docs: readonly string[]): Promise<void> {
+    const pending = await this.pendingFor(deliveryId)
+    if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, docs: [...docs] })
+  }
+
   private async recordRepository(deliveryId: string, repository: ReviewRepository): Promise<void> {
     const pending = await this.pendingFor(deliveryId)
     if (pending) await this.ctx.storage.put<PendingReview>("pending", { ...pending, ...repositoryRecord(repository) })
@@ -1728,7 +1785,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
       const { scope, since } = await this.planReview(pr, reviewable, incoming, run)
-      const prompt = promptFor(pr, reviewable, scope, since, issues, (await this.readReviewed())?.omitted ?? [])
+      const { docs: docGlobs, path_filters } = run.config.reviews
+      const docs = await this.docsFor(pr, reviewable, since, scope, docGlobs, path_filters, run.deliveryId)
+      const prompt = promptFor(pr, reviewable, scope, since, issues, (await this.readReviewed())?.omitted ?? [], docs)
       log("review.start", {
         number: pr.number,
         head: shortSha(pr.head.sha),
@@ -3002,11 +3061,17 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
 
+function docsSearchOf(kind: SearchAccess["kind"]): DocsSearch {
+  if (kind === "ready") return "ready"
+  return kind === "spent" ? "spent" : "unavailable"
+}
+
 function basisContextOf(pending: PendingReview): BasisContext {
   return {
     hasLinkedIssues: (pending.linkedIssues?.length ?? 0) > 0,
     instructionFiles: pending.instructionFiles ?? [],
     activatedSkills: pending.activated ?? [],
+    docs: pending.docs ?? [],
   }
 }
 
@@ -3017,10 +3082,11 @@ function promptFor(
   since: readonly ChangedFile[],
   issues: readonly LinkedIssue[],
   omitted: readonly OmittedRequirementInput[],
+  docs: DocsSections,
 ): string {
-  if (scope.mode === "fresh") return reviewPrompt(pr, files, true, issues)
+  if (scope.mode === "fresh") return reviewPrompt(pr, files, true, issues, docs)
   const lists = threadLists(scope.open, scope.recheck)
-  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists, issues)
+  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists, issues, docs)
   return incrementalPrompt(pr, {
     from: scope.from,
     marked: coveredMap(scope),
@@ -3028,6 +3094,7 @@ function promptFor(
     ...lists,
     issues,
     omitted,
+    docs,
   })
 }
 

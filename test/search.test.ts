@@ -5,6 +5,7 @@ import {
   DEFAULT_TREE_DEPTH,
   grep,
   GrepWork,
+  grepMentions,
   MAX_GREP_CHARS,
   MAX_LINE_CHARS,
   MAX_MATCHES,
@@ -128,6 +129,55 @@ describe("grep's run budget", () => {
     const work = new GrepWork()
     work.charge(MAX_RUN_SEARCH_WORK)
     expect(grep(counted(), { pattern: "" }, work)).toBe("The pattern is empty.")
+  })
+})
+
+describe("grepMentions", () => {
+  const docs = snapshotOf({
+    "docs/design.md": "The tools live in src/review/tools.ts.\nAnother line.\nsrc/review/tools.ts again\n",
+    "README.md": "See src/review/tools.ts for the tools.\n",
+    "src/review/tools.ts": "export const tools = 1 // src/review/tools.ts\n",
+  })
+
+  it("answers structured hits, path then line, for the files the selector accepts", () => {
+    const work = new GrepWork()
+    const { hits, stopped, longLines } = grepMentions(docs, (path) => path.endsWith(".md"), "src/review/tools.ts", work)
+    expect(stopped).toBe(false)
+    expect(longLines).toBe(0)
+    expect(hits).toEqual([
+      { path: "README.md", line: 1, text: "See src/review/tools.ts for the tools." },
+      { path: "docs/design.md", line: 1, text: "The tools live in src/review/tools.ts." },
+      { path: "docs/design.md", line: 3, text: "src/review/tools.ts again" },
+    ])
+    expect(work.units()).toBeGreaterThan(0)
+  })
+
+  it("answers nothing once the review's search work is spent", () => {
+    const work = new GrepWork()
+    work.charge(Number.MAX_SAFE_INTEGER)
+    expect(grepMentions(docs, () => true, "tools", work)).toEqual({ hits: [], stopped: true, longLines: 0 })
+  })
+
+  it("carries a stop inside a file out as stopped, so the docs search can say it didn't finish", () => {
+    const engine = engineOf(SPRAWLING)
+    let length = MAX_SEARCHED_LINE_CHARS
+    while (worstWork(engine, length) > MAX_SEARCH_WORK) length--
+    const filler = fillerLines(MAX_SEARCH_WORK - worstWork(engine, length) - 1 - LINE_UNITS, length)
+    const last = `${LETTERS}zzz`.padEnd(length, "x")
+    const files = snapshotOf({ "a.md": ["x", ...filler, last].join("\n") })
+    expect(grepMentions(files, () => true, SPRAWLING, new GrepWork())).toEqual({
+      hits: [],
+      stopped: true,
+      longLines: 0,
+    })
+  })
+
+  it("reports a pattern it refuses as a stop, so the caller never reads it as no mentions", () => {
+    expect(grepMentions(docs, () => true, "x".repeat(600), new GrepWork())).toEqual({
+      hits: [],
+      stopped: true,
+      longLines: 0,
+    })
   })
 })
 

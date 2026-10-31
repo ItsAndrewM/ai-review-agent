@@ -32,7 +32,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("11")
+    expect(review?.version).toBe("12")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -244,6 +244,14 @@ describe("bundledSkills", () => {
     )
   })
 
+  it("tells the review to check the docs under review and the docs mentioning the change, and to anchor a stale doc on the changed code line", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain("- **Docs**: for each file under `## Docs under review`")
+    expect(review?.body).toContain("## Docs mentioning the change")
+    expect(review?.body).toContain("anchors on the changed code line")
+    expect(review?.description).toContain("docs")
+  })
+
   it("tells the review to use activate_skill with a matching skill's name before step 2, in the words of the catalog's list headed Available skills, and to grade the finding the skill asks for as a standard finding", async () => {
     const review = await (await bundledSkills()).source.load("review")
     expect(review?.body).toContain(
@@ -294,6 +302,8 @@ describe("bundledSkills", () => {
       expect(verify?.body).toContain(mark)
     }
     expect(verify?.body).toContain("`references/severity.md`, below")
+    expect(verify?.body).toContain("For a `docs` finding anchored on code, `read_file` the doc")
+    expect(verify?.body).toContain("and check that the doc makes the claim")
     expect(verify?.body).toContain(`at most ${VERIFY_TOOL_BUDGET} tool calls`)
     expect(verify?.body).toContain(`\`${SUBMIT_VERDICTS_TOOL}\``)
   })

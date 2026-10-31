@@ -1,6 +1,6 @@
 # Severity
 
-Four grades. A `defect` or `spec` finding is blocking or major; a `standard` or `test` finding is a suggestion or a nitpick.
+Four grades. A `defect` or `spec` finding is blocking or major; a `standard`, `test` or `docs` finding is a suggestion or a nitpick.
 
 ## blocking
 
@@ -24,6 +24,7 @@ A real improvement the author may decline. The code works as it stands, and the 
 
 - **The address is formatted twice.** `invoice.ts` and `receipt.ts` each join the street, city and postcode with the same six lines. Extract one `formatAddress` and call it from both.
 - **No test covers the new `h` unit.** `parseDuration("2h")` is new behaviour, and no test fails if that branch breaks. Add one that expects 7200.
+- **The design doc says the snapshot is dropped when the review ends.** `docs/design.md:112` says so, and `dropSnapshot` in `src/repository/snapshot-host.ts:40` now waits for the last answer too. Say so in the doc.
 
 ## nitpick
 
@@ -31,3 +32,4 @@ Style, naming and small clean-ups: a few lines read better, and nothing else cha
 
 - **`getConfig` only forwards.** `function getConfig() { return loadConfig() }` gives one call a second name. Cut it and call `loadConfig()` directly.
 - **`d` hides what it holds.** In `const d = end - start`, a name such as `elapsedMs` says what the value is.
+- **The README names `grepFiles`.** `README.md:40` still calls the tool `grepFiles`; `src/review/tools.ts:190` renamed it `grep`. Update the name.

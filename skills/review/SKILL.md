@@ -1,8 +1,8 @@
 ---
 name: review
-description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
+description: Review a pull request's diff for defects, spec, standards, tests and docs, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "11"
+  version: "12"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -21,12 +21,13 @@ Take the files in the diff's order and read every hunk. Call `read_file` when a 
 - **Spec**: what the linked issues ask for. A departure is a spec finding once you can name the issue line it rests on; that line is the finding's `basis`, and `quote` stays the diff line. When the prompt says no issue is linked, this check passes: requirements come only from linked issues.
 - **Standards**: the repository's own rules under `## Repository standards` in your instructions, when present, and the smells in `references/smells.md`, below. A `standard` finding's basis names the standards file and the rule, such as `CLAUDE.md: no comments of any kind`, a smell by its name, or an activated repository skill; the host refuses a `standard` basis that names none of them. When a hunk adds or reshapes logic, match the hunks against the smells.
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
+- **Docs**: for each file under `## Docs under review`, check every claim its changed lines make about the code against the code, with `read_file` and `grep`; for each line under `## Docs mentioning the change`, read the paragraph around it and check what it says about the changed file against the hunks. A claim the code contradicts is a `docs` finding: its basis names the doc's `path:line` and the claim, and the code `path:line` that contradicts it. A doc the pull request adds under `docs/superpowers/` is checked only for what it says this pull request does; a modified one there is history and is not checked.
 
 Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.
 
 ## 3. Record findings
 
-Record a finding only where a check fails on an anchored line. A requirement the diff leaves out has no line to anchor, so it goes in `omitted_requirements` at step 5.
+Record a finding only where a check fails on an anchored line. A requirement the diff leaves out has no line to anchor, so it goes in `omitted_requirements` at step 5. A false claim in a changed doc anchors on that doc line; a stale doc for code the push changed anchors on the changed code line, with the doc's `path:line` in the basis and the claim quoted in the body.
 
 - Copy the line's anchor, `R<n>` or `L<n>`, and its text from the numbered diff into `line`, `side` and `quote`, as `submit_review`'s fields describe.
 - Give each finding the `basis_kind` of the check that failed and a `basis` of that kind.

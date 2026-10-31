@@ -469,7 +469,7 @@ describe("path filters", () => {
     const validated = validateFindings(
       [onFile("src/x.ts", "y", "major"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
       indexCommentableLines(scopedFiles(scope, prFiles)),
-      { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [] },
+      { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [], docs: [] },
     )
     const { accepted, rejected } = withFilteredUnfounded(validated, scope)
     expect(accepted.map((finding) => finding.path)).toEqual(["src/x.ts"])
@@ -496,6 +496,7 @@ describe("path filters", () => {
       hasLinkedIssues: false,
       instructionFiles: [],
       activatedSkills: [],
+      docs: [],
     })
     expect(withFilteredUnfounded(validated, scope)).toEqual(validated)
   })

@@ -196,6 +196,12 @@ describe("StoredPending", () => {
     expect(Value.Check(StoredPending, pending)).toBe(true)
     expect(Value.Check(StoredPending, { ...pending, activated: "react-conventions" })).toBe(false)
   })
+
+  it("keeps the pull request's docs for the basis check, and reads a record from before it did", () => {
+    const pending = { headSha: "a".repeat(40), deliveryId: "d1" }
+    expect(Value.Check(StoredPending, { ...pending, docs: ["docs/design.md"] })).toBe(true)
+    expect(Value.Check(StoredPending, { ...pending, docs: "docs/design.md" })).toBe(false)
+  })
 })
 
 describe("migratePending", () => {
