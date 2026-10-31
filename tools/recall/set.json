@@ -185,6 +185,12 @@
           "path": "src/review/cost.ts",
           "pattern": "mid-turn|final (response|turn|message)|after (posting|the post)|left out|undercount",
           "note": "true: the spend is measured when the summary posts, inside the tool call, so the turn that consumes the tool result is never counted"
+        },
+        {
+          "id": "66-a9",
+          "path": "src/pull-request.ts",
+          "pattern": "interleav|chat[^.]{0,80}(charg|count|spend)",
+          "note": "true: usage and the message list are the object's whole session, so a chat answered mid-review is charged to the review"
         }
       ],
       "knownFalse": [
@@ -374,6 +380,12 @@
           "path": "src/repository/instructions.ts",
           "pattern": "no change required|trailing (spaces|whitespace)",
           "note": "not a finding: it says no change is required"
+        },
+        {
+          "id": "65-f8",
+          "path": "skills/review/SKILL.md",
+          "pattern": "Andrew's read|waits for Andrew|read before (this|the) (PR|pull request) merges",
+          "note": "not a finding: a process step of the plan, not a linked-issue requirement, and nothing in the diff shows whether it was read"
         }
       ],
       "stats": {
@@ -427,7 +439,20 @@
           "evidence": "CodeRabbit on #91, open as #119"
         }
       ],
-      "allowed": [],
+      "allowed": [
+        {
+          "id": "91-a1",
+          "path": "src/pull-request.ts",
+          "pattern": "reads pending twice|readPending[^.]{0,60}(second|twice|again)|second storage read",
+          "note": "true: postReview resolves pendingFor and then readPending again on the refusal path"
+        },
+        {
+          "id": "91-a2",
+          "path": "src/pull-request.ts",
+          "pattern": "recomputes the reviewable|everyFileFiltered[^.]{0,80}(recomput|again|twice)",
+          "note": "true: runSummary's everyFileFiltered recomputes the reviewable list summaryFiles already holds"
+        }
+      ],
       "knownFalse": [
         {
           "id": "91-f5",
@@ -458,6 +483,12 @@
           "path": "src/pull-request.ts",
           "pattern": "refusedCalls|refusals? (logged )?(before|between)",
           "note": "false: the counter resets when runReview starts and is logged only after the review or its retry"
+        },
+        {
+          "id": "91-f6",
+          "path": "src/pull-request.ts",
+          "pattern": "pending-guard|pending-presence guard|restoreCatalog[^.]{0,80}planReview",
+          "note": "false: the pending guard appears once at this head; planReview has no such guard"
         }
       ],
       "stats": {
@@ -509,6 +540,12 @@
           "path": "test/repository-skills.test.ts",
           "pattern": "bivarian|CalledWithoutHarness",
           "note": "true: the description flags the same construct and a cast-free alternative was wanted"
+        },
+        {
+          "id": "105-a3",
+          "path": "src/pull-request.ts",
+          "pattern": "activation-report callback|installCatalog[^.]{0,80}(identical|same callback|duplicat)",
+          "note": "true: the two installCatalog calls pass the same reportActivation callback"
         }
       ],
       "knownFalse": [
@@ -599,6 +636,12 @@
           "path": "src/github/client.ts",
           "pattern": "symlink[^.]{0,80}(expect|surpris|permit|option)",
           "note": "not a finding: the issue permits either option and the PR documents its choice"
+        },
+        {
+          "id": "112-f5",
+          "path": "src/repository/skills.ts",
+          "pattern": "countsBySkill[^.]{0,60}middle|middle-man over",
+          "note": "false: countsBySkill serves two counts, so inlining it would duplicate the map"
         }
       ],
       "stats": {
@@ -676,6 +719,12 @@
           "path": "src/review/cost.ts",
           "pattern": "duplicat|isAssistant",
           "note": "true: isAssistant and the assistant-turn walk are copied from transcript.ts"
+        },
+        {
+          "id": "66-a10",
+          "path": "src/review/cost.ts",
+          "pattern": "priceText[^.]{0,60}models[^.]{0,60}(count|hides|name)|`models`[^.]{0,40}count",
+          "note": "true: priceText's second parameter holds the number of models, which its name doesn't say"
         }
       ],
       "knownFalse": [
@@ -977,6 +1026,12 @@
           "path": "src/pull-request.ts",
           "pattern": "(no|without|has no|lacks? a) test|untested",
           "note": "true: the settings-skip wiring in review() has no test"
+        },
+        {
+          "id": "71-a5",
+          "path": "src/pull-request.ts",
+          "pattern": "config cache[^.]{0,80}(context cache|duplicat)|cacheConfig[^.]{0,80}cacheContext",
+          "note": "true: cachedConfig and cacheConfig repeat cachedContext and cacheContext's read, stale-delete and put"
         }
       ],
       "knownFalse": [],
@@ -1100,6 +1155,18 @@
           "path": "src/pull-request.ts",
           "pattern": "(no|without|has no|lacks? a) test|untested",
           "note": "true: postedRetryText has no test, as the description says"
+        },
+        {
+          "id": "38-a3",
+          "path": "src/models.ts",
+          "pattern": "constraint (lifts|ends)[^.]{0,80}tool|awaitsResubmission[^.]{0,80}(tool|lifts)",
+          "note": "true: awaitsResubmission looks only at the latest message, so a tool call in the retry ends the JSON constraint"
+        },
+        {
+          "id": "38-a4",
+          "path": "src/pull-request.ts",
+          "pattern": "postedRetryText[^.]{0,80}(duplicat|finishReview)|parse-post-log",
+          "note": "true: postedRetryText repeats finishReview's parse, post and log steps"
         }
       ],
       "knownFalse": [

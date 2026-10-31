@@ -500,7 +500,7 @@ Blocked until `tools/recall` is on `main`. Do not run `pnpm recall` from a sessi
 - [x] **Step 2: Relabel** — in the set, every expected finding with `basis_kind: defect|spec` and `severity: suggestion|nitpick` becomes `major` (or `blocking` when a user meets it, by the ruling), and any other case the ruling moves; list each change in the PR description for Andrew to check.
 - [x] **Step 3: Derive the expected event** — remove the hand-written expected verdict from `HeadCase`; add `expectedEvent(head)` = `REQUEST_CHANGES` when an expected finding is blocking, else `APPROVE`; make the runner's `verdictMatched` compare `decideReviewVerdict({ accepted: run's validated findings, rejected: [], workflow: true, openBlocking: 0, reasons: checkReasons(run's submission, frozen sources).accepted })` against it; add a test for both.
 - [x] **Step 4: `pnpm check`, commit** — `git commit -m "Relabel the recall set for the major grade and derive its expected event"`.
-- [ ] **Step 5: Ask Andrew to run** `pnpm recall` (GLM low, 3 runs) by `!`; post the table on #121 and #122; commit the results file.
+- [x] **Step 5: Ask Andrew to run** `pnpm recall` (GLM low, 3 runs) by `!`; post the table on #121 and #122; commit the results file.
 
 ---
 

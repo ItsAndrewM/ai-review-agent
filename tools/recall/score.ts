@@ -160,6 +160,11 @@ export function scoreRun(head: HeadCase, run: number, answer: ReviewAnswer): Run
   return { head: head.head, run, answer, ...matchFindings(head, accepted), verdict, summaryMatched }
 }
 
+function blockingLineMatched(head: HeadCase, run: RunScore): boolean {
+  if (run.verdict === undefined) return false
+  return (run.verdict === "request_changes") === (expectedVerdict(head) === "request_changes")
+}
+
 function majority(count: number, runs: number): boolean {
   return count * 2 > runs
 }
@@ -201,8 +206,7 @@ function majorityOf(values: readonly (boolean | undefined)[]): boolean | undefin
 }
 
 function headScore(head: HeadCase, runs: readonly RunScore[]): HeadScore {
-  const expected = expectedVerdict(head)
-  const verdicts = runs.filter((run) => run.verdict === expected).length
+  const verdicts = runs.filter((run) => blockingLineMatched(head, run)).length
   const score: HeadScore = {
     head: head.head,
     expects: head.expects.map((expected) => expectedScore(expected, runs)),

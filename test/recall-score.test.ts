@@ -179,6 +179,32 @@ describe("scoreSet with the major grade", () => {
   })
 })
 
+describe("verdictMatched is the blocking line", () => {
+  const meta = { model: "glm", thinking: "low", skills: "abc" }
+  const linked = (expects: ReturnType<typeof expecting>[]) =>
+    headCase({ expects, issues: [{ number: 50, title: "Time", body: "Show the time.", cut: false, state: "open" }] })
+  const omitted = [{ issue: 50, requirement: "Show the time." }]
+
+  it("matches a head expecting approval when every run withholds for a reason, since the reasons axis isn't labelled", () => {
+    const head = linked([expecting("9-1", { severity: "major" })])
+    const major = finding("src/example.ts", 10, "wrong total", "major")
+    const runs = runsOf(head, [
+      posted([major], "s", omitted),
+      posted([major], "s", omitted),
+      posted([major], "s", omitted),
+    ])
+    expect(runs.map((run) => run.verdict)).toEqual(["comment", "comment", "comment"])
+    expect(scoreSet({ heads: [head] }, runs, meta, 3).heads[0]?.verdictMatched).toBe(true)
+  })
+
+  it("misses a head expecting changes requested when the runs withhold without a blocking finding, or never post", () => {
+    const head = linked([expecting("9-1")])
+    const major = finding("src/example.ts", 10, "wrong total", "major")
+    const runs = runsOf(head, [posted([major], "s", omitted), posted([major], "s", omitted), unposted])
+    expect(scoreSet({ heads: [head] }, runs, meta, 3).heads[0]?.verdictMatched).toBe(false)
+  })
+})
+
 describe("barVerdict", () => {
   const base = (changes: Partial<SetScore>): SetScore => ({
     model: "glm",

@@ -125,6 +125,12 @@ export const cases: readonly Case[] = [
     ]),
     allowed: [
       {
+        id: "66-a9",
+        path: "src/pull-request.ts",
+        pattern: "interleav|chat[^.]{0,80}(charg|count|spend)",
+        note: "true: usage and the message list are the object's whole session, so a chat answered mid-review is charged to the review",
+      },
+      {
         id: "66-a5",
         path: "src/review/cost.ts",
         pattern:
@@ -262,6 +268,12 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "65-f8",
+        path: "skills/review/SKILL.md",
+        pattern: "Andrew's read|waits for Andrew|read before (this|the) (PR|pull request) merges",
+        note: "not a finding: a process step of the plan, not a linked-issue requirement, and nothing in the diff shows whether it was read",
+      },
+      {
         id: "65-f7",
         path: "src/repository/instructions.ts",
         pattern:
@@ -322,8 +334,27 @@ export const cases: readonly Case[] = [
         evidence: "CodeRabbit on #91, open as #119",
       },
     ]),
-    allowed: [],
+    allowed: [
+      {
+        id: "91-a2",
+        path: "src/pull-request.ts",
+        pattern: "recomputes the reviewable|everyFileFiltered[^.]{0,80}(recomput|again|twice)",
+        note: "true: runSummary's everyFileFiltered recomputes the reviewable list summaryFiles already holds",
+      },
+      {
+        id: "91-a1",
+        path: "src/pull-request.ts",
+        pattern: "reads pending twice|readPending[^.]{0,60}(second|twice|again)|second storage read",
+        note: "true: postReview resolves pendingFor and then readPending again on the refusal path",
+      },
+    ],
     knownFalse: [
+      {
+        id: "91-f6",
+        path: "src/pull-request.ts",
+        pattern: "pending-guard|pending-presence guard|restoreCatalog[^.]{0,80}planReview",
+        note: "false: the pending guard appears once at this head; planReview has no such guard",
+      },
       {
         id: "91-f5",
         path: "src/pull-request.ts",
@@ -375,6 +406,12 @@ export const cases: readonly Case[] = [
       },
     ]),
     allowed: [
+      {
+        id: "105-a3",
+        path: "src/pull-request.ts",
+        pattern: "activation-report callback|installCatalog[^.]{0,80}(identical|same callback|duplicat)",
+        note: "true: the two installCatalog calls pass the same reportActivation callback",
+      },
       {
         id: "105-a2",
         path: "src/repository/context.ts",
@@ -435,6 +472,12 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "112-f5",
+        path: "src/repository/skills.ts",
+        pattern: "countsBySkill[^.]{0,60}middle|middle-man over",
+        note: "false: countsBySkill serves two counts, so inlining it would duplicate the map",
+      },
       {
         id: "112-f3",
         path: "src/repository/skills.ts",
@@ -501,6 +544,12 @@ export const cases: readonly Case[] = [
       },
     ],
     allowed: [
+      {
+        id: "66-a10",
+        path: "src/review/cost.ts",
+        pattern: "priceText[^.]{0,60}models[^.]{0,60}(count|hides|name)|`models`[^.]{0,40}count",
+        note: "true: priceText's second parameter holds the number of models, which its name doesn't say",
+      },
       {
         id: "66-a8",
         path: "test/cost.test.ts",
@@ -749,6 +798,12 @@ export const cases: readonly Case[] = [
     ],
     allowed: [
       {
+        id: "71-a5",
+        path: "src/pull-request.ts",
+        pattern: "config cache[^.]{0,80}(context cache|duplicat)|cacheConfig[^.]{0,80}cacheContext",
+        note: "true: cachedConfig and cacheConfig repeat cachedContext and cacheContext's read, stale-delete and put",
+      },
+      {
         id: "71-a4",
         path: "src/pull-request.ts",
         pattern:
@@ -853,6 +908,18 @@ export const cases: readonly Case[] = [
       },
     ]),
     allowed: [
+      {
+        id: "38-a4",
+        path: "src/pull-request.ts",
+        pattern: "postedRetryText[^.]{0,80}(duplicat|finishReview)|parse-post-log",
+        note: "true: postedRetryText repeats finishReview's parse, post and log steps",
+      },
+      {
+        id: "38-a3",
+        path: "src/models.ts",
+        pattern: "constraint (lifts|ends)[^.]{0,80}tool|awaitsResubmission[^.]{0,80}(tool|lifts)",
+        note: "true: awaitsResubmission looks only at the latest message, so a tool call in the retry ends the JSON constraint",
+      },
       {
         id: "38-a2",
         path: "src/pull-request.ts",
