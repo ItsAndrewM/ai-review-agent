@@ -2,7 +2,15 @@ import { describe, expect, it } from "vitest"
 import type { FindingInput } from "../src/review/findings.ts"
 import type { OmittedRequirementInput } from "../src/review/reasons.ts"
 import type { ReviewAnswer } from "../tools/recall/conversation.ts"
-import { barVerdict, matchFindings, scoreRun, scoreSet, type RunScore, type SetScore } from "../tools/recall/score.ts"
+import {
+  barVerdict,
+  expectedVerdict,
+  matchFindings,
+  scoreRun,
+  scoreSet,
+  type RunScore,
+  type SetScore,
+} from "../tools/recall/score.ts"
 import { expecting, headCase } from "./recall-fixtures.ts"
 
 function finding(
@@ -85,6 +93,17 @@ describe("matchFindings", () => {
   })
 })
 
+describe("expectedVerdict", () => {
+  it("expects changes requested when an expected finding is blocking, and approval otherwise, with no hand-written verdict", () => {
+    expect(expectedVerdict(headCase())).toBe("request_changes")
+    const major = headCase({
+      expects: [expecting("9-1", { severity: "major" }), expecting("9-2", { severity: "nitpick" })],
+    })
+    expect(expectedVerdict(major)).toBe("approve")
+    expect(expectedVerdict(headCase({ expects: [] }))).toBe("approve")
+  })
+})
+
 describe("scoreRun", () => {
   it("records the verdict, the summary match and the matches of a posted run", () => {
     const head = headCase({ summary: "footer" })
@@ -141,10 +160,22 @@ describe("scoreSet", () => {
     const noise = finding("src/example.ts", 30, "Noise", "nitpick")
     const runs = runsOf(head, [posted([noise, { ...noise, line: 31 }]), posted([noise]), unposted])
     const score = scoreSet({ heads: [head] }, runs, meta, 3)
-    expect(score.heads[0]?.falseBySeverity).toEqual({ blocking: 0, suggestion: 0, nitpick: 1 })
+    expect(score.heads[0]?.falseBySeverity).toEqual({ blocking: 0, major: 0, suggestion: 0, nitpick: 1 })
     expect(score.falseCount).toBe(1)
     expect(score.heads[0]?.notPosted).toBe(1)
     expect(score.usd).toBeCloseTo(0.22, 6)
+  })
+})
+
+describe("scoreSet with the major grade", () => {
+  it("counts a false major finding in its own bucket and in the total, and matches a derived approve verdict", () => {
+    const head = headCase({ expects: [expecting("9-1", { severity: "major" })] })
+    const loud = finding("src/example.ts", 30, "Noise", "major")
+    const runs = runsOf(head, [posted([loud]), posted([loud]), posted([])])
+    const score = scoreSet({ heads: [head] }, runs, { model: "glm", thinking: "low", skills: "abc" }, 3)
+    expect(score.heads[0]?.falseBySeverity).toEqual({ blocking: 0, major: 1, suggestion: 0, nitpick: 0 })
+    expect(score.falseCount).toBe(1)
+    expect(score.verdictMatched).toBe(1)
   })
 })
 

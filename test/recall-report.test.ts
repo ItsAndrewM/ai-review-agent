@@ -4,7 +4,7 @@ import { barVerdict, type SetScore } from "../tools/recall/score.ts"
 import { expecting, headCase } from "./recall-fixtures.ts"
 
 const head = headCase({ expects: [expecting("9-1"), expecting("9-2", { path: "src/other.ts", severity: "nitpick" })] })
-const other = headCase({ pr: 10, head: "c".repeat(40), expects: [expecting("10-1")], verdict: "approve" })
+const other = headCase({ pr: 10, head: "c".repeat(40), expects: [expecting("10-1", { severity: "major" })] })
 
 const score: SetScore = {
   model: "@cf/zai-org/glm-5.3-flash",
@@ -22,14 +22,14 @@ const score: SetScore = {
         { id: "9-1", found: true, foundIn: 3, severityMatched: true, runs: 3 },
         { id: "9-2", found: true, foundIn: 2, severityMatched: true, runs: 3 },
       ],
-      falseBySeverity: { blocking: 0, suggestion: 1, nitpick: 0 },
+      falseBySeverity: { blocking: 0, major: 0, suggestion: 1, nitpick: 0 },
       verdictMatched: true,
       notPosted: 0,
     },
     {
       head: other.head,
       expects: [{ id: "10-1", found: false, foundIn: 1, severityMatched: false, runs: 3 }],
-      falseBySeverity: { blocking: 0, suggestion: 0, nitpick: 0 },
+      falseBySeverity: { blocking: 0, major: 0, suggestion: 0, nitpick: 0 },
       verdictMatched: false,
       notPosted: 1,
     },
@@ -48,7 +48,7 @@ describe("resultsTable", () => {
     )
     expect(table).toContain("| 9-2 | #9 `aaaaaaa` | `src/other.ts` 10-12 | 2/3 | yes | nitpick | yes |  |")
     expect(table).toContain(
-      "| 10-1 | #10 `ccccccc` | `src/example.ts` 10-12 | 1/3 | no | blocking | no | approve no (1 not posted) |",
+      "| 10-1 | #10 `ccccccc` | `src/example.ts` 10-12 | 1/3 | no | major | no | approve no (1 not posted) |",
     )
     expect(table).toContain("Found 2/3 · false 1 · severity 2/3 · verdict 1/2 · $0.0070 a review · not posted 1")
     expect(table).toContain("@cf/zai-org/glm-5.3-flash at low, review@abcdef01")

@@ -28,7 +28,6 @@ export function headCase(changes: Partial<HeadCase> = {}): HeadCase {
     labels: [],
     issues: [],
     expects: [expected],
-    verdict: "request_changes",
     allowed: [],
     knownFalse: [],
     stats: { files: 1, additions: 3, deletions: 1 },

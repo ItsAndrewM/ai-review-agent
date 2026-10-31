@@ -1,6 +1,6 @@
 import { shortSha } from "../../src/sha.ts"
 import type { ExpectedFinding, HeadCase, RecallSet } from "./schema.ts"
-import type { BarVerdict, HeadScore, SetScore } from "./score.ts"
+import { expectedVerdict, type BarVerdict, type HeadScore, type SetScore } from "./score.ts"
 
 const HEADER = [
   "| Finding | Pull request | Where | Found | Majority | Severity | Severity matched | Verdict |",
@@ -18,7 +18,7 @@ function dollars(usd: number): string {
 function verdictCell(head: HeadCase, score: HeadScore | undefined): string {
   if (score === undefined) return ""
   const notPosted = score.notPosted > 0 ? ` (${score.notPosted} not posted)` : ""
-  return `${head.verdict} ${yesNo(score.verdictMatched)}${notPosted}`
+  return `${expectedVerdict(head)} ${yesNo(score.verdictMatched)}${notPosted}`
 }
 
 function expectedRow(head: HeadCase, expected: ExpectedFinding, score: HeadScore | undefined, first: boolean): string {
