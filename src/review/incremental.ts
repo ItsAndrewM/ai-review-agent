@@ -40,6 +40,7 @@ export const SinceSection = Type.Object({
   summary: Type.String(),
   files: Type.Array(Type.String()),
   resolved: Type.Integer(),
+  merge_danger: Type.Optional(MergeDanger),
 })
 
 export type SinceSection = Static<typeof SinceSection>
@@ -551,15 +552,22 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     mode: "incremental",
     summary: previous.summary,
     walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
-    merge_danger: stricterMergeDanger(previous.merge_danger, submission.merge_danger),
-    since: { from: scope.from, to: headSha, summary: submission.summary, files: [...covered], resolved },
+    merge_danger: mergeDangerAfterPush(previous.merge_danger, submission.merge_danger),
+    since: {
+      from: scope.from,
+      to: headSha,
+      summary: submission.summary,
+      files: [...covered],
+      resolved,
+      merge_danger: submission.merge_danger,
+    },
     omitted: [...omitted],
   }
 }
 
-export function stricterMergeDanger(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {
+export function mergeDangerAfterPush(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {
   if (previous === undefined) return push
-  return previous.door === "one-way" && push.door === "two-way" ? previous : push
+  return previous.door === "two-way" && push.door === "one-way" ? push : previous
 }
 
 export function submissionFromRecord(
