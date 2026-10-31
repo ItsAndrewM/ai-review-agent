@@ -241,6 +241,7 @@ import {
   answerPrompt,
   fullPrompt,
   incrementalPrompt,
+  NO_DOCS,
   problemsText,
   resubmitPrompt,
   reviewPrompt,
@@ -3018,9 +3019,9 @@ function promptFor(
   issues: readonly LinkedIssue[],
   omitted: readonly OmittedRequirementInput[],
 ): string {
-  if (scope.mode === "fresh") return reviewPrompt(pr, files, true, issues)
+  if (scope.mode === "fresh") return reviewPrompt(pr, files, true, issues, NO_DOCS)
   const lists = threadLists(scope.open, scope.recheck)
-  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists, issues)
+  if (scope.mode === "full" || scope.from === undefined) return fullPrompt(pr, files, lists, issues, NO_DOCS)
   return incrementalPrompt(pr, {
     from: scope.from,
     marked: coveredMap(scope),
@@ -3028,6 +3029,7 @@ function promptFor(
     ...lists,
     issues,
     omitted,
+    docs: NO_DOCS,
   })
 }
 
