@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import type { ChangedFile } from "../../src/github/diff.ts"
-import { reviewPrompt, systemPrompt } from "../../src/review/prompt.ts"
+import { NO_DOCS, reviewPrompt, systemPrompt } from "../../src/review/prompt.ts"
 import {
   buildSkillManifest,
   fingerprintOf,
@@ -64,5 +64,5 @@ export function systemFor(botLogin: string, toolNames: readonly string[], skill:
 }
 
 export function promptFor(head: HeadCase, files: readonly ChangedFile[]): string {
-  return reviewPrompt(pullRequestOf(head), files, true, head.issues)
+  return reviewPrompt(pullRequestOf(head), files, true, head.issues, NO_DOCS)
 }

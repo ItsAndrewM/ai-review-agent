@@ -13,7 +13,6 @@ const submission = {
   summary: "s",
   walkthrough: [{ path: "src/a.ts", summary: "changed" }],
   findings: [],
-  verdict: "approve",
   merge_danger: { door: "two-way", blast_radius: "none" },
 }
 
@@ -60,14 +59,14 @@ describe("RecallTools", () => {
   it("validates submit_review's arguments and passes a valid submission on", async () => {
     const submitted: string[] = []
     const tools = new RecallTools(source, async (given) => {
-      submitted.push(given.verdict)
+      submitted.push(given.summary)
       return { text: "Posted review 1.", done: true }
     })
     const refused = await tools.execute("submit_review", { summary: "no walkthrough" })
     expect(refused.text).toContain('Validation failed for tool "submit_review":')
     expect(refused.done).toBe(false)
     expect(await tools.execute("submit_review", submission)).toEqual({ text: "Posted review 1.", done: true })
-    expect(submitted).toEqual(["approve"])
+    expect(submitted).toEqual(["s"])
   })
 
   it("answers bad arguments with pi-ai's validation message, as the harness does, and refuses unknown tools", async () => {

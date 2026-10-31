@@ -17,7 +17,7 @@
     "expected": 31,
     "falseCount": 0,
     "severityMatched": 10,
-    "verdictMatched": 7,
+    "verdictMatched": 8,
     "heads": [
       {
         "head": "046afadb037b16aba4b098170b3c80afcc9f2fc2",
@@ -421,7 +421,7 @@
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -1670,7 +1670,7 @@
           "known": "91-f5"
         }
       ],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "64d6ba67ef774739ad9e7fe06803af23156fc249",
@@ -2622,7 +2622,7 @@
         }
       ],
       "unmatched": [],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "d320027d229ae367e6027ec571af591b2ff71f58",
@@ -5223,7 +5223,7 @@
           "known": "144-f1"
         }
       ],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "888044be4988b46e1626a339926a6a29e6187151",
@@ -5719,7 +5719,7 @@
         }
       ],
       "unmatched": [],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "37bfb06a40c51a5cb44a31d4ed31d43cc7bc40d3",

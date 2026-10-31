@@ -1,7 +1,17 @@
 import { Type, type Static } from "typebox"
-import type { FindingInput, ReviewSubmissionInput } from "../../src/review/findings.ts"
+import type { FindingInput } from "../../src/review/findings.ts"
+import { checkReasons } from "../../src/review/reasons.ts"
+import { decideReviewVerdict, reviewEventOf } from "../../src/review/render.ts"
 import type { ReviewAnswer } from "./conversation.ts"
-import { regexOf, type ExpectedFinding, type HeadCase, type KnownFinding, type RecallSet } from "./schema.ts"
+import type { PostedReview } from "./host.ts"
+import {
+  regexOf,
+  type ExpectedFinding,
+  type HeadCase,
+  type KnownFinding,
+  type RecallSet,
+  type Verdict,
+} from "./schema.ts"
 
 export interface Match {
   expected: string
@@ -26,8 +36,18 @@ export interface RunScore {
   answer: ReviewAnswer
   matches: Match[]
   unmatched: UnmatchedFinding[]
-  verdict: ReviewSubmissionInput["verdict"] | undefined
+  verdict: Verdict | undefined
   summaryMatched: boolean | undefined
+}
+
+const VERDICT_OF_EVENT = { APPROVE: "approve", COMMENT: "comment", REQUEST_CHANGES: "request_changes" } as const
+
+export function verdictOf(head: HeadCase, posted: PostedReview): Verdict {
+  const sources = { linkedIssues: head.issues.map((issue) => issue.number), title: head.title, body: head.body }
+  const reasons = checkReasons(posted.submission, sources).accepted
+  const { accepted, rejected } = posted
+  const verdict = decideReviewVerdict({ accepted, rejected, workflow: true, openBlocking: 0, reasons })
+  return VERDICT_OF_EVENT[reviewEventOf(verdict)]
 }
 
 export const ExpectedScore = Type.Object({
@@ -131,7 +151,8 @@ export function scoreRun(head: HeadCase, run: number, answer: ReviewAnswer): Run
   }
   const { submission, accepted } = answer.posted
   const summaryMatched = head.summary === undefined ? undefined : regexOf(head.summary).test(submission.summary)
-  return { head: head.head, run, answer, ...matchFindings(head, accepted), verdict: submission.verdict, summaryMatched }
+  const verdict = verdictOf(head, answer.posted)
+  return { head: head.head, run, answer, ...matchFindings(head, accepted), verdict, summaryMatched }
 }
 
 function majority(count: number, runs: number): boolean {

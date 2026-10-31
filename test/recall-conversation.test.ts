@@ -12,7 +12,7 @@ import type { ReviewSubmissionInput } from "../src/review/findings.ts"
 import { BUDGET_REFUSAL_MARKER, isResubmitPrompt } from "../src/review/prompt.ts"
 import { NeuronBudget } from "../tools/recall/budget.ts"
 import { attemptReview, replayReview } from "../tools/recall/conversation.ts"
-import { ReviewHost } from "../tools/recall/host.ts"
+import { NO_BASIS, ReviewHost } from "../tools/recall/host.ts"
 import { RecallTools, type RecallSource } from "../tools/recall/tools.ts"
 
 const files: ChangedFile[] = [
@@ -33,7 +33,7 @@ function finding(path: string, line: number, quote: string, title: string) {
     path,
     line,
     quote,
-    severity: "suggestion" as const,
+    severity: "major" as const,
     basis_kind: "defect" as const,
     basis: "input x gives y",
     title,
@@ -49,7 +49,6 @@ function submission(
     summary: "summary",
     walkthrough,
     findings,
-    verdict: "comment",
     merge_danger: { door: "two-way", blast_radius: "none" },
   } satisfies ReviewSubmissionInput
 }
@@ -72,7 +71,7 @@ function scripted(responses: AssistantMessage[]) {
 }
 
 function setup(responses: AssistantMessage[], pathFilters: string[] = []) {
-  const host = new ReviewHost(files, pathFilters, false)
+  const host = new ReviewHost(files, pathFilters, NO_BASIS)
   const tools = new RecallTools(source, async (given) => host.submit(given))
   const budget = new NeuronBudget(10_000)
   return { host, tools, budget, ...scripted(responses) }

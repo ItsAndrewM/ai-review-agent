@@ -56,6 +56,7 @@ interface Prepared {
   readonly files: ChangedFile[]
   readonly reviewable: ChangedFile[]
   readonly pathFilters: string[]
+  readonly instructionFiles: string[]
   readonly system: string
   readonly prompt: string
   readonly source: RecallSource
@@ -173,6 +174,7 @@ async function prepare(
     files,
     reviewable,
     pathFilters: standards.pathFilters,
+    instructionFiles: standards.used,
     system: systemFor(BOT_LOGIN, toolNames, skill.rendered, standards.text),
     prompt: promptFor(head, reviewable),
     source,
@@ -186,7 +188,12 @@ async function reviewOnce(
   neurons: number,
   transcripts: URL,
 ): Promise<RunScore> {
-  const host = new ReviewHost(prepared.files, prepared.pathFilters, prepared.head.issues.length > 0)
+  const host = new ReviewHost(prepared.files, prepared.pathFilters, {
+    hasLinkedIssues: prepared.head.issues.length > 0,
+    instructionFiles: prepared.instructionFiles,
+    activatedSkills: [],
+    docs: [],
+  })
   const tools = new RecallTools(prepared.source, async (submission) => host.submit(submission))
   const budget = new NeuronBudget(neurons)
   const transcript: Message[] = []

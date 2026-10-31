@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import type { FindingInput } from "../src/review/findings.ts"
+import type { OmittedRequirementInput } from "../src/review/reasons.ts"
 import type { ReviewAnswer } from "../tools/recall/conversation.ts"
 import { barVerdict, matchFindings, scoreRun, scoreSet, type RunScore, type SetScore } from "../tools/recall/score.ts"
 import { expecting, headCase } from "./recall-fixtures.ts"
@@ -13,18 +14,14 @@ function finding(
   return { path, line, quote: "q", severity, basis_kind: "defect", basis: "b", title, body: "body" }
 }
 
-function posted(
-  findings: FindingInput[],
-  verdict: "approve" | "request_changes" | "comment" = "request_changes",
-  summary = "s",
-): ReviewAnswer {
+function posted(findings: FindingInput[], summary = "s", omitted: OmittedRequirementInput[] = []): ReviewAnswer {
   return {
     posted: {
       submission: {
         summary,
         walkthrough: [{ path: "src/example.ts", summary: "x" }],
         findings,
-        verdict,
+        omitted_requirements: omitted,
         merge_danger: { door: "two-way", blast_radius: "r" },
       },
       accepted: findings,
@@ -91,9 +88,23 @@ describe("matchFindings", () => {
 describe("scoreRun", () => {
   it("records the verdict, the summary match and the matches of a posted run", () => {
     const head = headCase({ summary: "footer" })
-    const run = scoreRun(head, 1, posted([finding("src/example.ts", 10, "wrong total")], "comment", "the footer line"))
-    expect([run.head, run.run, run.verdict, run.summaryMatched]).toEqual([head.head, 1, "comment", true])
+    const run = scoreRun(head, 1, posted([finding("src/example.ts", 10, "wrong total")], "the footer line"))
+    expect([run.head, run.run, run.verdict, run.summaryMatched]).toEqual([head.head, 1, "request_changes", true])
     expect(run.matches.map(({ expected }) => expected)).toEqual(["9-1"])
+  })
+
+  it("derives the verdict as the host does: a blocking finding requests changes, an accepted reason comments, otherwise approve", () => {
+    const linked = headCase({
+      issues: [{ number: 50, title: "Time", body: "Show the time.", cut: false, state: "open" }],
+    })
+    const omitted = [{ issue: 50, requirement: "Show the time." }]
+    const suggestion = finding("src/example.ts", 10, "wrong total", "suggestion")
+    expect(scoreRun(linked, 1, posted([suggestion])).verdict).toBe("approve")
+    expect(scoreRun(linked, 1, posted([suggestion], "s", omitted)).verdict).toBe("comment")
+    expect(scoreRun(headCase(), 1, posted([suggestion], "s", omitted)).verdict).toBe("approve")
+    expect(scoreRun(linked, 1, posted([finding("src/example.ts", 10, "wrong total")], "s", omitted)).verdict).toBe(
+      "request_changes",
+    )
   })
 
   it("records an unposted run with nothing matched", () => {
@@ -113,11 +124,7 @@ describe("scoreSet", () => {
     const head = headCase({ expects: [expecting("9-1"), expecting("9-2", { path: "src/other.ts", pattern: "leak" })] })
     const hit = finding("src/example.ts", 10, "wrong total", "suggestion")
     const leak = finding("src/other.ts", 10, "leak")
-    const runs = runsOf(head, [
-      posted([hit, leak], "request_changes"),
-      posted([{ ...hit, severity: "blocking" }], "request_changes"),
-      posted([], "approve"),
-    ])
+    const runs = runsOf(head, [posted([hit, leak]), posted([{ ...hit, severity: "blocking" }]), posted([])])
     const score = scoreSet({ heads: [head] }, runs, meta, 3)
     expect(score.heads[0]?.expects).toEqual([
       { id: "9-1", found: true, foundIn: 2, severityMatched: false, runs: 3 },

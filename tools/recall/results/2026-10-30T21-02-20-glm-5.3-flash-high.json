@@ -3045,7 +3045,7 @@
           "known": "66-a8"
         }
       ],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "b5b9d4732d3d1dd72a20e1b7da95395e6fd5fec9",
@@ -7548,7 +7548,7 @@
           "known": "152-a2"
         }
       ],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "3158a39d5e1b392f2b212a42c1b7ad39108ed722",
@@ -7690,7 +7690,7 @@
         }
       ],
       "unmatched": [],
-      "verdict": "comment"
+      "verdict": "approve"
     },
     {
       "head": "37bfb06a40c51a5cb44a31d4ed31d43cc7bc40d3",

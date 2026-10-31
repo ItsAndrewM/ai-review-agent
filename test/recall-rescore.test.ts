@@ -22,7 +22,6 @@ const answer: ReviewAnswer = {
       summary: "s",
       walkthrough: [{ path: "src/example.ts", summary: "x" }],
       findings: [offTopic],
-      verdict: "request_changes",
       merge_danger: { door: "two-way", blast_radius: "r" },
     },
     accepted: [offTopic],

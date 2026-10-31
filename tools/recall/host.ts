@@ -5,6 +5,7 @@ import {
   reviewableFiles,
   type ChangedFile,
 } from "../../src/github/diff.ts"
+import type { BasisContext } from "../../src/review/basis.ts"
 import {
   missingWalkthrough,
   validateFindings,
@@ -16,6 +17,8 @@ import {
 } from "../../src/review/findings.ts"
 import { problemsText } from "../../src/review/prompt.ts"
 import type { SubmitOutcome } from "../../src/review/tools.ts"
+
+export const NO_BASIS: BasisContext = { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [], docs: [] }
 
 export interface PostedReview {
   submission: ReviewSubmissionInput
@@ -31,14 +34,14 @@ export interface HostOutcome extends SubmitOutcome {
 export class ReviewHost {
   readonly #reviewable: ChangedFile[]
   readonly #globs: ReturnType<typeof filterGlobs>
-  readonly #hasLinkedIssues: boolean
+  readonly #basis: BasisContext
   #returned = false
   #posted: PostedReview | undefined
 
-  constructor(files: readonly ChangedFile[], pathFilters: readonly string[], hasLinkedIssues: boolean) {
+  constructor(files: readonly ChangedFile[], pathFilters: readonly string[], basis: BasisContext) {
     this.#reviewable = reviewableFiles(files, pathFilters)
     this.#globs = filterGlobs(pathFilters)
-    this.#hasLinkedIssues = hasLinkedIssues
+    this.#basis = basis
   }
 
   rejectionsReturned(): boolean {
@@ -78,7 +81,7 @@ export class ReviewHost {
   }
 
   private validate(findings: readonly FindingInput[]): ValidatedReview {
-    const validated = validateFindings(findings, indexCommentableLines(this.#reviewable), this.#hasLinkedIssues)
+    const validated = validateFindings(findings, indexCommentableLines(this.#reviewable), this.#basis)
     const rejected = validated.rejected.map((rejection) =>
       isFiltered(rejection.finding.path, this.#globs)
         ? {
