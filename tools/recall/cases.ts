@@ -49,6 +49,13 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "87-f2",
+        path: "src/review/approval.ts",
+        pattern:
+          'approving[^.]{0,100}(ends the chain|unsettled|UNSETTLED)|ends the chain on "approving"|chain[^.]{0,60}"approving"',
+        note: "declared: the description and docs/design.md say a re-check that finds the approval mid-posting ends the chain on approving",
+      },
+      {
         id: "87-f1",
         path: "src/pull-request.ts",
         pattern: "jobs\\.push[^.]{0,120}(reject|fail)|push (fails|failure|rejects)|(failed|failing) (job )?push",
@@ -83,6 +90,13 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "102-f3",
+        path: "src/repository/tar.ts",
+        pattern:
+          "(left|leading)[- ]padded[^.]{0,40}NUL|leading NULs?|NUL[^.]{0,40}(left|leading)[- ]padd|OCTAL_FIELD rejects",
+        note: "false: no writer left-pads a size field with NULs and GitHub's tarballs are zero-padded; strictness was the change's point, and it calls itself not blocking",
+      },
+      {
         id: "102-f2",
         path: "src/repository/tar.ts",
         pattern: "lone zero block[^.]{0,120}truncated|truncated[^.]{0,120}lone zero block|short tail",
@@ -114,6 +128,26 @@ export const cases: readonly Case[] = [
     ]),
     verdict: "comment",
     allowed: [
+      {
+        id: "66-a5",
+        path: "src/review/cost.ts",
+        pattern:
+          "isAssistant[^.]{0,100}(duplicat|copied|copy|verbatim|transcript)|duplicat[^.]{0,80}transcript\\.ts|(turn|assistant-turn) extraction[^.]{0,60}duplicat",
+        note: "true: isAssistant is verbatim in cost.ts and transcript.ts, and still is on main",
+      },
+      {
+        id: "66-a6",
+        path: "src/review/cost.ts",
+        pattern:
+          "(without|no) (recorded )?usage[^.]{0,100}(inflat|unnamed|not named|calls)|calls[^.]{0,60}(no|without) (recorded )?usage|calls-without-usage",
+        note: "true: a model with calls and no usage counts in the call total while isUnpriced skips it, so the price covers fewer calls than the line counts",
+      },
+      {
+        id: "66-a7",
+        path: "src/pull-request.ts",
+        pattern: "(no|without|has no|lacks? a) test|untested",
+        note: "true: pull-request.ts had no test harness, so the footer and review.done wiring has no test",
+      },
       {
         id: "66-a1",
         path: "src/review/cost.ts",
@@ -164,7 +198,14 @@ export const cases: readonly Case[] = [
       },
     ]),
     verdict: "comment",
-    allowed: [],
+    allowed: [
+      {
+        id: "56-a1",
+        path: "test/findings.test.ts",
+        pattern: "standard[^.]{0,80}(kind|case|no test|rendered nowhere|never render)|\\(standard\\)|never renders",
+        note: "true: no test renders the standard basis line",
+      },
+    ],
     knownFalse: [],
   },
   {
@@ -227,6 +268,13 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "65-f7",
+        path: "src/repository/instructions.ts",
+        pattern:
+          "closing note[^.]{0,80}(unbounded|12,000|cap)|cut list[^.]{0,80}(12,000|past the cap|unbounded)|note[^.]{0,40}unbounded",
+        note: "false: the note names only this change's matched instruction files, and crossing 12,000 characters needs hundreds of them matched by one change",
+      },
+      {
         id: "65-f5",
         path: "src/repository/instructions.ts",
         pattern: "O\\(n|quadratic|re-renders?[^.]{0,60}(prefix|every|each)|running total",
@@ -284,6 +332,13 @@ export const cases: readonly Case[] = [
     allowed: [],
     knownFalse: [
       {
+        id: "91-f4",
+        path: "src/pull-request.ts",
+        pattern:
+          "(computes|computed|runs) [^.]{0,40}twice|reviewableFiles[^.]{0,80}twice|everyFileFiltered[^.]{0,80}recomput|reviewable list twice",
+        note: "false: a second filter over the changed list is bounded work, as 91-f3",
+      },
+      {
         id: "91-f3",
         path: "src/pull-request.ts",
         pattern: "re-reads? pending|readPending[^.]{0,80}(again|extra|second)|extra storage read",
@@ -334,7 +389,15 @@ export const cases: readonly Case[] = [
         note: "true: the description flags the same construct and a cast-free alternative was wanted",
       },
     ],
-    knownFalse: [],
+    knownFalse: [
+      {
+        id: "105-f1",
+        path: "src/pull-request.ts",
+        pattern:
+          "(callback|arrow)[^.]{0,80}(duplicat|both call sites|twice|re-declare)|installCatalog call sites|#onActivation",
+        note: "false: a two-line arrow at two call sites; it calls itself a judgement-call smell",
+      },
+    ],
     note: "contrived",
   },
   {
@@ -365,8 +428,27 @@ export const cases: readonly Case[] = [
       },
     ]),
     verdict: "comment",
-    allowed: [],
+    allowed: [
+      {
+        id: "112-a1",
+        path: "test/repository-skills.test.ts",
+        pattern: "no size|unsized|gives no size|sizes with nothing",
+        note: "true: no test builds a symlinked resource the listing gives no size for",
+      },
+    ],
     knownFalse: [
+      {
+        id: "112-f3",
+        path: "src/repository/skills.ts",
+        pattern: "three times|repeated across|per-root walk|safeBlobs[^.]{0,80}(repeat|duplicat)",
+        note: "false: the walk is a filter over an in-memory tree, as 112-f2",
+      },
+      {
+        id: "112-f4",
+        path: "src/repository/skills.ts",
+        pattern: "unreachable|SKILL\\.md (clause|branch)|isFileOf",
+        note: "false: the clause keeps an oversized SKILL.md, which isServableResource drops, so every skill reaches it",
+      },
       {
         id: "112-f2",
         path: "src/repository/skills.ts",
@@ -423,6 +505,12 @@ export const cases: readonly Case[] = [
     verdict: "comment",
     allowed: [
       {
+        id: "66-a8",
+        path: "test/cost.test.ts",
+        pattern: "key format|provider/model|same literal|recorded real ledger|pin the contract",
+        note: "true: every fixture builds the ledger and the transcript from one literal, so the join's key format has no test",
+      },
+      {
         id: "66-a3",
         path: "docs/design.md",
         pattern: "price table|pricing page|registry",
@@ -436,6 +524,13 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "66-f6",
+        path: "src/review/cost.ts",
+        pattern:
+          "(non-Workers|AI Gateway|OpenRouter)[^.]{0,100}neurons|neurons[^.]{0,100}(non-Workers|AI Gateway|OpenRouter)|billed in",
+        note: "false: only Workers AI models are wired, so every priced dollar is a Workers AI dollar",
+      },
       {
         id: "66-f5",
         path: "src/review/cost.ts",
@@ -481,6 +576,25 @@ export const cases: readonly Case[] = [
     verdict: "comment",
     allowed: [
       {
+        id: "88-a2",
+        path: "src/review/tools.ts",
+        pattern:
+          "SNAPSHOT_REPLACED[^.]{0,160}(fram|whole review|review-long|read_file)|retryable[^.]{0,80}(fram|failure)",
+        note: "true: the replaced case reaches the generic unavailable-for-this-review refusal, which also says to use read_file",
+      },
+      {
+        id: "88-a3",
+        path: "test/search.test.ts",
+        pattern: "wall-clock|wall time|performance\\.now|flak",
+        note: "true: four tests assert under a second of wall time",
+      },
+      {
+        id: "88-a4",
+        path: "docs/superpowers/plans/2026-10-22-repository-search.md",
+        pattern: "cpu_ms|120000|120,000",
+        note: "true: the plan's constraint line says 120000 while wrangler.jsonc ships 300000",
+      },
+      {
         id: "88-a1",
         path: "src/repository/search.ts",
         pattern:
@@ -489,6 +603,38 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "88-f6",
+        path: "src/review/tools.ts",
+        pattern:
+          "(superseded|new head)[^.]{0,120}(grep|scan|search)|(re-check|compare|never compare)[^.]{0,80}sha|record presence",
+        note: "declared: the description lists a superseded review's grep briefly searching the new head as a follow-up (#95)",
+      },
+      {
+        id: "88-f7",
+        path: "src/repository/search.ts",
+        pattern:
+          "left-out[^.]{0,120}(uncapped|length|12,000)|12,000-character|no-match (branch|answer)[^.]{0,80}cap|skips the [0-9,]+-character",
+        note: "declared: the description lists the left-out examples' length cap as a follow-up (#93)",
+      },
+      {
+        id: "88-f8",
+        path: "src/repository/search.ts",
+        pattern: "500-character cut|\\$ and \\\\b|anchors? at the cut|zero-width anchors",
+        note: "declared: the description lists $ and \\b at the 500-character cut as a follow-up (#93)",
+      },
+      {
+        id: "88-f9",
+        path: "src/repository/tar.ts",
+        pattern: "block boundary|zero-block terminator|zero blocks|cut off[^.]{0,80}complete",
+        note: "declared: the description lists a stream ending on a block boundary as a tar follow-up (#94)",
+      },
+      {
+        id: "88-f10",
+        path: "src/repository/load-snapshot.ts",
+        pattern: "comparator|written (out )?three times|byPath[^.]{0,60}byText",
+        note: "false: the three compare different types (string, {path}, text) and byText has its own body",
+      },
       {
         id: "88-f3",
         path: "src/review/tools.ts",
@@ -563,6 +709,13 @@ export const cases: readonly Case[] = [
     ],
     knownFalse: [
       {
+        id: "57-f4",
+        path: "src/pull-request.ts",
+        pattern:
+          "narrows[^.]{0,60}(race|close)|superseded-after-posting|race[^.]{0,80}survives|#21 item 7|posts its review anyway",
+        note: "declared: #21 grades the superseded-after-posting race cosmetic and the description keeps it so; the finding says so itself",
+      },
+      {
         id: "57-f2",
         path: "src/pull-request.ts",
         pattern: "endOwnRun[^.]{0,120}(unconditional|re-check|gap|slips)|delete[^.]{0,60}unconditional",
@@ -601,6 +754,13 @@ export const cases: readonly Case[] = [
     ],
     verdict: "comment",
     allowed: [
+      {
+        id: "71-a4",
+        path: "src/pull-request.ts",
+        pattern:
+          "(file listing|changedFiles|list-files)[^.]{0,140}(no (failed )?check run|escapes|propagates|vanish|abort)|settingsSkip[^.]{0,100}(throw|5xx|fail)|failed file listing",
+        note: "true: filesSkip lists the files before any check run exists, so a 5xx there logs event.failed and nothing else",
+      },
       {
         id: "71-a1",
         path: "src/repository/config.ts",
@@ -654,7 +814,7 @@ export const cases: readonly Case[] = [
         basis_kind: "defect",
         scenario: "A storage write is not awaited, so the review record can be lost and a rejection is unhandled.",
         pattern:
-          "not awaited|missing await|without (an )?await|unawaited|floating promise|fire-and-forget|unhandled rejection|never awaited",
+          "not awaited|missing await|without (an )?await|unawaited|un-awaited|no longer awaited|floating promise|fire-and-forget|unhandled rejection|never awaited",
         evidence: "answer key on #2 (810e304)",
       },
       {
@@ -715,6 +875,20 @@ export const cases: readonly Case[] = [
       },
     ],
     knownFalse: [
+      {
+        id: "38-f7",
+        path: "src/models.ts",
+        pattern:
+          "response_format[^.]{0,100}(reaches|forward|adapter|pi-ai)|(forward|adapter)[^.]{0,60}response_format|dependency'?s internals",
+        note: "false: pi-ai's forwarding is the dependency's contract, and the description names the live run as the check",
+      },
+      {
+        id: "38-f8",
+        path: "src/models.ts",
+        pattern:
+          "hold[^.]{0,100}(lapses|refused|toolResult|one turn later)|toolResult[^.]{0,80}(hold|held)|rejections path",
+        note: "false: a held turn answers JSON text that postedRetryText posts directly, so the hold never ends in a submit_review tool result",
+      },
       {
         id: "38-f6",
         path: "src/review/findings.ts",
@@ -829,9 +1003,15 @@ export const cases: readonly Case[] = [
     verdict: "request_changes",
     allowed: [
       {
+        id: "143-a3",
+        path: "src/sandbox/checks.ts",
+        pattern: "kills every check|fires immediately|unset or unparsable timeout|killed at once",
+        note: "true: the planted defect stated a second time beside the matched finding",
+      },
+      {
         id: "143-a1",
         path: "test/sandbox-checks.test.ts",
-        pattern: "caller|default|wiring",
+        pattern: "caller|default|wiring|unparsable",
         note: "true: the planted head leaves the caller without a default and no test pins it",
       },
       {
