@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - `pnpm check` (oxlint, oxfmt, tsc with `tsconfig.node.json` covering `tools/`, vitest) stays green after every task; no comments, no type assertions except `as const`, complexity ≤ 10, the anti-slop rules (no `unknown` parameters or returns, no `vi.mock`, no `typeof`, no "shape" in names).
-- The runner makes no model call under test; every model call goes through `SpendBudget` under one $15 cap (`tools/recall/runs/spend.jsonl`, gitignored).
+- The runner makes no model call under test; every model call goes through `SpendBudget` under one $20 cap (`tools/recall/runs/spend.jsonl`, gitignored).
 - Matching is path plus a per-case regex over title, body and basis; the expected line range is reported, never required.
 - A case is found by majority (2 of 3 runs); the bar: found-count ≥ baseline and false count ≤ baseline, cost shown.
 - The runner refuses a thinking level the model would clamp (`clampThinkingLevel` from `@earendil-works/pi-ai`); the row's label is the level that ran.

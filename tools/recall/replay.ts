@@ -28,7 +28,7 @@ const USAGE =
   "Usage: pnpm recall --inspect | --prompt <sha prefix> | --compare <baseline.json> <run.json> | --rescore <results.json> | --model <Workers AI model id> [--thinking low] [--runs 3] [--case <sha prefix>] [--resume <journal.jsonl>] (a run needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)"
 const ROOT = process.cwd()
 const BOT_LOGIN = "andabot"
-const SPEND_CAP_USD = 15
+const SPEND_CAP_USD = 20
 const RUNS_DIR = new URL("./runs/", import.meta.url)
 const RESULTS_DIR = new URL("./results/", import.meta.url)
 
