@@ -11,7 +11,7 @@ import {
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
-import { pairingProblem, standardBasisProblem, type BasisContext } from "./basis.ts"
+import { docsBasisProblem, pairingProblem, standardBasisProblem, type BasisContext } from "./basis.ts"
 import { OmittedRequirement } from "./reasons.ts"
 
 export const Severity = Type.Union([
@@ -43,16 +43,22 @@ export const Finding = Type.Object({
       "The text of the line at `line`, copied exactly as the diff shows it after the anchor and the +, - or space. The host checks the anchor against it.",
   }),
   basis_kind: Type.Union(
-    [Type.Literal("defect"), Type.Literal("spec"), Type.Literal("standard"), Type.Literal("test")],
+    [
+      Type.Literal("defect"),
+      Type.Literal("spec"),
+      Type.Literal("standard"),
+      Type.Literal("test"),
+      Type.Literal("docs"),
+    ],
     {
       description:
-        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. A defect or spec finding is blocking or major; a standard or test finding is suggestion or nitpick.",
+        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. docs: a claim in an authoritative doc that the code contradicts; the basis names the doc's path:line and the claim, and the code path:line that contradicts it. A defect or spec finding is blocking or major; a standard, test or docs finding is suggestion or nitpick.",
     },
   ),
   basis: Type.String({
     minLength: 1,
     description:
-      "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names.",
+      "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names. docs: the doc's path:line and its claim, and the code path:line that contradicts it.",
   }),
   severity: Severity,
   title: Type.String({ description: "One line, under 80 characters." }),
@@ -427,6 +433,7 @@ function basisProblem(finding: FindingInput, context: BasisContext): string | un
   const pairing = pairingProblem(finding)
   if (pairing !== undefined) return pairing
   if (finding.basis_kind === "standard") return standardBasisProblem(finding.basis, context)
+  if (finding.basis_kind === "docs") return docsBasisProblem(finding.basis, context)
   if (finding.basis_kind === "spec" && !context.hasLinkedIssues)
     return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
   return undefined

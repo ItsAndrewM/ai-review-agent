@@ -32,7 +32,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("11")
+    expect(review?.version).toBe("12")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -242,6 +242,13 @@ describe("bundledSkills", () => {
     expect(review?.body).toContain(
       "A `standard` finding's basis names the standards file and the rule, such as `CLAUDE.md: no comments of any kind`, a smell by its name, or an activated repository skill; the host refuses a `standard` basis that names none of them.",
     )
+  })
+
+  it("tells the review to check the docs under review and the docs mentioning the change, and to anchor a stale doc on the changed code line", async () => {
+    const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain("- **Docs**: for each file under `## Docs under review`")
+    expect(review?.body).toContain("## Docs mentioning the change")
+    expect(review?.body).toContain("anchors on the changed code line")
   })
 
   it("tells the review to use activate_skill with a matching skill's name before step 2, in the words of the catalog's list headed Available skills, and to grade the finding the skill asks for as a standard finding", async () => {

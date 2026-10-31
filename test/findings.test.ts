@@ -49,7 +49,13 @@ const base: ReviewSubmissionInput = {
 }
 
 function context(overrides: Partial<BasisContext> = {}): BasisContext {
-  return { hasLinkedIssues: true, instructionFiles: ["CLAUDE.md"], activatedSkills: [], ...overrides }
+  return {
+    hasLinkedIssues: true,
+    instructionFiles: ["CLAUDE.md"],
+    activatedSkills: [],
+    docs: ["docs/design.md"],
+    ...overrides,
+  }
 }
 
 function finding(overrides: Partial<FindingInput> = {}): FindingInput {
@@ -67,7 +73,7 @@ function finding(overrides: Partial<FindingInput> = {}): FindingInput {
 }
 
 const BLOCKING_STANDARD_OR_TEST =
-  "a standard or test finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  "a standard, test or docs finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
 
 const WORKS_AS_IT_STANDS =
   "a defect or spec finding is blocking or major, since its basis says the code fails; if the code works as it stands, give it the standard or test basis it rests on"
@@ -459,6 +465,26 @@ describe("basis", () => {
       [true, true],
     ])
     expect(result.accepted.map((f) => f.basis)).toEqual(["CLAUDE.md: no comments of any kind"])
+  })
+
+  it("accepts a docs finding at suggestion that names one of the pull request's docs, and refuses one that names none as unfounded", () => {
+    const known = finding({
+      basis_kind: "docs",
+      severity: "suggestion",
+      basis: "docs/design.md:112 says the snapshot is dropped when the review ends; src/x.ts:2 keeps it for the answer",
+    })
+    const unknown = finding({
+      basis_kind: "docs",
+      severity: "suggestion",
+      basis: "src/x.ts:2 contradicts src/y.ts:4",
+      line: 1,
+      quote: "const a = 1;",
+    })
+    const result = validateFindings([known, unknown], commentable, context())
+    expect(result.accepted).toEqual([known])
+    expect(result.rejected.map((r) => [r.unfounded, r.reason.startsWith("a docs finding must name")])).toEqual([
+      [true, true],
+    ])
   })
 
   it("fails the schema for an empty basis, so a tool call and written JSON alike come back for a fix", () => {

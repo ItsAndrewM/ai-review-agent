@@ -3008,6 +3008,7 @@ function basisContextOf(pending: PendingReview): BasisContext {
     hasLinkedIssues: (pending.linkedIssues?.length ?? 0) > 0,
     instructionFiles: pending.instructionFiles ?? [],
     activatedSkills: pending.activated ?? [],
+    docs: pending.docs ?? [],
   }
 }
 

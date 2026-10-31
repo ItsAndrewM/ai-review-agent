@@ -7,6 +7,7 @@ export interface BasisContext {
   readonly hasLinkedIssues: boolean
   readonly instructionFiles: readonly string[]
   readonly activatedSkills: readonly string[]
+  readonly docs: readonly string[]
 }
 
 export const SMELLS = [
@@ -30,7 +31,7 @@ const SKILL_FILE = "skill.md"
 const SMELL_NAMES = SMELLS.map((smell) => smell.toLowerCase())
 
 const STANDARD_OR_TEST_TOO_HIGH =
-  "a standard or test finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
+  "a standard, test or docs finding cannot be blocking or major; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
 const DEFECT_OR_SPEC_TOO_LOW =
   "a defect or spec finding is blocking or major, since its basis says the code fails; if the code works as it stands, give it the standard or test basis it rests on"
 
@@ -47,6 +48,12 @@ export function standardBasisProblem(basis: string, context: BasisContext): stri
   if (namesStandardsFile(text, context.instructionFiles) || namesSmell(text)) return undefined
   if (namesSkill(text, context.activatedSkills)) return undefined
   return `a standard finding must name a repository standards file (${listed(context.instructionFiles, "none is listed")}), a smell from references/smells.md, or a repository skill this review activated (${listed(context.activatedSkills, "none was")}); if the code is wrong on its own terms, make it a defect with its failure scenario`
+}
+
+export function docsBasisProblem(basis: string, context: BasisContext): string | undefined {
+  const text = basis.toLowerCase()
+  if (context.docs.flatMap(namesOf).some((name) => text.includes(name))) return undefined
+  return `a docs finding must name one of the pull request's docs (${listed(context.docs, "none is known")}); if the code is wrong on its own terms, make it a defect with its failure scenario`
 }
 
 function namesStandardsFile(text: string, instructionFiles: readonly string[]): boolean {
