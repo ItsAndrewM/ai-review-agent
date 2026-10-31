@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "10"
+  version: "11"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -44,6 +44,6 @@ Grade every finding's `severity` by `references/severity.md`, below.
 
 The summary says what the code shows. When an issue is linked, list each of its requirements the diff leaves out in `omitted_requirements`, in the issue's words, with the issue's number; the summary may name them too. When the title or description says the pull request is not for merging, is a draft in all but name, or depends on another pull request, quote that line in `not_for_merging`. You don't pick a verdict: the host requests changes on a blocking finding, withholds approval for an omitted requirement, a not-for-merging line or a review its budget cut short, and approves otherwise once the checks pass. You can't build, run or test the code, so don't say it compiles or its tests pass: that is for CI, and a claim the description makes is the author's, not yours.
 
-Judge the merge danger by `references/merge-danger.md`, below. State its door and blast radius in `merge_danger`, which the host prints above the summary. Submit with `submit_review`. When it returns rejected findings or files without a walkthrough row, resubmit the whole review with each rejected finding fixed or dropped and a row for each of those files.
+Judge the merge danger by `references/merge-danger.md`, below. State its door and blast radius in `merge_danger`, which the host prints above the summary. In an incremental review, `merge_danger` judges the new commits alone; the host keeps the pull request's judgement from the last full review or `summary`, and shows yours in the Since section. Submit with `submit_review`. When it returns rejected findings or files without a walkthrough row, resubmit the whole review with each rejected finding fixed or dropped and a row for each of those files.
 
 Done when every changed file, or in an incremental review every file under `## Changes since your last review`, has a walkthrough row, every finding has an anchor, a quote and a basis, and `merge_danger` states the door and the blast radius.
