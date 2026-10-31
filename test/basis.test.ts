@@ -98,6 +98,22 @@ describe("docsBasisProblem", () => {
     expect(docsBasisProblem("docs/superpowers/plans/2026-10-17-old.md:3 says Y", context)).toBe(refused)
     expect(docsBasisProblem("anything", { ...context, docs: [] })).toContain("(none is known)")
   })
+
+  it("matches a doc's name only at a path boundary, so a spec ending in -design.md doesn't pass as design.md", () => {
+    expect(
+      docsBasisProblem("docs/superpowers/specs/2026-10-24-verify-design.md:40 says the bar is 2 of 3", context),
+    ).toContain("a docs finding must name")
+    expect(docsBasisProblem("`design.md:3` says X; src/a.ts:9 does Y", context)).toBeUndefined()
+    expect(docsBasisProblem("(docs/design.md:3) X", context)).toBeUndefined()
+    expect(docsBasisProblem("see docs/design.md:3, which says X", context)).toBeUndefined()
+  })
+
+  it("lists at most ten docs in the refusal", () => {
+    const many = Array.from({ length: 14 }, (_, i) => `packages/p${i}/README.md`)
+    const refused = docsBasisProblem("src/a.ts:1 contradicts nothing", { ...context, docs: many })
+    expect(refused).toContain("packages/p9/README.md, and 4 more")
+    expect(refused).not.toContain("packages/p10/README.md")
+  })
 })
 
 describe("pairingProblem", () => {

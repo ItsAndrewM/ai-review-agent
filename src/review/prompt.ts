@@ -182,6 +182,7 @@ function otherFiles(changedOutside: readonly ChangedFile[], unchanged: readonly 
 const ADDED_HISTORY_NOTE = "(added in this pull request: check only its claims about this pull request's changes)"
 const SEARCH_UNAVAILABLE = "The repository search wasn't available, so no docs were searched."
 const SEARCH_SPENT = "The repository search's budget was spent, so no docs were searched."
+const SEARCH_STOPPED = "The docs search stopped early at its budget, so later changed files weren't searched."
 
 function docsData(docs: DocsSections): string {
   return neutraliseClosingTag([renderDocsUnderReview(docs.under), renderMentions(docs)].join("\n\n"))
@@ -202,9 +203,10 @@ function renderMentions(docs: DocsSections): string {
   const heading = "## Docs mentioning the change"
   if (docs.search === "unavailable") return `${heading}\n${SEARCH_UNAVAILABLE}`
   if (docs.search === "spent") return `${heading}\n${SEARCH_SPENT}`
-  if (docs.mentions.length === 0) return `${heading}\n(none)`
+  if (docs.mentions.length === 0 && docs.search === "ready") return `${heading}\n(none)`
   const lines = docs.mentions.map((mention) => `${mention.path}:${mention.line}: ${mention.text}`)
   if (docs.overflow > 0) lines.push(`${docs.overflow} more mentions aren't listed.`)
+  if (docs.search === "stopped") lines.push(SEARCH_STOPPED)
   return [heading, ...lines].join("\n")
 }
 

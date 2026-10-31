@@ -50,10 +50,24 @@ export function standardBasisProblem(basis: string, context: BasisContext): stri
   return `a standard finding must name a repository standards file (${listed(context.instructionFiles, "none is listed")}), a smell from references/smells.md, or a repository skill this review activated (${listed(context.activatedSkills, "none was")}); if the code is wrong on its own terms, make it a defect with its failure scenario`
 }
 
+const MOST_DOCS_LISTED = 10
+const PATH_EDGE = "[\\s`'\"()\\[\\],;:]"
+
 export function docsBasisProblem(basis: string, context: BasisContext): string | undefined {
   const text = basis.toLowerCase()
-  if (context.docs.flatMap(namesOf).some((name) => text.includes(name))) return undefined
-  return `a docs finding must name one of the pull request's docs (${listed(context.docs, "none is known")}); if the code is wrong on its own terms, make it a defect with its failure scenario`
+  if (context.docs.flatMap(namesOf).some((name) => namesPathAtBoundary(text, name))) return undefined
+  return `a docs finding must name one of the pull request's docs (${listedUpTo(context.docs, MOST_DOCS_LISTED, "none is known")}); if the code is wrong on its own terms, make it a defect with its failure scenario`
+}
+
+function namesPathAtBoundary(text: string, name: string): boolean {
+  const quoted = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`(?:^|${PATH_EDGE}|/)${quoted}(?:$|${PATH_EDGE}|/)`).test(text)
+}
+
+function listedUpTo(names: readonly string[], most: number, none: string): string {
+  if (names.length === 0) return none
+  if (names.length <= most) return names.join(", ")
+  return `${names.slice(0, most).join(", ")}, and ${names.length - most} more`
 }
 
 function namesStandardsFile(text: string, instructionFiles: readonly string[]): boolean {

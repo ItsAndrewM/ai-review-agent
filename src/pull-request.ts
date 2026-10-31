@@ -35,6 +35,7 @@ import {
   type UpdateCheckRun,
 } from "./github/client.ts"
 import {
+  commentableLines,
   everyFileFiltered,
   indexCommentableLines,
   reviewableFiles,
@@ -87,6 +88,10 @@ import {
   docPathsAtHead,
   docsInChange,
   docsStartFields,
+  type ChangedLinesByDoc,
+  type DocMatcher,
+  type DocMentions,
+  type DocsInChange,
   type DocsSearch,
 } from "./repository/docs.ts"
 import type { PathInstruction } from "./repository/instructions.ts"
@@ -406,6 +411,12 @@ interface CheckedSubmission {
   scoped: ScopedReview
   missing: string[]
   reasons: CheckedReasons
+}
+
+interface SearchedDocs {
+  found: DocMentions | undefined
+  search: DocsSearch
+  headDocs: string[]
 }
 
 interface Publication {
@@ -1727,15 +1738,22 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const isDoc = docMatcher(globs)
     const incremental = scope.mode === "incremental" && scope.from !== undefined
     const sorted = docsInChange(incremental ? promptFiles(files, since, scope).covered : files, isDoc)
-    const underPaths = sorted.under.map((file) => file.filename)
-    const access = await this.repositorySearch("grep")
-    const ready = access.kind === "ready" ? access : undefined
-    const found = ready && docMentions(ready.files, ready.work, isDoc, sorted.code, new Set(underPaths))
-    const search = docsSearchOf(access.kind)
-    const headDocs = ready ? docPathsAtHead(ready.files.paths(), isDoc, underPaths) : [...underPaths].sort()
-    await this.recordDocs(deliveryId, headDocs)
-    log("review.docs", { number: pr.number, head: shortSha(pr.head.sha), ...docsStartFields(sorted, found, search) })
+    const searched = await this.searchDocs(sorted, isDoc)
+    await this.recordDocs(deliveryId, searched.headDocs)
+    const fields = docsStartFields(sorted, searched.found, searched.search)
+    log("review.docs", { number: pr.number, head: shortSha(pr.head.sha), ...fields })
+    const { found, search } = searched
     return { under: sorted.under, mentions: found?.mentions ?? [], overflow: found?.overflow ?? 0, search }
+  }
+
+  private async searchDocs(sorted: DocsInChange, isDoc: DocMatcher): Promise<SearchedDocs> {
+    const underPaths = sorted.under.map((file) => file.filename).sort()
+    if (sorted.code.length === 0) return { found: undefined, search: "ready", headDocs: underPaths }
+    const access = await this.repositorySearch("grep")
+    if (access.kind !== "ready") return { found: undefined, search: docsSearchOf(access.kind), headDocs: underPaths }
+    const found = docMentions(access.files, access.work, isDoc, sorted.code, changedLinesByDoc(sorted.under))
+    const headDocs = docPathsAtHead(access.files.paths(), isDoc, underPaths)
+    return { found, search: found.stopped ? "stopped" : "ready", headDocs }
   }
 
   private async recordDocs(deliveryId: string, docs: readonly string[]): Promise<void> {
@@ -3038,6 +3056,10 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function changedLinesByDoc(under: readonly ChangedFile[]): ChangedLinesByDoc {
+  return new Map(under.map((file) => [file.filename, new Set(commentableLines(file.patch).right.keys())]))
+}
 
 function docsSearchOf(kind: SearchAccess["kind"]): DocsSearch {
   if (kind === "ready") return "ready"

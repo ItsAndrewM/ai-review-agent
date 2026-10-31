@@ -249,6 +249,7 @@ describe("bundledSkills", () => {
     expect(review?.body).toContain("- **Docs**: for each file under `## Docs under review`")
     expect(review?.body).toContain("## Docs mentioning the change")
     expect(review?.body).toContain("anchors on the changed code line")
+    expect(review?.description).toContain("docs")
   })
 
   it("tells the review to use activate_skill with a matching skill's name before step 2, in the words of the catalog's list headed Available skills, and to grade the finding the skill asks for as a standard finding", async () => {

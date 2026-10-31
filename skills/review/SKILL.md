@@ -1,6 +1,6 @@
 ---
 name: review
-description: Review a pull request's diff for defects, spec, standards and tests, then submit it with submit_review. Use for every review request.
+description: Review a pull request's diff for defects, spec, standards, tests and docs, then submit it with submit_review. Use for every review request.
 metadata:
   version: "12"
 ---

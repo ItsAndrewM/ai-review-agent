@@ -1,7 +1,7 @@
 import { Minimatch } from "minimatch"
 import { isGenerated, type ChangedFile } from "../github/diff.ts"
 import type { LogFields } from "../log.ts"
-import { grepMentions, type GrepWork, type MentionHit } from "./search.ts"
+import { grepMentions, MAX_SEARCH_WORK, type GrepWork, type MentionHit } from "./search.ts"
 import type { SnapshotFiles } from "./snapshot.ts"
 
 export const DEFAULT_DOC_GLOBS = [
@@ -24,9 +24,11 @@ export const MAX_MENTIONS_PER_FILE = 6
 
 export const MAX_MENTIONS = 40
 
+export const MAX_DOC_PATHS = 200
+
 export type DocMatcher = (path: string) => boolean
 
-export type DocsSearch = "ready" | "unavailable" | "spent"
+export type DocsSearch = "ready" | "unavailable" | "spent" | "stopped"
 
 export interface DocsInChange {
   under: ChangedFile[]
@@ -40,11 +42,21 @@ export interface DocMention {
   text: string
 }
 
+export interface DocMentions {
+  mentions: DocMention[]
+  overflow: number
+  searched: number
+  stopped: boolean
+}
+
+export type ChangedLinesByDoc = ReadonlyMap<string, ReadonlySet<number>>
+
 const GLOB_OPTIONS = { dot: true }
 const EXCLUDE_MARK = "!"
 const MIN_BASENAME_CHARS = 4
 const COMMON_BASENAMES = new Set(["index", "main", "mod", "utils", "readme"])
 const REGEX_METACHARACTERS = /[.*+?^${}()|[\]\\]/g
+const WORD_CHARACTER = /\w/
 
 const historyMatchers = HISTORY_GLOBS.map((glob) => new Minimatch(glob, GLOB_OPTIONS))
 
@@ -77,52 +89,70 @@ function bucketOf(file: ChangedFile, isDoc: DocMatcher): keyof DocsInChange {
   return isDoc(file.filename) && !isGenerated(file.filename) ? "under" : "code"
 }
 
-export interface DocMentions {
-  mentions: DocMention[]
-  overflow: number
-  searched: number
-}
-
 export function docMentions(
   files: SnapshotFiles,
   work: GrepWork,
   isDoc: DocMatcher,
   code: readonly ChangedFile[],
-  under: ReadonlySet<string>,
+  under: ChangedLinesByDoc,
 ): DocMentions {
-  const selected = (path: string): boolean => isDoc(path) && !isHistory(path) && !under.has(path)
-  const found: DocMentions = { mentions: [], overflow: 0, searched: 0 }
-  for (const file of code) {
-    found.searched++
+  const selected = (path: string): boolean => isDoc(path) && !isHistory(path)
+  const searchable = code.filter((file) => !isGenerated(file.filename))
+  const startUnits = work.units()
+  const perFile: MentionHit[][] = []
+  for (const file of searchable) {
+    if (work.spent() || work.units() - startUnits > MAX_SEARCH_WORK) break
     const hits = mentionsOf(files, work, selected, file.filename)
-    const room = Math.min(MAX_MENTIONS_PER_FILE, MAX_MENTIONS - found.mentions.length)
-    found.mentions.push(...hits.slice(0, Math.max(0, room)))
-    found.overflow += Math.max(0, hits.length - Math.max(0, room))
+    perFile.push(hits.filter((hit) => !under.get(hit.path)?.has(hit.line)))
   }
-  return found
+  const { kept, overflow } = roundRobin(perFile)
+  return { mentions: kept, overflow, searched: perFile.length, stopped: perFile.length < searchable.length }
+}
+
+function roundRobin(perFile: readonly MentionHit[][]) {
+  const queues = perFile.map((hits) => hits.slice(0, MAX_MENTIONS_PER_FILE))
+  let overflow = perFile.reduce((sum, hits) => sum + Math.max(0, hits.length - MAX_MENTIONS_PER_FILE), 0)
+  const kept: MentionHit[] = []
+  const seen = new Set<string>()
+  for (let round = 0; round < MAX_MENTIONS_PER_FILE; round++) {
+    for (const queue of queues) {
+      const hit = queue[round]
+      if (hit === undefined || seen.has(placeOf(hit))) continue
+      if (kept.length >= MAX_MENTIONS) {
+        overflow++
+        continue
+      }
+      seen.add(placeOf(hit))
+      kept.push(hit)
+    }
+  }
+  return { kept, overflow }
 }
 
 function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, path: string): MentionHit[] {
   const seen = new Set<string>()
   const hits: MentionHit[] = []
   for (const pattern of mentionPatterns(path)) {
-    for (const hit of grepMentions(files, selected, pattern, work)) {
-      const key = `${hit.path}:${hit.line}`
-      if (seen.has(key)) continue
-      seen.add(key)
+    for (const hit of grepMentions(files, selected, pattern, work).sort(byPlace)) {
+      if (seen.has(placeOf(hit))) continue
+      seen.add(placeOf(hit))
       hits.push(hit)
     }
   }
-  return hits.sort(byPlace)
+  return hits
 }
 
-const byPlace = (a: MentionHit, b: MentionHit): number =>
-  a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1
+const placeOf = (hit: MentionHit): string => `${hit.path}:${hit.line}`
+
+const byPlace = (a: MentionHit, b: MentionHit): number => {
+  if (a.path === b.path) return a.line - b.line
+  return a.path < b.path ? -1 : 1
+}
 
 export function docPathsAtHead(paths: Iterable<string>, isDoc: DocMatcher, under: readonly string[]): string[] {
   const kept = new Set(under)
   for (const path of paths) if (isDoc(path) && !isHistory(path)) kept.add(path)
-  return [...kept].sort()
+  return [...kept].sort().slice(0, MAX_DOC_PATHS)
 }
 
 export function docsStartFields(sorted: DocsInChange, found: DocMentions | undefined, search: DocsSearch): LogFields {
@@ -140,6 +170,14 @@ export function docsStartFields(sorted: DocsInChange, found: DocMentions | undef
 export function mentionPatterns(path: string): string[] {
   const basename = path.split("/").at(-1) ?? path
   const stem = basename.replace(/\.[^.]+$/, "")
-  if (stem.length < MIN_BASENAME_CHARS || COMMON_BASENAMES.has(stem.toLowerCase())) return [path]
-  return [path, `\\b${stem.replace(REGEX_METACHARACTERS, "\\$&")}\\b`]
+  const literal = path.replace(REGEX_METACHARACTERS, "\\$&")
+  if (stem.length < MIN_BASENAME_CHARS || COMMON_BASENAMES.has(stem.toLowerCase())) return [literal]
+  return [literal, wordPattern(stem)]
+}
+
+function wordPattern(stem: string): string {
+  const quoted = stem.replace(REGEX_METACHARACTERS, "\\$&")
+  const leading = WORD_CHARACTER.test(stem[0] ?? "") ? "\\b" : ""
+  const trailing = WORD_CHARACTER.test(stem.at(-1) ?? "") ? "\\b" : ""
+  return `${leading}${quoted}${trailing}`
 }

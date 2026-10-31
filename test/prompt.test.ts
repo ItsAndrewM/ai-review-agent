@@ -429,6 +429,10 @@ describe("the docs sections", () => {
     expect(spent).toContain(
       "## Docs mentioning the change\nThe repository search's budget was spent, so no docs were searched.",
     )
+    const stopped = reviewPrompt(pr, [], false, [], { ...docs, search: "stopped" })
+    expect(stopped).toContain(
+      "docs/design.md:112: The snapshot is dropped when the review ends.\nThe docs search stopped early at its budget, so later changed files weren't searched.",
+    )
   })
 
   it("places the sections after the other changed files and before the thread lists in an incremental review", () => {
