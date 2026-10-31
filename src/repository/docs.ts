@@ -1,5 +1,5 @@
 import { Minimatch } from "minimatch"
-import { deltaLines, isGenerated, type ChangedFile } from "../github/diff.ts"
+import { deltaLines, filterGlobs, isFiltered, isGenerated, type ChangedFile } from "../github/diff.ts"
 import type { LogFields } from "../log.ts"
 import { grepMentions, MAX_SEARCH_WORK, type GrepWork, type MentionHit, type MentionSearch } from "./search.ts"
 import type { SnapshotFiles, SnapshotRecord } from "./snapshot.ts"
@@ -72,9 +72,13 @@ function partition(globs: readonly string[]) {
   return { includes: effective.map(toMatcher), excludes: excludes.map(toExcludeMatcher) }
 }
 
-export function docMatcher(globs: readonly string[]): DocMatcher {
+export function docMatcher(globs: readonly string[], pathFilters: readonly string[] = []): DocMatcher {
   const { includes, excludes } = partition(globs)
-  return (path) => includes.some((glob) => glob.match(path)) && !excludes.some((glob) => glob.match(path))
+  const filters = filterGlobs(pathFilters)
+  return (path) =>
+    includes.some((glob) => glob.match(path)) &&
+    !excludes.some((glob) => glob.match(path)) &&
+    !isFiltered(path, filters)
 }
 
 export function isHistory(path: string): boolean {
@@ -108,11 +112,24 @@ export function docMentions(
   code: readonly ChangedFile[],
   under: ChangedLinesByDoc,
 ): DocMentions {
-  const selected = (path: string): boolean => isDoc(path) && !isHistory(path)
-  const searchable = searchableCode(code)
+  const docs = new Set([...files.paths()].filter((path) => isDoc(path) && !isHistory(path)))
+  const selected = (path: string): boolean => docs.has(path)
+  const stopped = snapshotMissesDocs(files, (path) => isDoc(path) && !isHistory(path))
+  if (docs.size === 0) return { mentions: [], overflow: 0, searched: 0, stopped }
+  return mentionsIn(files, work, selected, searchableCode(code), under, stopped)
+}
+
+function mentionsIn(
+  files: SnapshotFiles,
+  work: GrepWork,
+  selected: DocMatcher,
+  searchable: readonly ChangedFile[],
+  under: ChangedLinesByDoc,
+  missing: boolean,
+): DocMentions {
   const startUnits = work.units()
   const perFile: MentionHit[][] = []
-  let stopped = snapshotMissesDocs(files, selected)
+  let stopped = missing
   for (const file of searchable) {
     if (work.spent() || work.units() - startUnits > MAX_SEARCH_WORK) break
     const found = mentionsOf(files, work, selected, file.filename)

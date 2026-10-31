@@ -60,6 +60,12 @@ describe("docMatcher", () => {
     expect(wiki("docs/design.md")).toBe(false)
   })
 
+  it("leaves out a doc the review's path_filters leave out, so it is neither searched nor citable", () => {
+    const isDoc = docMatcher(DEFAULT_DOC_GLOBS, ["!docs/internal/**"])
+    expect(isDoc("docs/internal/notes.md")).toBe(false)
+    expect(isDoc("docs/design.md")).toBe(true)
+  })
+
   it("reads a doubled ! as a literal, as path_filters do, rather than a negation that would exclude everything else", () => {
     const literal = docMatcher(["!!docs/odd.md"])
     expect(literal("docs/design.md")).toBe(true)
@@ -216,6 +222,13 @@ describe("docMentions", () => {
     const long = changed(`src/${"a".repeat(600)}.ts`)
     const refused = docMentions(snapshotOf({ "README.md": "nothing\n" }), new GrepWork(), isDoc, [long], new Map())
     expect(refused.stopped).toBe(true)
+  })
+
+  it("greps nothing when the snapshot holds no doc, so a docs-free repository pays no scan per changed file", () => {
+    const work = new GrepWork()
+    const found = docMentions(snapshotOf({ "src/a.ts": "tools\n" }), work, isDoc, [tools], new Map())
+    expect(found).toEqual({ mentions: [], overflow: 0, searched: 0, stopped: false })
+    expect(work.units()).toBe(0)
   })
 
   it("stops when the search work is spent and says so, instead of answering that nothing mentions the change", () => {

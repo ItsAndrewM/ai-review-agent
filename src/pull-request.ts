@@ -1733,9 +1733,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     since: readonly ChangedFile[],
     scope: ReviewScope,
     globs: readonly string[],
+    pathFilters: readonly string[],
     deliveryId: string,
   ): Promise<DocsSections> {
-    const isDoc = docMatcher(globs)
+    const isDoc = docMatcher(globs, pathFilters)
     const incremental = scope.mode === "incremental" && scope.from !== undefined
     const sorted = docsInChange(incremental ? promptFiles(files, since, scope).covered : files, isDoc)
     const searched = await this.searchDocs(sorted, isDoc)
@@ -1782,7 +1783,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const { standards } = repository
       const reviewable = reviewableFiles(files, run.config.reviews.path_filters)
       const { scope, since } = await this.planReview(pr, reviewable, incoming, run)
-      const docs = await this.docsFor(pr, reviewable, since, scope, run.config.reviews.docs, run.deliveryId)
+      const { docs: docGlobs, path_filters } = run.config.reviews
+      const docs = await this.docsFor(pr, reviewable, since, scope, docGlobs, path_filters, run.deliveryId)
       const prompt = promptFor(pr, reviewable, scope, since, issues, (await this.readReviewed())?.omitted ?? [], docs)
       log("review.start", {
         number: pr.number,
