@@ -128,8 +128,11 @@ describe("checkText and refusalText", () => {
     expect(checkText({ name: "test", paths: ["a"], outcome: exited(1, "FAIL a\n"), ms: 2_400 })).toBe(
       "test exited 1 in 2.4s\n\nFAIL a\n",
     )
-    expect(checkText({ name: "lint", paths: [], outcome: exited(0, "", false), ms: 300 })).toBe(
-      "lint exited 0 in 0.3s\n\n(no output)",
+    expect(checkText({ name: "lint", paths: [], outcome: exited(0, "", false), ms: 1300 })).toBe(
+      "lint exited 0 in 1.3s\n\n(no output)",
+    )
+    expect(checkText({ name: "lint", paths: [], outcome: exited(0, "", false), ms: 450 })).toBe(
+      "lint exited 0 in 450 ms\n\n(no output)",
     )
     expect(checkText({ name: "test", paths: [], outcome: exited(0, "x", true), ms: 1000 })).toContain(
       "(output cut to its last 8 KiB)",
