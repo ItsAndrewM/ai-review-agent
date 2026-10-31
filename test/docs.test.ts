@@ -4,7 +4,9 @@ import {
   DEFAULT_DOC_GLOBS,
   docMatcher,
   docMentions,
+  docPathsAtHead,
   docsInChange,
+  docsStartFields,
   isHistory,
   MAX_MENTIONS,
   MAX_MENTIONS_PER_FILE,
@@ -141,6 +143,56 @@ describe("docMentions", () => {
     const files = snapshotOf({ "README.md": "src/review/tools.ts, the tools module\n" })
     const found = docMentions(files, new GrepWork(), isDoc, [tools], new Set())
     expect(found.mentions).toEqual([{ path: "README.md", line: 1, text: "src/review/tools.ts, the tools module" }])
+  })
+})
+
+describe("docPathsAtHead", () => {
+  it("keeps the head's docs minus history, plus the docs under review, sorted and de-duplicated", () => {
+    const paths = ["src/a.ts", "docs/design.md", "docs/superpowers/plans/old.md", "README.md", "docs/design.md"]
+    expect(
+      docPathsAtHead(paths, docMatcher(DEFAULT_DOC_GLOBS), ["docs/superpowers/plans/new.md", "README.md"]),
+    ).toEqual(["README.md", "docs/design.md", "docs/superpowers/plans/new.md"])
+  })
+})
+
+describe("docsStartFields", () => {
+  const sorted = {
+    under: [changed("README.md"), changed("docs/superpowers/plans/new.md", "added")],
+    history: [changed("docs/superpowers/specs/old.md")],
+    code: [changed("src/a.ts"), changed("src/b.ts")],
+  }
+
+  it("counts the sorted files and the mentions found", () => {
+    const found = {
+      mentions: [
+        { path: "docs/design.md", line: 1, text: "a" },
+        { path: "docs/design.md", line: 9, text: "b" },
+        { path: "docs/setup.md", line: 2, text: "c" },
+      ],
+      overflow: 4,
+      searched: 2,
+    }
+    expect(docsStartFields(sorted, found, "ready")).toEqual({
+      under: 2,
+      history: 1,
+      code: 2,
+      mentions: 3,
+      mentionFiles: 2,
+      overflow: 4,
+      search: "ready",
+    })
+  })
+
+  it("reports zero mentions and the search state when the search wasn't available", () => {
+    expect(docsStartFields(sorted, undefined, "unavailable")).toEqual({
+      under: 2,
+      history: 1,
+      code: 2,
+      mentions: 0,
+      mentionFiles: 0,
+      overflow: 0,
+      search: "unavailable",
+    })
   })
 })
 

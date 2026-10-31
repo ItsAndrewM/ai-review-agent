@@ -1,5 +1,6 @@
 import { Minimatch } from "minimatch"
 import { isGenerated, type ChangedFile } from "../github/diff.ts"
+import type { LogFields } from "../log.ts"
 import { grepMentions, type GrepWork, type MentionHit } from "./search.ts"
 import type { SnapshotFiles } from "./snapshot.ts"
 
@@ -24,6 +25,8 @@ export const MAX_MENTIONS_PER_FILE = 6
 export const MAX_MENTIONS = 40
 
 export type DocMatcher = (path: string) => boolean
+
+export type DocsSearch = "ready" | "unavailable" | "spent"
 
 export interface DocsInChange {
   under: ChangedFile[]
@@ -115,6 +118,24 @@ function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, 
 
 const byPlace = (a: MentionHit, b: MentionHit): number =>
   a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1
+
+export function docPathsAtHead(paths: Iterable<string>, isDoc: DocMatcher, under: readonly string[]): string[] {
+  const kept = new Set(under)
+  for (const path of paths) if (isDoc(path) && !isHistory(path)) kept.add(path)
+  return [...kept].sort()
+}
+
+export function docsStartFields(sorted: DocsInChange, found: DocMentions | undefined, search: DocsSearch): LogFields {
+  return {
+    under: sorted.under.length,
+    history: sorted.history.length,
+    code: sorted.code.length,
+    mentions: found?.mentions.length ?? 0,
+    mentionFiles: new Set((found?.mentions ?? []).map((mention) => mention.path)).size,
+    overflow: found?.overflow ?? 0,
+    search,
+  }
+}
 
 export function mentionPatterns(path: string): string[] {
   const basename = path.split("/").at(-1) ?? path

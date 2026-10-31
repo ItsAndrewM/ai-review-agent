@@ -1,6 +1,6 @@
 import type { PullRequestInfo } from "../github/client.ts"
 import { renderChanges, renderPatches, type ChangedFile, type MarkedLines } from "../github/diff.ts"
-import { isHistory, type DocMention } from "../repository/docs.ts"
+import { isHistory, type DocMention, type DocsSearch } from "../repository/docs.ts"
 import { shortSha } from "../sha.ts"
 import type { FindingInput, Rejected } from "./findings.ts"
 import type { OpenThread, ThreadLists } from "./incremental.ts"
@@ -18,8 +18,6 @@ export interface IncrementalPromptInput extends ThreadLists {
   omitted: readonly OmittedRequirementInput[]
   docs: DocsSections
 }
-
-export type DocsSearch = "ready" | "unavailable" | "spent"
 
 export interface DocsSections {
   under: readonly ChangedFile[]
