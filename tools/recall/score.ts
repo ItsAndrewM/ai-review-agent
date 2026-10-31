@@ -195,6 +195,7 @@ export function scoreSet(
   set: RecallSet,
   runs: readonly RunScore[],
   meta: Pick<SetScore, "model" | "thinking" | "skills">,
+  runsPerHead: number,
 ): SetScore {
   const heads = set.heads.flatMap((head) => {
     const own = runs.filter((run) => run.head === head.head)
@@ -213,7 +214,7 @@ export function scoreSet(
     usd,
     costPerReview: runs.length === 0 ? 0 : usd / runs.length,
     reviews: runs.length,
-    partial: heads.length < set.heads.length,
+    partial: heads.length < set.heads.length || runs.length < heads.length * runsPerHead,
   }
 }
 

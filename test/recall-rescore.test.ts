@@ -50,7 +50,7 @@ const meta = {
 function recorded(): ResultsFile {
   const before = headCase()
   const runs = [scoreRun(before, 1, answer)]
-  const score = scoreSet({ heads: [before] }, runs, meta)
+  const score = scoreSet({ heads: [before] }, runs, meta, meta.runs)
   return parseResults(JSON.stringify({ meta, score, runs }))
 }
 

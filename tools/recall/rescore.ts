@@ -91,6 +91,6 @@ export function rescoreRuns(set: RecallSet, rows: readonly ResultsRow[]): RunSco
 export function rescore(set: RecallSet, results: ResultsFile): Rescored {
   const runs = rescoreRuns(set, results.runs)
   const { model, thinking, skills } = results.meta
-  const score = scoreSet(set, runs, { model, thinking, skills })
+  const score = scoreSet(set, runs, { model, thinking, skills }, results.meta.runs)
   return { meta: { ...results.meta, partial: score.partial }, score, runs }
 }

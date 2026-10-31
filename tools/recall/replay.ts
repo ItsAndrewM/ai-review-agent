@@ -15,7 +15,14 @@ import { NeuronBudget } from "./budget.ts"
 import { attemptReview } from "./conversation.ts"
 import { changedFilesAt } from "./files.ts"
 import { ReviewHost } from "./host.ts"
-import { parseJournal, remainingReviews, stampOfJournal, type PendingReview } from "./journal.ts"
+import {
+  parseJournal,
+  remainingReviews,
+  resumeCommand,
+  runsWithin,
+  stampOfJournal,
+  type PendingReview,
+} from "./journal.ts"
 import { promptFor, reviewSkill, systemFor, type ReviewSkill } from "./prompt.ts"
 import { compareTable, resultsFileName, resultsTable } from "./report.ts"
 import { parseResults, rescore, rescoreRuns } from "./rescore.ts"
@@ -244,7 +251,7 @@ async function compare(paths: [string, string]): Promise<void> {
   const [baseline, candidate] = await Promise.all(paths.map(readScore))
   if (baseline === undefined || candidate === undefined) throw new Error(USAGE)
   if (baseline.partial || candidate.partial)
-    throw new Error("A partial run (--case) can't be compared against the bar.")
+    throw new Error("A partial run (--case, or one the spend cap stopped) can't be compared against the bar.")
   console.log(compareTable(baseline, candidate, barVerdict(baseline, candidate)))
 }
 
@@ -268,14 +275,15 @@ interface ReviewContext {
   readonly neurons: number
   readonly journal: URL
   readonly transcripts: URL
+  readonly resume: string
 }
 
-async function recordedRuns(set: RecallSet, resume: string | undefined): Promise<Recorded> {
+async function recordedRuns(set: RecallSet, resume: string | undefined, runs: number): Promise<Recorded> {
   if (resume === undefined) {
     const stamp = new Date().toISOString()
     return { stamp, journal: new URL(`${stamp.replaceAll(":", "-")}.jsonl`, RUNS_DIR), runs: [] }
   }
-  const rows = parseJournal(await readFile(resume, "utf8"))
+  const rows = runsWithin(parseJournal(await readFile(resume, "utf8")), runs)
   return { stamp: stampOfJournal(resume), journal: pathToFileURL(resume), runs: rescoreRuns(set, rows) }
 }
 
@@ -301,7 +309,7 @@ async function reviewPending(
     return false
   } catch (error) {
     if (!(error instanceof ReplaySpendCapError)) throw error
-    console.error(`${error.message} Resume with --resume ${fileURLToPath(context.journal)} once the cap allows.`)
+    console.error(`${error.message} Resume once the cap allows with: ${context.resume}`)
     return true
   }
 }
@@ -323,7 +331,7 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     wrap: (provider) => withBudgetRefusal(withForcedJson(withOutputLimit(provider, maxTokens))),
   })
   const skill = await reviewSkill()
-  const recorded = await recordedRuns(set, options.resume)
+  const recorded = await recordedRuns(set, options.resume, options.runs)
   const transcripts = new URL(`${recorded.stamp.replaceAll(":", "-")}-transcripts.jsonl`, RUNS_DIR)
   const pending = remainingReviews(headsMatching(set, options.onlyCase), options.runs, recorded.runs)
   const context: ReviewContext = {
@@ -334,10 +342,14 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     neurons,
     journal: recorded.journal,
     transcripts,
+    resume: resumeCommand(
+      { model: options.model, thinking, runs: options.runs, onlyCase: options.onlyCase },
+      fileURLToPath(recorded.journal),
+    ),
   }
   const runs = recorded.runs
   const capped = await reviewPending(pending, context, runs)
-  const score = scoreSet(set, runs, { model: options.model, thinking, skills: skill.fingerprint })
+  const score = scoreSet(set, runs, { model: options.model, thinking, skills: skill.fingerprint }, options.runs)
   const meta: RunMeta = {
     model: options.model,
     thinking,
