@@ -5,6 +5,7 @@ import {
   DEFAULT_TREE_DEPTH,
   grep,
   GrepWork,
+  grepMentions,
   MAX_GREP_CHARS,
   MAX_LINE_CHARS,
   MAX_MATCHES,
@@ -128,6 +129,31 @@ describe("grep's run budget", () => {
     const work = new GrepWork()
     work.charge(MAX_RUN_SEARCH_WORK)
     expect(grep(counted(), { pattern: "" }, work)).toBe("The pattern is empty.")
+  })
+})
+
+describe("grepMentions", () => {
+  const docs = snapshotOf({
+    "docs/design.md": "The tools live in src/review/tools.ts.\nAnother line.\nsrc/review/tools.ts again\n",
+    "README.md": "See src/review/tools.ts for the tools.\n",
+    "src/review/tools.ts": "export const tools = 1 // src/review/tools.ts\n",
+  })
+
+  it("answers structured hits, path then line, for the files the selector accepts", () => {
+    const work = new GrepWork()
+    const hits = grepMentions(docs, (path) => path.endsWith(".md"), "src/review/tools.ts", work)
+    expect(hits).toEqual([
+      { path: "README.md", line: 1, text: "See src/review/tools.ts for the tools." },
+      { path: "docs/design.md", line: 1, text: "The tools live in src/review/tools.ts." },
+      { path: "docs/design.md", line: 3, text: "src/review/tools.ts again" },
+    ])
+    expect(work.units()).toBeGreaterThan(0)
+  })
+
+  it("answers nothing once the review's search work is spent", () => {
+    const work = new GrepWork()
+    work.charge(Number.MAX_SAFE_INTEGER)
+    expect(grepMentions(docs, () => true, "tools", work)).toEqual([])
   })
 })
 

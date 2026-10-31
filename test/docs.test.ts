@@ -1,6 +1,17 @@
 import { describe, expect, it } from "vitest"
 import type { ChangedFile } from "../src/github/diff.ts"
-import { DEFAULT_DOC_GLOBS, docMatcher, docsInChange, isHistory, mentionPatterns } from "../src/repository/docs.ts"
+import {
+  DEFAULT_DOC_GLOBS,
+  docMatcher,
+  docMentions,
+  docsInChange,
+  isHistory,
+  MAX_MENTIONS,
+  MAX_MENTIONS_PER_FILE,
+  mentionPatterns,
+} from "../src/repository/docs.ts"
+import { GrepWork } from "../src/repository/search.ts"
+import { MemorySnapshotFiles } from "../src/repository/snapshot.ts"
 
 const changed = (filename: string, status = "modified"): ChangedFile => ({
   filename,
@@ -74,6 +85,62 @@ describe("docsInChange", () => {
     expect(sorted.under.map((file) => file.filename)).toEqual(["docs/superpowers/plans/2026-10-31-new.md", "README.md"])
     expect(sorted.history.map((file) => file.filename)).toEqual(["docs/superpowers/specs/2026-10-24-verify-design.md"])
     expect(sorted.code.map((file) => file.filename)).toEqual(["pnpm-lock.yaml", "src/review/tools.ts"])
+  })
+})
+
+function snapshotOf(contents: Record<string, string>): MemorySnapshotFiles {
+  const files = new MemorySnapshotFiles()
+  files.add(Object.entries(contents).map(([path, content]) => ({ path, content })))
+  return files
+}
+
+describe("docMentions", () => {
+  const isDoc = docMatcher(DEFAULT_DOC_GLOBS)
+  const tools = changed("src/review/tools.ts")
+
+  it("lists the docs that name a changed file, in path order, and skips history and the docs under review", () => {
+    const files = snapshotOf({
+      "docs/design.md": "tools.ts holds the tools.\n\nsrc/review/tools.ts is wired here.\n",
+      "README.md": "The review's tools are in src/review/tools.ts.\n",
+      "docs/superpowers/plans/2026-10-17-tools.md": "src/review/tools.ts will hold the tools.\n",
+      "docs/setup.md": "src/review/tools.ts is listed in setup.\n",
+      "src/review/tools.ts": "export const tools = 1\n",
+    })
+    const found = docMentions(files, new GrepWork(), isDoc, [tools], new Set(["docs/setup.md"]))
+    expect(found.mentions).toEqual([
+      { path: "README.md", line: 1, text: "The review's tools are in src/review/tools.ts." },
+      { path: "docs/design.md", line: 1, text: "tools.ts holds the tools." },
+      { path: "docs/design.md", line: 3, text: "src/review/tools.ts is wired here." },
+    ])
+    expect(found.overflow).toBe(0)
+    expect(found.searched).toBe(1)
+  })
+
+  it("caps the mentions per changed file and in all, and counts what it dropped", () => {
+    const manyLines = Array.from({ length: MAX_MENTIONS_PER_FILE + 2 }, (_, i) => `line ${i} names src/a/one.ts`).join(
+      "\n",
+    )
+    const perFile = docMentions(
+      snapshotOf({ "docs/design.md": manyLines }),
+      new GrepWork(),
+      isDoc,
+      [changed("src/a/one.ts")],
+      new Set(),
+    )
+    expect(perFile.mentions).toHaveLength(MAX_MENTIONS_PER_FILE)
+    expect(perFile.overflow).toBe(2)
+    const code = Array.from({ length: MAX_MENTIONS + 1 }, (_, i) => changed(`src/b/file${i}.ts`))
+    const everyFile = Object.fromEntries(code.map((file, i) => [`docs/d${i}.md`, `${file.filename} is here\n`]))
+    const total = docMentions(snapshotOf(everyFile), new GrepWork(), isDoc, code, new Set())
+    expect(total.mentions).toHaveLength(MAX_MENTIONS)
+    expect(total.overflow).toBe(1)
+    expect(total.searched).toBe(MAX_MENTIONS + 1)
+  })
+
+  it("names a mention once when both the path and the basename hit the same line", () => {
+    const files = snapshotOf({ "README.md": "src/review/tools.ts, the tools module\n" })
+    const found = docMentions(files, new GrepWork(), isDoc, [tools], new Set())
+    expect(found.mentions).toEqual([{ path: "README.md", line: 1, text: "src/review/tools.ts, the tools module" }])
   })
 })
 

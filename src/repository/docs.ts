@@ -1,5 +1,7 @@
 import { Minimatch } from "minimatch"
 import { isGenerated, type ChangedFile } from "../github/diff.ts"
+import { grepMentions, type GrepWork, type MentionHit } from "./search.ts"
+import type { SnapshotFiles } from "./snapshot.ts"
 
 export const DEFAULT_DOC_GLOBS = [
   "**/README*",
@@ -71,6 +73,48 @@ function bucketOf(file: ChangedFile, isDoc: DocMatcher): keyof DocsInChange {
   if (isHistory(file.filename)) return file.status === "added" ? "under" : "history"
   return isDoc(file.filename) && !isGenerated(file.filename) ? "under" : "code"
 }
+
+export interface DocMentions {
+  mentions: DocMention[]
+  overflow: number
+  searched: number
+}
+
+export function docMentions(
+  files: SnapshotFiles,
+  work: GrepWork,
+  isDoc: DocMatcher,
+  code: readonly ChangedFile[],
+  under: ReadonlySet<string>,
+): DocMentions {
+  const selected = (path: string): boolean => isDoc(path) && !isHistory(path) && !under.has(path)
+  const found: DocMentions = { mentions: [], overflow: 0, searched: 0 }
+  for (const file of code) {
+    found.searched++
+    const hits = mentionsOf(files, work, selected, file.filename)
+    const room = Math.min(MAX_MENTIONS_PER_FILE, MAX_MENTIONS - found.mentions.length)
+    found.mentions.push(...hits.slice(0, Math.max(0, room)))
+    found.overflow += Math.max(0, hits.length - Math.max(0, room))
+  }
+  return found
+}
+
+function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, path: string): MentionHit[] {
+  const seen = new Set<string>()
+  const hits: MentionHit[] = []
+  for (const pattern of mentionPatterns(path)) {
+    for (const hit of grepMentions(files, selected, pattern, work)) {
+      const key = `${hit.path}:${hit.line}`
+      if (seen.has(key)) continue
+      seen.add(key)
+      hits.push(hit)
+    }
+  }
+  return hits.sort(byPlace)
+}
+
+const byPlace = (a: MentionHit, b: MentionHit): number =>
+  a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1
 
 export function mentionPatterns(path: string): string[] {
   const basename = path.split("/").at(-1) ?? path
