@@ -1106,6 +1106,29 @@ describe("renderSummaryComment", () => {
     )
   })
 
+  it("adds no second full stop when the push's blast radius already ends in one", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "COMMENT",
+      submission: { ...base, summary: "The whole PR." },
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+      since: {
+        from: "abc1234567",
+        to: "def5678901",
+        summary: "Fixed the total.",
+        files: ["a.ts"],
+        resolved: 0,
+        merge_danger: { door: "two-way", blast_radius: "Only the workflow's formatting is touched." },
+      },
+    })
+    expect(text).toContain("This push: two-way door · Only the workflow's formatting is touched.\n")
+    expect(text).not.toContain("touched..")
+  })
+
   it("prints no push line for a since section stored before the push judged itself", () => {
     const text = renderSummaryComment({
       botLogin: "andabot",

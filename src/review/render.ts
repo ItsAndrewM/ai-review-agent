@@ -218,9 +218,12 @@ function sinceLines(since: SinceSection | undefined): string[] {
   ]
 }
 
+const ENDS_A_SENTENCE = /[.!?]$/
+
 function pushDangerLines(danger: MergeDangerInput | undefined): string[] {
   if (danger === undefined) return []
-  return ["", `This push: ${danger.door} door · ${oneLine(danger.blast_radius)}.`]
+  const radius = oneLine(danger.blast_radius)
+  return ["", `This push: ${danger.door} door · ${radius}${ENDS_A_SENTENCE.test(radius) ? "" : "."}`]
 }
 
 export const MOST_CHECK_TAIL_CHARS = 2000

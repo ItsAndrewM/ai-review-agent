@@ -221,3 +221,9 @@ The Since section gains one line between the push's summary and the Files line: 
 ### Tests
 
 Unit: `mergeDangerAfterPush` for no previous, equal two-way doors with a narrower push (the stored radius stays), equal two-way doors with a wider push (the stored radius stays, the push's lands in `since`), a one-way push on a two-way record (escalates and takes the push's radius), a two-way push on a one-way record (keeps the record), and two one-way doors (keeps the record); `nextReviewed` writing both fields on an incremental review and neither change on a full one; `SinceSection` parsing with and without the merge danger; `renderSummaryComment`'s Since section with and without the push line; the incremental prompt's new sentence and the full prompt without it; the skill's version. Live: the next real incremental review after the deploy.
+
+### Rulings after the review
+
+- The push line adds its full stop only when the radius doesn't already end in sentence punctuation; about half of the radii GLM has written end in one, and the PR line adds none, so the new line would otherwise have shown "touched.." on every other incremental review (the fresh review's finding).
+- `docs/design.md`'s `summary` paragraph no longer says "kept at the stricter door".
+- Left as they are, for a follow-up if they show: `references/merge-danger.md` still defines the blast radius as "the changes introduced by this PR", which the skill's step 5 and the prompt qualify for an incremental review; step 5's "which the host prints above the summary" sits beside the new sentence that says the push's judgement prints in the Since section.
