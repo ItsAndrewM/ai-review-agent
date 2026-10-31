@@ -145,8 +145,7 @@ export function checkRecordOf(run: CheckRun): CheckRecord {
 }
 
 export function secondsText(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)} ms`
-  return `${(ms / 1000).toFixed(1).replace(/\.0$/, "")}s`
+  return `${Math.max(1, Math.round(ms / 1000))}s`
 }
 
 export function checkText(run: CheckRun): string {
