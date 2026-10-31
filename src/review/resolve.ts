@@ -1,7 +1,7 @@
 import type { ReviewThread } from "../github/client.ts"
 import { CONFIG_FILE } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
-import type { ApprovalOutcome, WaitReason } from "./approval.ts"
+import type { ApprovalOutcome, LastReview, WaitReason } from "./approval.ts"
 import { openBotThreads, type OpenThread } from "./incremental.ts"
 import { opensWithBot } from "./thread-question.ts"
 
@@ -60,21 +60,26 @@ export function resolveRefusal(kind: ResolveRefusal): string {
   return REFUSALS[kind]
 }
 
-export function approvalNote(outcome: ApprovalOutcome, heldBack: number, botLogin: string): string | undefined {
+type Standing = Pick<LastReview, "heldBack" | "withheld"> | undefined
+
+export function approvalNote(outcome: ApprovalOutcome, last: Standing, botLogin: string): string | undefined {
   if (outcome.kind === "approved") return `Approved \`${shortSha(outcome.head)}\`.`
   if (outcome.kind === "failed") return "I couldn't check approval this time."
-  return waitNote(outcome.reason, heldBack, botLogin)
+  return waitNote(outcome.reason, last, botLogin)
 }
 
-function waitNote(reason: WaitReason, heldBack: number, botLogin: string): string | undefined {
+function waitNote(reason: WaitReason, last: Standing, botLogin: string): string | undefined {
   if (reason === "workflow_off") return undefined
   if (reason === "paused") return `Approval waits until \`@${botLogin} resume\`.`
-  if (reason === "review_stands") return reviewStandsNote(heldBack)
+  if (reason === "review_stands") return reviewStandsNote(last)
   return PLAIN_WAITS[reason]
 }
 
-function reviewStandsNote(heldBack: number): string {
+function reviewStandsNote(last: Standing): string {
+  const heldBack = last?.heldBack ?? 0
   if (heldBack > 0) return heldBackNote(heldBack)
+  if ((last?.withheld ?? 0) > 0)
+    return "Approval waits for my next review, since my last one withheld it; its body says why."
   return "Approval waits for my next review, since my last one only commented."
 }
 

@@ -4,6 +4,7 @@ import { Value } from "typebox/value"
 import { parse } from "yaml"
 import type { GitHubClient, RepoRef } from "../github/client.ts"
 import { errorText } from "../log.ts"
+import { DEFAULT_DOC_GLOBS } from "./docs.ts"
 
 const PathInstructionEntry = Type.Object(
   {
@@ -23,6 +24,7 @@ const Reviews = Type.Object(
     verify: Type.Boolean(),
     sandbox: Type.Boolean(),
     path_filters: Type.Array(Type.String({ pattern: "^!" })),
+    docs: Type.Array(Type.String({ minLength: 1 })),
     path_instructions: Type.Array(PathInstructionEntry),
   },
   { additionalProperties: false },
@@ -120,6 +122,7 @@ export const DEFAULT_CONFIG: AndabotConfig = {
     verify: true,
     sandbox: true,
     path_filters: [],
+    docs: [...DEFAULT_DOC_GLOBS],
     path_instructions: [],
   },
 }

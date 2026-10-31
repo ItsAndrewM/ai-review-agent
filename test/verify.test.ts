@@ -2,16 +2,10 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai"
 import { Value } from "typebox/value"
 import { afterEach, describe, expect, it, vi } from "vitest"
 import { MAX_PATCH_CHARS, type ChangedFile } from "../src/github/diff.ts"
-import {
-  MAX_FINDINGS,
-  type FindingInput,
-  type Rejected,
-  type ReviewSubmissionInput,
-  type ValidatedReview,
-} from "../src/review/findings.ts"
+import { MAX_FINDINGS, type FindingInput, type Rejected, type ValidatedReview } from "../src/review/findings.ts"
 import { ownsOperation } from "../src/review/flight.ts"
 import { applyDeltaPolicy, type DeltaScope, type OpenThread, type ScopedReview } from "../src/review/incremental.ts"
-import { chooseReviewEvent, holdsApprovalBack } from "../src/review/render.ts"
+import { holdsApprovalBack } from "../src/review/render.ts"
 import {
   answerAfter,
   applyVerdicts,
@@ -23,7 +17,6 @@ import {
   linkedIssueText,
   parseVerdictsText,
   unverifiedDisplay,
-  verdictAfterVerify,
   verdictFields,
   VerdictInput,
   VerdictsSubmission,
@@ -86,16 +79,6 @@ function thread(handle: string, overrides: Partial<OpenThread> = {}): OpenThread
 
 function verdict(id: string, severity: FindingInput["severity"], overrides: Partial<VerdictInput> = {}): VerdictInput {
   return { finding: id, keep: true, severity, reason: `why ${id}`, ...overrides }
-}
-
-function submission(verdictOfModel: ReviewSubmissionInput["verdict"]): ReviewSubmissionInput {
-  return {
-    summary: "s",
-    walkthrough: [],
-    findings: [],
-    verdict: verdictOfModel,
-    merge_danger: { door: "two-way", blast_radius: "one module" },
-  }
 }
 
 const FRESH: DeltaScope = { mode: "fresh", covered: new Map(), open: [] }
@@ -273,6 +256,23 @@ describe("applyVerdicts", () => {
     },
   )
 
+  it("keeps a standard suggestion when the verdict says major, and a defect blocker when the verdict says suggestion, as capped", () => {
+    const advice = finding({ severity: "suggestion", basis_kind: "standard", line: 1 })
+    const blocker = finding({ severity: "blocking", basis_kind: "defect", line: 2 })
+    const result = judge(validated([advice, blocker]), [
+      verdict("F1", "major", { reason: "it bites" }),
+      verdict("F2", "suggestion", { reason: "it works" }),
+    ])
+    expect(result.validated.accepted).toEqual([advice, blocker])
+    expect(result.report).toEqual({
+      ...NOTHING,
+      capped: [
+        { finding: advice, reason: "it bites" },
+        { finding: blocker, reason: "it works" },
+      ],
+    })
+  })
+
   it("lets a standard suggestion be demoted, since the cap stops only a promotion to blocking", () => {
     const advice = finding({ severity: "suggestion", basis_kind: "standard" })
     const result = judge(validated([advice]), [verdict("F1", "nitpick", { reason: "style only" })])
@@ -300,8 +300,8 @@ describe("applyVerdicts", () => {
 
   it("demotes a blocking finding and reports the change", () => {
     const blocker = finding({ severity: "blocking", line: 1 })
-    const result = judge(validated([blocker]), [verdict("F1", "suggestion", { reason: "the caller awaits it" })])
-    expect(result.validated.accepted).toEqual([{ ...blocker, severity: "suggestion" }])
+    const result = judge(validated([blocker]), [verdict("F1", "major", { reason: "the caller awaits it" })])
+    expect(result.validated.accepted).toEqual([{ ...blocker, severity: "major" }])
     expect(result.report).toEqual({
       ...NOTHING,
       changed: [
@@ -309,8 +309,8 @@ describe("applyVerdicts", () => {
           finding: blocker,
           reason: "the caller awaits it",
           from: "blocking",
-          to: "suggestion",
-          revised: { ...blocker, severity: "suggestion" },
+          to: "major",
+          revised: { ...blocker, severity: "major" },
         },
       ],
     })
@@ -320,8 +320,8 @@ describe("applyVerdicts", () => {
 
   it("keeps a demoted held finding rejected at its new severity, where it no longer holds approval back", () => {
     const anchor = rejection({ severity: "blocking", line: 40 })
-    const result = judge(validated([], [anchor]), [verdict("F1", "suggestion", { reason: "harmless" })])
-    expect(result.validated.rejected).toEqual([{ ...anchor, finding: { ...anchor.finding, severity: "suggestion" } }])
+    const result = judge(validated([], [anchor]), [verdict("F1", "major", { reason: "harmless" })])
+    expect(result.validated.rejected).toEqual([{ ...anchor, finding: { ...anchor.finding, severity: "major" } }])
     expect(result.validated.rejected.map(holdsApprovalBack)).toEqual([false])
     expect(holdsApprovalBack(anchor)).toBe(true)
     expect(result.report).toEqual({
@@ -331,8 +331,8 @@ describe("applyVerdicts", () => {
           finding: anchor.finding,
           reason: "harmless",
           from: "blocking",
-          to: "suggestion",
-          revised: { ...anchor.finding, severity: "suggestion" },
+          to: "major",
+          revised: { ...anchor.finding, severity: "major" },
         },
       ],
     })
@@ -448,12 +448,12 @@ describe("applyVerdicts with the delta rules", () => {
     const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
     const review = validated([elsewhere])
     expect(applyDeltaPolicy(review, scope).accepted).toEqual([elsewhere])
-    const applied = judge(review, [verdict("F1", "suggestion")], scope)
+    const applied = judge(review, [verdict("F1", "major")], scope)
     const after = applyDeltaPolicy(applied.validated, scope)
     expect(after.accepted).toEqual([])
     expect(after.rejected).toEqual([
       {
-        finding: { ...elsewhere, severity: "suggestion" },
+        finding: { ...elsewhere, severity: "major" },
         reason: "line 9 was not changed since the last review; only a blocking finding may go elsewhere",
         unfounded: false,
       },
@@ -468,11 +468,11 @@ describe("applyVerdicts with the delta rules", () => {
     const onThread = finding({ severity: "blocking", line: 3 })
     const review = validated([onThread])
     expect(applyDeltaPolicy(review, scope).accepted).toEqual([onThread])
-    const applied = judge(review, [verdict("F1", "suggestion")], scope)
+    const applied = judge(review, [verdict("F1", "major")], scope)
     const after = applyDeltaPolicy(applied.validated, scope)
     expect(after.accepted).toEqual([])
     expect(after.duplicates).toEqual([
-      { finding: { ...onThread, severity: "suggestion" }, reason: "duplicates open thread T1", unfounded: false },
+      { finding: { ...onThread, severity: "major" }, reason: "duplicates open thread T1", unfounded: false },
     ])
     expect(applied.report.changed).toHaveLength(1)
     expect(applied.report.changed[0]?.finding).toBe(onThread)
@@ -492,9 +492,9 @@ describe("applyVerdicts with the delta rules", () => {
     "accepts a demoted finding the delta rules still let through in %s, and the report names the accepted finding",
     (_, scope) => {
       const blocker = finding({ severity: "blocking", line: 3 })
-      const applied = judge(validated([blocker]), [verdict("F1", "suggestion")], scope)
+      const applied = judge(validated([blocker]), [verdict("F1", "major")], scope)
       const after = applyDeltaPolicy(applied.validated, scope)
-      expect(after.accepted).toEqual([{ ...blocker, severity: "suggestion" }])
+      expect(after.accepted).toEqual([{ ...blocker, severity: "major" }])
       expect(after.rejected).toEqual([])
       expect(after.duplicates).toEqual([])
       expect(applied.report.changed).toHaveLength(1)
@@ -504,64 +504,12 @@ describe("applyVerdicts with the delta rules", () => {
 
   it("leaves a demoted held finding in the rejected list, and the report names that finding", () => {
     const anchor = rejection({ severity: "blocking", line: 40 })
-    const applied = judge(validated([], [anchor]), [verdict("F1", "suggestion")], onChangedLine)
+    const applied = judge(validated([], [anchor]), [verdict("F1", "major")], onChangedLine)
     const after = applyDeltaPolicy(applied.validated, onChangedLine)
     expect(after.rejected.map(holdsApprovalBack)).toEqual([false])
     expect(after.accepted).toEqual([])
     expect(applied.report.changed).toHaveLength(1)
     expect(applied.report.changed[0]?.revised).toBe(after.rejected[0]?.finding)
-  })
-})
-
-describe("verdictAfterVerify", () => {
-  const withBlocker = scoped([finding({ severity: "blocking" })])
-  const withHeld = scoped([], [rejection({ severity: "blocking", line: 40 })])
-  const withoutBlocker = scoped(
-    [finding({ severity: "suggestion" })],
-    [rejection({ severity: "suggestion", line: 41 })],
-  )
-
-  it("approves a request for changes once verify has cleared every blocking finding, accepted or held back", () => {
-    expect(verdictAfterVerify("request_changes", withBlocker, withoutBlocker)).toBe("approve")
-    expect(verdictAfterVerify("request_changes", withHeld, withoutBlocker)).toBe("approve")
-  })
-
-  it("keeps the request for changes while a blocking finding remains, accepted or held back", () => {
-    expect(verdictAfterVerify("request_changes", withBlocker, withBlocker)).toBe("request_changes")
-    expect(verdictAfterVerify("request_changes", withBlocker, withHeld)).toBe("request_changes")
-    expect(verdictAfterVerify("request_changes", withHeld, withBlocker)).toBe("request_changes")
-    expect(verdictAfterVerify("request_changes", withHeld, withHeld)).toBe("request_changes")
-  })
-
-  it("keeps the request for changes when there was nothing blocking for verify to clear", () => {
-    expect(verdictAfterVerify("request_changes", withoutBlocker, withoutBlocker)).toBe("request_changes")
-  })
-
-  it("ignores a rejected blocking finding that holds nothing back", () => {
-    const unfounded = scoped([], [rejection({ severity: "blocking", line: 42 }, true)])
-    expect(verdictAfterVerify("request_changes", unfounded, withoutBlocker)).toBe("request_changes")
-    expect(verdictAfterVerify("request_changes", withBlocker, unfounded)).toBe("approve")
-  })
-
-  it.each(["comment", "approve"] as const)("leaves %s as it was, whatever verify did", (original) => {
-    const cases = [
-      { before: withBlocker, after: withoutBlocker },
-      { before: withHeld, after: withoutBlocker },
-      { before: withBlocker, after: withBlocker },
-      { before: withoutBlocker, after: withoutBlocker },
-    ]
-    for (const { before, after } of cases) expect(verdictAfterVerify(original, before, after)).toBe(original)
-  })
-
-  it("lets a review whose only blocking finding verify demoted approve, where it would have posted as a comment", () => {
-    const review = validated([finding({ severity: "blocking", line: 1 })])
-    const before = applyDeltaPolicy(review, FRESH)
-    const applied = judge(review, [verdict("F1", "suggestion")])
-    const after = applyDeltaPolicy(applied.validated, FRESH)
-    const adjusted = verdictAfterVerify("request_changes", before, after)
-    expect(adjusted).toBe("approve")
-    expect(chooseReviewEvent(submission(adjusted), after.accepted, after.rejected, true, 0)).toBe("APPROVE")
-    expect(chooseReviewEvent(submission("request_changes"), after.accepted, after.rejected, true, 0)).toBe("COMMENT")
   })
 })
 
@@ -1277,26 +1225,26 @@ describe("leftOutOf", () => {
 
   it("names a demoted finding the push's delta rules then rejected, as the very object the report carries", () => {
     const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
-    const applied = judge(validated([elsewhere]), [verdict("F1", "suggestion")], incremental)
+    const applied = judge(validated([elsewhere]), [verdict("F1", "major")], incremental)
     const leftOut = leftOutOf(applied.report, applyDeltaPolicy(applied.validated, incremental))
-    expect(leftOut).toEqual([{ ...elsewhere, severity: "suggestion" }])
+    expect(leftOut).toEqual([{ ...elsewhere, severity: "major" }])
     expect(leftOut[0]).toBe(applied.report.changed[0]?.revised)
   })
 
   it("names a demoted finding the delta rules set aside as a duplicate of a non-blocking open thread", () => {
     const scope: DeltaScope = { mode: "full", covered: new Map(), open: [thread("T1", { line: 3 })] }
     const onThread = finding({ severity: "blocking", line: 3 })
-    const applied = judge(validated([onThread]), [verdict("F1", "nitpick")], scope)
+    const applied = judge(validated([onThread]), [verdict("F1", "major")], scope)
     expect(leftOutOf(applied.report, applyDeltaPolicy(applied.validated, scope))).toEqual([
-      { ...onThread, severity: "nitpick" },
+      { ...onThread, severity: "major" },
     ])
   })
 
   it("names a demoted held finding, which stays rejected now that it holds nothing back", () => {
     const anchor = rejection({ severity: "blocking", line: 40 })
-    const applied = judge(validated([], [anchor]), [verdict("F1", "suggestion")])
+    const applied = judge(validated([], [anchor]), [verdict("F1", "major")])
     expect(leftOutOf(applied.report, applyDeltaPolicy(applied.validated, FRESH))).toEqual([
-      { ...anchor.finding, severity: "suggestion" },
+      { ...anchor.finding, severity: "major" },
     ])
   })
 
@@ -1306,7 +1254,7 @@ describe("leftOutOf", () => {
     const dropped = finding({ severity: "suggestion", line: 5 })
     const unjudged = rejection({ severity: "suggestion", line: 41 })
     const applied = judge(validated([demoted, promoted, dropped], [unjudged]), [
-      verdict("F1", "suggestion"),
+      verdict("F1", "major"),
       verdict("F2", "blocking"),
       verdict("F3", "suggestion", { keep: false }),
     ])
@@ -1325,14 +1273,11 @@ describe("verifiedReview", () => {
 
   it("applies the verdicts, runs the delta rules again, and approves a request for changes once nothing blocks", () => {
     const blocker = finding({ severity: "blocking", line: 3 })
-    const verified = verifiedReview(
-      draftOf(validated([blocker]), FRESH),
-      [verdict("F1", "suggestion", { reason: "the caller awaits it" })],
-      "request_changes",
-    )
+    const verified = verifiedReview(draftOf(validated([blocker]), FRESH), [
+      verdict("F1", "major", { reason: "the caller awaits it" }),
+    ])
     expect(verified).toEqual({
-      scoped: { accepted: [{ ...blocker, severity: "suggestion" }], rejected: [], duplicates: [] },
-      verdict: "approve",
+      scoped: { accepted: [{ ...blocker, severity: "major" }], rejected: [], duplicates: [] },
       report: {
         ...NOTHING,
         changed: [
@@ -1340,8 +1285,8 @@ describe("verifiedReview", () => {
             finding: blocker,
             reason: "the caller awaits it",
             from: "blocking",
-            to: "suggestion",
-            revised: { ...blocker, severity: "suggestion" },
+            to: "major",
+            revised: { ...blocker, severity: "major" },
           },
         ],
       },
@@ -1356,30 +1301,21 @@ describe("verifiedReview", () => {
       open: [],
     }
     const elsewhere = finding({ severity: "blocking", line: 9, quote: "nine" })
-    const verified = verifiedReview(
-      draftOf(validated([elsewhere]), scope),
-      [verdict("F1", "suggestion")],
-      "request_changes",
-    )
+    const verified = verifiedReview(draftOf(validated([elsewhere]), scope), [verdict("F1", "major")])
     expect(verified.scoped.accepted).toEqual([])
-    expect(verified.scoped.rejected.map((rejected) => rejected.finding)).toEqual([
-      { ...elsewhere, severity: "suggestion" },
-    ])
-    expect(verified.leftOut).toEqual([{ ...elsewhere, severity: "suggestion" }])
+    expect(verified.scoped.rejected.map((rejected) => rejected.finding)).toEqual([{ ...elsewhere, severity: "major" }])
+    expect(verified.leftOut).toEqual([{ ...elsewhere, severity: "major" }])
     expect(verified.leftOut[0]).toBe(verified.scoped.rejected[0]?.finding)
-    expect(verified.verdict).toBe("approve")
   })
 
   it("keeps the request for changes while a blocking finding stands, and drops what verify dropped", () => {
     const blocker = finding({ severity: "blocking", line: 3 })
     const advice = finding({ severity: "suggestion", line: 4 })
-    const verified = verifiedReview(
-      draftOf(validated([blocker, advice]), FRESH),
-      [verdict("F1", "blocking"), verdict("F2", "suggestion", { keep: false })],
-      "request_changes",
-    )
+    const verified = verifiedReview(draftOf(validated([blocker, advice]), FRESH), [
+      verdict("F1", "blocking"),
+      verdict("F2", "suggestion", { keep: false }),
+    ])
     expect(verified.scoped.accepted).toEqual([blocker])
-    expect(verified.verdict).toBe("request_changes")
   })
 })
 
@@ -1505,7 +1441,7 @@ describe("verdictFields", () => {
     const review = validated([blocker, advice])
     const candidates = verifyCandidates(applyDeltaPolicy(review, FRESH))
     const given = [
-      verdict("F1", "suggestion", { reason: "the caller checks it" }),
+      verdict("F1", "major", { reason: "the caller checks it" }),
       verdict("F2", "blocking", { reason: "it breaks the rule" }),
       verdict("F9", "nitpick", { keep: false, reason: "a stray id" }),
       verdict("F1", "blocking", { reason: "a second verdict" }),
@@ -1518,7 +1454,7 @@ describe("verdictFields", () => {
         line: 10,
         keep: true,
         from: "blocking",
-        to: "suggestion",
+        to: "major",
         capped: false,
         ignored: false,
         reason: "the caller checks it",
@@ -1555,7 +1491,7 @@ describe("verifyCounts", () => {
     const review = validated([
       finding({ severity: "blocking", line: 1 }),
       finding({ severity: "suggestion", line: 2 }),
-      finding({ severity: "suggestion", line: 3 }),
+      finding({ severity: "suggestion", line: 3, basis_kind: "standard" }),
       finding({ severity: "blocking", line: 4 }),
       finding({ severity: "suggestion", line: 5, basis_kind: "test" }),
       finding({ severity: "suggestion", line: 6 }),

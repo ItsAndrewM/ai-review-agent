@@ -31,7 +31,7 @@ import {
   ReviewedRecord,
   ReviewScope,
   scopedFiles,
-  stricterMergeDanger,
+  mergeDangerAfterPush,
   submissionFromRecord,
   threadLists,
   threadsToRecheck,
@@ -44,6 +44,7 @@ import {
   MOST_LISTED_THREADS,
   stillOpen,
 } from "../src/review/incremental.ts"
+import type { OmittedRequirementInput } from "../src/review/reasons.ts"
 import { holdsApprovalBack } from "../src/review/render.ts"
 
 const reviewed: ReviewedRecord = { headSha: "aaa", baseRef: "main", at: 1, mode: "full", summary: "s", walkthrough: [] }
@@ -181,11 +182,13 @@ describe("openBotThreads", () => {
         botThread("labelled", { firstCommentId: 2 }),
         botThread("suggestion", { firstCommentId: 3, firstCommentBody: "**🟡 Suggestion: Rename it**\n\nWhy." }),
         botThread("unlabelled", { firstCommentId: 4, firstCommentBody: "Something else entirely" }),
+        botThread("major", { firstCommentId: 5, firstCommentBody: "**🟠 Major: Escape it**\n\nWhy." }),
       ],
       new Map([[1, stored]]),
       "andabot",
     )
     expect(threads.map((t) => [t.title, t.blocking, t.quote])).toEqual([
+      ["Escape it", false, undefined],
       ["Something else entirely", false, undefined],
       ["Rename it", false, undefined],
       ["Total is NaN", true, undefined],
@@ -464,9 +467,9 @@ describe("path filters", () => {
       body: "b",
     })
     const validated = validateFindings(
-      [onFile("src/x.ts", "y", "suggestion"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
+      [onFile("src/x.ts", "y", "major"), onFile("a.snap", "new", "blocking"), onFile("gone.ts", "x", "blocking")],
       indexCommentableLines(scopedFiles(scope, prFiles)),
-      false,
+      { hasLinkedIssues: false, instructionFiles: [], activatedSkills: [], docs: [] },
     )
     const { accepted, rejected } = withFilteredUnfounded(validated, scope)
     expect(accepted.map((finding) => finding.path)).toEqual(["src/x.ts"])
@@ -489,7 +492,12 @@ describe("path filters", () => {
       title: "t",
       body: "b",
     }
-    const validated = validateFindings([finding], indexCommentableLines(scopedFiles(scope, prFiles)), false)
+    const validated = validateFindings([finding], indexCommentableLines(scopedFiles(scope, prFiles)), {
+      hasLinkedIssues: false,
+      instructionFiles: [],
+      activatedSkills: [],
+      docs: [],
+    })
     expect(withFilteredUnfounded(validated, scope)).toEqual(validated)
   })
 
@@ -766,25 +774,27 @@ describe("findingRecords", () => {
 const oneWay = { door: "one-way", blast_radius: "every invoice" } satisfies MergeDangerInput
 const twoWay = { door: "two-way", blast_radius: "the totals" } satisfies MergeDangerInput
 
-describe("stricterMergeDanger", () => {
-  it("keeps the previous one-way judgement when the push judges a two-way door", () => {
-    expect(stricterMergeDanger(oneWay, twoWay)).toEqual(oneWay)
+describe("mergeDangerAfterPush", () => {
+  const later = { door: "two-way", blast_radius: "the cart page" } satisfies MergeDangerInput
+  const laterOneWay = { door: "one-way", blast_radius: "the ledger" } satisfies MergeDangerInput
+
+  it("keeps the stored judgement when both doors are two-way, whether the push narrows or widens the radius", () => {
+    expect(mergeDangerAfterPush(twoWay, later)).toEqual(twoWay)
+    expect(mergeDangerAfterPush(twoWay, { door: "two-way", blast_radius: "docs only" })).toEqual(twoWay)
   })
 
-  it("takes the push's one-way judgement over a previous two-way door", () => {
-    expect(stricterMergeDanger(twoWay, oneWay)).toEqual(oneWay)
+  it("keeps a one-way judgement across a two-way push and across another one-way push", () => {
+    expect(mergeDangerAfterPush(oneWay, twoWay)).toEqual(oneWay)
+    expect(mergeDangerAfterPush(oneWay, laterOneWay)).toEqual(oneWay)
   })
 
-  it("takes the push's judgement when both doors are two-way, or both are one-way", () => {
-    const later = { door: "two-way", blast_radius: "the cart page" } satisfies MergeDangerInput
-    const laterOneWay = { door: "one-way", blast_radius: "the ledger" } satisfies MergeDangerInput
-    expect(stricterMergeDanger(twoWay, later)).toEqual(later)
-    expect(stricterMergeDanger(oneWay, laterOneWay)).toEqual(laterOneWay)
+  it("escalates a two-way judgement to the push's one-way door and radius", () => {
+    expect(mergeDangerAfterPush(twoWay, laterOneWay)).toEqual(laterOneWay)
   })
 
   it("takes the push's judgement when there is no previous one", () => {
-    expect(stricterMergeDanger(undefined, twoWay)).toEqual(twoWay)
-    expect(stricterMergeDanger(undefined, oneWay)).toEqual(oneWay)
+    expect(mergeDangerAfterPush(undefined, twoWay)).toEqual(twoWay)
+    expect(mergeDangerAfterPush(undefined, oneWay)).toEqual(oneWay)
   })
 })
 
@@ -793,6 +803,21 @@ describe("ReviewedRecord", () => {
 
   it("accepts a stored record from before it kept the merge danger", () => {
     expect(Value.Check(ReviewedRecord, stored)).toBe(true)
+  })
+
+  it("accepts a since section with the push's merge danger, without it, and refuses a malformed one", () => {
+    const since = { from: "aaa", to: "bbb", summary: "s", files: [], resolved: 0 }
+    expect(Value.Check(ReviewedRecord, { ...stored, since })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, since: { ...since, merge_danger: oneWay } })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, since: { ...since, merge_danger: { door: "sideways" } } })).toBe(
+      false,
+    )
+  })
+
+  it("accepts the omitted requirements the last review carried, and a record from before it kept them", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    expect(Value.Check(ReviewedRecord, { ...stored, omitted })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, omitted: [{ issue: 121 }] })).toBe(false)
   })
 
   it("accepts a merge danger and refuses a malformed one", () => {
@@ -809,7 +834,6 @@ describe("nextReviewed", () => {
     summary: "This push fixes the total.",
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
-    verdict: "comment",
     merge_danger: twoWay,
   }
   const previous: ReviewedRecord = {
@@ -825,8 +849,30 @@ describe("nextReviewed", () => {
   }
   const covered = new Map([["a.ts", { right: new Set([3]), left: new Set<number>() }]])
   const incremental = buildScope({ deliveryId: "d", mode: "incremental", from: "aaa", covered, threads: undefined })
-  const reviewedAfter = (before: ReviewedRecord, scope: ReviewScope, pushed: ReviewSubmissionInput = submission) =>
-    nextReviewed({ previous: before, scope, headSha: "bbb", baseRef: "main", at: 2, submission: pushed, resolved: 1 })
+  const reviewedAfter = (
+    before: ReviewedRecord,
+    scope: ReviewScope,
+    pushed: ReviewSubmissionInput = submission,
+    omitted: OmittedRequirementInput[] = [],
+  ) =>
+    nextReviewed({
+      previous: before,
+      scope,
+      headSha: "bbb",
+      baseRef: "main",
+      at: 2,
+      submission: pushed,
+      resolved: 1,
+      omitted,
+    })
+
+  it("keeps the omitted requirements this review accepted, on a full and on an incremental review", () => {
+    const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
+    const full = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(reviewedAfter(previous, full, submission, omitted).omitted).toEqual(omitted)
+    expect(reviewedAfter({ ...previous, omitted }, incremental, submission, []).omitted).toEqual([])
+    expect(reviewedAfter(previous, incremental, submission, omitted).omitted).toEqual(omitted)
+  })
 
   it("starts over from a full review's summary, walkthrough and merge danger", () => {
     const scope = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
@@ -838,6 +884,7 @@ describe("nextReviewed", () => {
       summary: "This push fixes the total.",
       walkthrough: [{ path: "a.ts", summary: "new a" }],
       merge_danger: twoWay,
+      omitted: [],
     })
   })
 
@@ -864,8 +911,26 @@ describe("nextReviewed", () => {
         { path: "b.ts", summary: "old b" },
       ],
       merge_danger: twoWay,
-      since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
+      since: {
+        from: "aaa",
+        to: "bbb",
+        summary: "This push fixes the total.",
+        files: ["a.ts"],
+        resolved: 1,
+        merge_danger: twoWay,
+      },
+      omitted: [],
     })
+  })
+
+  it("keeps the stored blast radius and puts the push's own judgement in the since section when both doors are two-way", () => {
+    const narrower = { door: "two-way" as const, blast_radius: "docs only" }
+    const next = reviewedAfter({ ...previous, merge_danger: twoWay }, incremental, {
+      ...submission,
+      merge_danger: narrower,
+    })
+    expect(next.merge_danger).toEqual(twoWay)
+    expect(next.since?.merge_danger).toEqual(narrower)
   })
 
   it("keeps a one-way door across an incremental review that judges a two-way one", () => {
@@ -900,6 +965,7 @@ describe("nextReviewed", () => {
       headSha: "bbb",
       baseRef: "main",
       at: 2,
+      omitted: [],
       submission: withLogo,
       resolved: 0,
     })
@@ -916,7 +982,6 @@ describe("submissionFromRecord", () => {
     summary: "This push fixes the total.",
     walkthrough: [{ path: "a.ts", summary: "new a" }],
     findings: [],
-    verdict: "comment",
     merge_danger: { door: "two-way", blast_radius: "the total" },
   }
   const record: ReviewedRecord = {

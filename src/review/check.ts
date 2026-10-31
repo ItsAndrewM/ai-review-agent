@@ -1,5 +1,5 @@
 import type { CheckRunConclusion, CheckRunOutput, CreateCheckRun, RepoRef, UpdateCheckRun } from "../github/client.ts"
-import type { PostedReview } from "../records.ts"
+import type { PostedReview, SeverityCounts } from "../records.ts"
 import { shortSha } from "../sha.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
 import { VERDICT_LABEL, type Verdict } from "./render.ts"
@@ -45,12 +45,12 @@ export function postedCheckRun(
 }
 
 export function postedEarlierCheckRun(
-  posted: Pick<PostedReview, "reviewId" | "event" | "counts" | "unverified">,
+  posted: Pick<PostedReview, "reviewId" | "event" | "shown" | "counts" | "unverified">,
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  const verdictTitle =
-    posted.counts === undefined ? VERDICT_LABEL[posted.event] : checkRunTitle(posted.event, posted.counts)
+  const shown = posted.shown ?? posted.event
+  const verdictTitle = posted.counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, posted.counts)
   const title = markedUnverified(verdictTitle, posted.unverified === true)
   const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
   const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
@@ -81,9 +81,11 @@ export function replacedCheckRun(completedAt: number): UpdateCheckRun {
   return completedCheckRun("cancelled", output, undefined, completedAt)
 }
 
-export function checkRunTitle(event: Verdict, counts: Record<FindingInput["severity"], number>): string {
+export function checkRunTitle(event: Verdict, counts: SeverityCounts): string {
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking`)
+  const major = counts.major ?? 0
+  if (major > 0) parts.push(`${major} major`)
   if (counts.suggestion > 0) parts.push(counted(counts.suggestion, "suggestion"))
   if (counts.nitpick > 0) parts.push(counted(counts.nitpick, "nitpick"))
   const label = VERDICT_LABEL[event]

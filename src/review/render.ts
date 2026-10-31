@@ -8,6 +8,7 @@ import {
   checkLabel,
   countBySeverity,
   type FindingInput,
+  type MergeDangerInput,
   type Rejected,
   type ReviewSubmissionInput,
   rowPath,
@@ -16,6 +17,7 @@ import {
   type WrittenReview,
 } from "./findings.ts"
 import type { ReviewMode, SinceSection } from "./incremental.ts"
+import type { ApprovalReason } from "./reasons.ts"
 import type { Changed, VerifyReport } from "./verify.ts"
 
 export interface Coverage {
@@ -34,7 +36,7 @@ const MOST_LISTED_CHARS = 100
 const MOST_CONFIG_ERROR_CHARS = 300
 const MOST_UNVERIFIED_REASON_CHARS = 200
 
-export type Verdict = ReviewEvent | "AWAITING_CHECKS"
+export type Verdict = ReviewEvent | "AWAITING_CHECKS" | "WITHHELD"
 
 export type VerifyDisplay =
   | { kind: "verified"; model: string; report: VerifyReport; leftOut: readonly FindingInput[] }
@@ -45,6 +47,7 @@ export const VERDICT_LABEL = {
   REQUEST_CHANGES: "Changes requested",
   COMMENT: "Commented",
   AWAITING_CHECKS: "Approval waits for the checks",
+  WITHHELD: "Approval withheld",
 } satisfies Record<Verdict, string>
 
 const AWAITING_CHECKS_NOTE = "I'll approve once the head's checks pass"
@@ -52,7 +55,7 @@ const AWAITING_CHECKS_NOTE = "I'll approve once the head's checks pass"
 const VERDICT_SEGMENT = /\*\*Verdict:\*\* [^\n]*?(?= · |$)/m
 
 export function reviewEventOf(verdict: Verdict): ReviewEvent {
-  return verdict === "AWAITING_CHECKS" ? "COMMENT" : verdict
+  return verdict === "AWAITING_CHECKS" || verdict === "WITHHELD" ? "COMMENT" : verdict
 }
 
 export function approvalBody(headSha: string): string {
@@ -173,7 +176,7 @@ function statusLine(headSha: string, verdict: VerdictLine): string {
   const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${verdict.label}`
   const { counts } = verdict
   if (counts === undefined) return status
-  return `${status} · 🔴 ${counts.blocking} blocking · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
+  return `${status} · 🔴 ${counts.blocking} blocking · 🟠 ${counts.major ?? 0} major · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
 }
 
 function walkthroughTable(rows: readonly WalkthroughInput[]): string {
@@ -209,9 +212,18 @@ function sinceLines(since: SinceSection | undefined): string[] {
     `### Since \`${since.from.slice(0, 7)}\``,
     "",
     since.summary.trim(),
+    ...pushDangerLines(since.merge_danger),
     "",
     `Files: ${files}. Resolved ${since.resolved} thread(s).`,
   ]
+}
+
+const ENDS_A_SENTENCE = /[.!?]$/
+
+function pushDangerLines(danger: MergeDangerInput | undefined): string[] {
+  if (danger === undefined) return []
+  const radius = oneLine(danger.blast_radius)
+  return ["", `This push: ${danger.door} door · ${radius}${ENDS_A_SENTENCE.test(radius) ? "" : "."}`]
 }
 
 export const MOST_CHECK_TAIL_CHARS = 2000
@@ -414,16 +426,41 @@ export function renderReviewBody(
   accepted: readonly FindingInput[],
   rejected: readonly Rejected[],
   coverage?: Coverage,
+  reasons: readonly ApprovalReason[] = [],
 ): string {
-  const body = findingsLines(event, accepted, rejected)
-  const covered = coverageLine(coverage)
-  return covered === undefined ? body : `${body}\n\n${covered}`
+  const parts = [...findingsLines(event, accepted, rejected, reasons), coverageLine(coverage)]
+  return parts.filter((part) => part !== undefined).join("\n\n")
 }
 
-function findingsLines(event: Verdict, accepted: readonly FindingInput[], rejected: readonly Rejected[]): string {
+function findingsLines(
+  event: Verdict,
+  accepted: readonly FindingInput[],
+  rejected: readonly Rejected[],
+  reasons: readonly ApprovalReason[],
+): (string | undefined)[] {
   const held = heldBack(rejected)
-  if (held === undefined) return inlineSummary(event, accepted)
-  return accepted.length === 0 ? held : `${inlineSummary(event, accepted)}\n\n${held}`
+  const summary = held !== undefined && accepted.length === 0 ? undefined : inlineSummary(event, accepted)
+  return [summary, reasonLines(reasons), held]
+}
+
+function reasonLines(reasons: readonly ApprovalReason[]): string | undefined {
+  if (reasons.length === 0) return undefined
+  return ["Not approved because:", ...reasons.map((reason) => `- ${reasonLine(reason)}`)].join("\n")
+}
+
+function reasonLine(reason: ApprovalReason): string {
+  switch (reason.kind) {
+    case "omitted_requirement":
+      return `#${reason.issue} asks for “${oneLine(reason.requirement)}”, and the diff leaves it out.`
+    case "not_for_merging":
+      return `The description says “${oneLine(reason.quote)}”.`
+    case "budget_cut":
+      return `The review stopped reading early at its budget of ${neurons(reason.budget)}; ask for a \`full review\` to review it in full.`
+  }
+}
+
+function neurons(count: number): string {
+  return `${count.toLocaleString("en-US")} ${count === 1 ? "neuron" : "neurons"}`
 }
 
 function coverageLine(coverage: Coverage | undefined): string | undefined {
@@ -471,6 +508,9 @@ function noFindings(event: Verdict): string {
   if (event === "AWAITING_CHECKS") {
     return `No findings. The change looks sound to me; ${AWAITING_CHECKS_NOTE}, and a human review is still required to merge.`
   }
+  if (event === "WITHHELD") {
+    return "No findings. Approval is withheld for the reasons below; a human review is still required to merge."
+  }
   return "No findings to anchor to the diff. See the summary comment."
 }
 
@@ -478,24 +518,26 @@ function countsLine(accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   const parts: string[] = []
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking finding(s) to address before approval`)
+  if (counts.major > 0) parts.push(`${counts.major} major finding(s) worth fixing`)
   if (counts.suggestion > 0) parts.push(`${counts.suggestion} suggestion(s)`)
   if (counts.nitpick > 0) parts.push(`${counts.nitpick} nitpick(s)`)
-  return `${parts.join(", ")}. Blocking findings are marked 🔴; the others are optional.`
+  return `${parts.join(", ")}. Blocking findings are marked 🔴 and gate approval; the others don't.`
 }
 
-export function chooseReviewEvent(
-  submission: ReviewSubmissionInput,
-  accepted: readonly FindingInput[],
-  rejected: readonly Rejected[],
-  requestChangesWorkflow: boolean,
-  openBlocking?: number | "unknown",
-): ReviewEvent {
-  if (!requestChangesWorkflow) return "COMMENT"
-  if (holdsBlocking(accepted, rejected)) return "REQUEST_CHANGES"
-  if (openBlocking === "unknown") return "COMMENT"
-  if ((openBlocking ?? 0) > 0) return "REQUEST_CHANGES"
-  if (submission.verdict === "approve") return "APPROVE"
-  return "COMMENT"
+export interface ReviewDecisionInput {
+  accepted: readonly FindingInput[]
+  rejected: readonly Rejected[]
+  workflow: boolean
+  openBlocking: number | "unknown"
+  reasons: readonly ApprovalReason[]
+}
+
+export function decideReviewVerdict(input: ReviewDecisionInput): Verdict {
+  if (!input.workflow) return "COMMENT"
+  if (holdsBlocking(input.accepted, input.rejected)) return "REQUEST_CHANGES"
+  if (input.openBlocking !== "unknown" && input.openBlocking > 0) return "REQUEST_CHANGES"
+  if (input.reasons.length > 0) return "WITHHELD"
+  return input.openBlocking === "unknown" ? "AWAITING_CHECKS" : "APPROVE"
 }
 
 export function holdsApprovalBack({ finding, unfounded }: Rejected): boolean {

@@ -127,6 +127,7 @@ A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pu
 | `reviews.request_changes_workflow` | unset: the Worker's `REQUEST_CHANGES_WORKFLOW` | `true` or `false` for this repository, for both the review's event and the approval that follows resolved threads and passing checks. |
 | `reviews.path_filters` | `[]` | Files to leave out of the review, each a [minimatch](https://github.com/isaacs/minimatch) glob that starts with `!`. A filtered file gets no patch in the prompt, needs no walkthrough row and takes no finding, and `@andabot summary` leaves it out as a review does. When every changed file is filtered, the pull request gets no review, and `@andabot summary` replies that there's nothing to summarize. |
 | `reviews.path_instructions` | `[]` | Entries of a `path` glob and its `instructions`, added to the review's standards, ahead of the repository's instruction files, when the glob matches a changed file. |
+| `reviews.docs` | `**/README*`, `docs/**/*.md` and the instruction files | The repository's authoritative docs, as [minimatch](https://github.com/isaacs/minimatch) globs; a leading `!` excludes. A review checks the claims of a changed doc against the code, and lists the docs that mention a changed file for the model to check (#125). A list with an include replaces the defaults; a list of excludes alone narrows them. `docs/superpowers/**` is history and is never checked unless the pull request adds the file. |
 | `reviews.verify` | `true` | `false` turns the verify pass off for this repository. Verify runs only while the Worker's `VERIFY_MODEL` is set, so this changes nothing while it is empty. An invalid or unreadable file applies none of its settings, so a `false` in it is ignored while `VERIFY_MODEL` is set. |
 | `reviews.sandbox` | `true` | `false` keeps this repository's reviews out of the sandbox tier (#132): no container is started and `run_check` answers that the sandbox is off. The tier runs only while the Worker's `SANDBOX` is `true`, so this changes nothing while it is `false`. |
 | `model.verify` | unset: the Worker's `VERIFY_MODEL` | The Workers AI model verify uses for this repository, instead of `VERIFY_MODEL`. A non-empty string. It never turns verify on: while `VERIFY_MODEL` is empty, verify stays off. |
@@ -141,6 +142,10 @@ reviews:
   path_filters:
     - "!**/*.snap"
     - "!**/pnpm-lock.yaml"
+  docs:
+    - "**/README*"
+    - "docs/**/*.md"
+    - "!docs/archive/**"
   path_instructions:
     - path: "apps/worker/**"
       instructions: "Receipts must stay decodable for 24 hours after a deploy."

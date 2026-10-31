@@ -25,6 +25,7 @@ import {
   type ReviewSubmissionInput,
   type ValidatedReview,
 } from "./findings.ts"
+import { OmittedRequirement, type OmittedRequirementInput } from "./reasons.ts"
 import { mergeWalkthrough } from "./render.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
@@ -39,6 +40,7 @@ export const SinceSection = Type.Object({
   summary: Type.String(),
   files: Type.Array(Type.String()),
   resolved: Type.Integer(),
+  merge_danger: Type.Optional(MergeDanger),
 })
 
 export type SinceSection = Static<typeof SinceSection>
@@ -52,6 +54,7 @@ export const ReviewedRecord = Type.Object({
   walkthrough: Type.Array(Walkthrough),
   merge_danger: Type.Optional(MergeDanger),
   since: Type.Optional(SinceSection),
+  omitted: Type.Optional(Type.Array(OmittedRequirement)),
 })
 
 export type ReviewedRecord = Static<typeof ReviewedRecord>
@@ -146,6 +149,7 @@ export interface NextReviewedInput {
   at: number
   submission: ReviewSubmissionInput
   resolved: number
+  omitted: readonly OmittedRequirementInput[]
 }
 
 export interface DeltaScope {
@@ -526,7 +530,7 @@ export function findingRecords(
 }
 
 export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
-  const { previous, scope, headSha, baseRef, at, submission, resolved } = input
+  const { previous, scope, headSha, baseRef, at, submission, resolved, omitted } = input
   if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {
     return {
       headSha,
@@ -536,6 +540,7 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
       summary: submission.summary,
       walkthrough: submission.walkthrough,
       merge_danger: submission.merge_danger,
+      omitted: [...omitted],
     }
   }
   const covered = new Set(scope.covered.map((file) => file.path))
@@ -547,14 +552,22 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     mode: "incremental",
     summary: previous.summary,
     walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
-    merge_danger: stricterMergeDanger(previous.merge_danger, submission.merge_danger),
-    since: { from: scope.from, to: headSha, summary: submission.summary, files: [...covered], resolved },
+    merge_danger: mergeDangerAfterPush(previous.merge_danger, submission.merge_danger),
+    since: {
+      from: scope.from,
+      to: headSha,
+      summary: submission.summary,
+      files: [...covered],
+      resolved,
+      merge_danger: submission.merge_danger,
+    },
+    omitted: [...omitted],
   }
 }
 
-export function stricterMergeDanger(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {
+export function mergeDangerAfterPush(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {
   if (previous === undefined) return push
-  return previous.door === "one-way" && push.door === "two-way" ? previous : push
+  return previous.door === "two-way" && push.door === "one-way" ? push : previous
 }
 
 export function submissionFromRecord(

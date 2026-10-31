@@ -11,8 +11,15 @@ import {
 } from "../github/diff.ts"
 import { errorText } from "../log.ts"
 import type { CheckName } from "../sandbox/checks.ts"
+import { docsBasisProblem, pairingProblem, standardBasisProblem, type BasisContext } from "./basis.ts"
+import { OmittedRequirement } from "./reasons.ts"
 
-export const Severity = Type.Union([Type.Literal("blocking"), Type.Literal("suggestion"), Type.Literal("nitpick")])
+export const Severity = Type.Union([
+  Type.Literal("blocking"),
+  Type.Literal("major"),
+  Type.Literal("suggestion"),
+  Type.Literal("nitpick"),
+])
 
 export const Finding = Type.Object({
   path: Type.String({ description: "Path of the changed file, exactly as listed." }),
@@ -36,16 +43,22 @@ export const Finding = Type.Object({
       "The text of the line at `line`, copied exactly as the diff shows it after the anchor and the +, - or space. The host checks the anchor against it.",
   }),
   basis_kind: Type.Union(
-    [Type.Literal("defect"), Type.Literal("spec"), Type.Literal("standard"), Type.Literal("test")],
+    [
+      Type.Literal("defect"),
+      Type.Literal("spec"),
+      Type.Literal("standard"),
+      Type.Literal("test"),
+      Type.Literal("docs"),
+    ],
     {
       description:
-        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. Grade a standard or test finding suggestion or nitpick.",
+        "What the finding rests on. defect: the code fails in a scenario you can name. spec: the change departs from the linked issue. standard: the code breaks a repository rule or a named smell. test: new behaviour without a test, or a test that does not verify the behaviour it names. docs: a claim in an authoritative doc that the code contradicts; the basis names the doc's path:line and the claim, and the code path:line that contradicts it. A defect or spec finding is blocking or major; a standard, test or docs finding is suggestion or nitpick.",
     },
   ),
   basis: Type.String({
     minLength: 1,
     description:
-      "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names.",
+      "The evidence, by basis_kind. defect: the failure scenario as an input or a state, what the anchored line does with it, and what was expected. spec: the quoted line of the linked issue. standard: the file and rule, or the smell's name. test: new behaviour without a test, or a test that does not verify the behaviour it names. docs: the doc's path:line and its claim, and the code path:line that contradicts it.",
   }),
   severity: Severity,
   title: Type.String({ description: "One line, under 80 characters." }),
@@ -106,10 +119,19 @@ export const ReviewSubmission = Type.Object({
   }),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
-  verdict: Type.Union([Type.Literal("approve"), Type.Literal("request_changes"), Type.Literal("comment")], {
-    description:
-      "approve when nothing blocking remains and the change is sound; request_changes when any finding is blocking; comment otherwise.",
-  }),
+  omitted_requirements: Type.Optional(
+    Type.Array(OmittedRequirement, {
+      description:
+        "Each requirement of a linked issue the diff leaves out, in the issue's words, with the issue's number, listed here even when the summary also names it; [] when none. The host withholds approval for each entry.",
+    }),
+  ),
+  not_for_merging: Type.Optional(
+    Type.String({
+      minLength: 1,
+      description:
+        "A line from the title or description that asks not to merge this pull request yet, quoted exactly; omit when there is none.",
+    }),
+  ),
   merge_danger: MergeDanger,
   addressed_threads: Type.Optional(
     Type.Array(
@@ -227,7 +249,7 @@ const ANCHOR_TOKEN = /^[RL]\d+\*?\s+/
 export function validateFindings(
   findings: readonly FindingInput[],
   commentable: ReadonlyMap<string, CommentableLines>,
-  hasLinkedIssues: boolean,
+  context: BasisContext,
   knownChecks: ReadonlyMap<string, number> = new Map(),
 ): ValidatedReview {
   const accepted: FindingInput[] = []
@@ -236,7 +258,7 @@ export function validateFindings(
   let relocated = 0
   let suggestionsDropped = 0
   for (const finding of findings) {
-    const checked = checkFinding(finding, commentable, hasLinkedIssues, knownChecks)
+    const checked = checkFinding(finding, commentable, context, knownChecks)
     if ("reason" in checked) {
       rejected.push({ finding, reason: checked.reason, unfounded: checked.unfounded })
       continue
@@ -265,10 +287,10 @@ export function validateFindings(
 function checkFinding(
   finding: FindingInput,
   commentable: ReadonlyMap<string, CommentableLines>,
-  hasLinkedIssues: boolean,
+  context: BasisContext,
   knownChecks: ReadonlyMap<string, number>,
 ): Checked {
-  const basisIssue = basisProblem(finding, hasLinkedIssues)
+  const basisIssue = basisProblem(finding, context)
   if (basisIssue !== undefined) return { reason: basisIssue, unfounded: true }
   if (finding.check !== undefined && knownChecks.get(findingCheckKey(finding.check)) !== finding.check.exit_code) {
     return { reason: CHECK_NOT_RUN, unfounded: true }
@@ -406,15 +428,13 @@ function contentProblem(finding: FindingInput): string | undefined {
   return suggestionProblem(finding) ?? commentSizeProblem(finding)
 }
 
-export function exceedsBasisCap(finding: FindingInput): boolean {
-  return finding.severity === "blocking" && (finding.basis_kind === "standard" || finding.basis_kind === "test")
-}
-
-function basisProblem(finding: FindingInput, hasLinkedIssues: boolean): string | undefined {
+function basisProblem(finding: FindingInput, context: BasisContext): string | undefined {
   if (finding.basis.trim() === "") return "basis is required"
-  if (exceedsBasisCap(finding))
-    return "a standard or test finding cannot be blocking; grade it suggestion or nitpick, or give it the defect or spec basis it rests on"
-  if (finding.basis_kind === "spec" && !hasLinkedIssues)
+  const pairing = pairingProblem(finding)
+  if (pairing !== undefined) return pairing
+  if (finding.basis_kind === "standard") return standardBasisProblem(finding.basis, context)
+  if (finding.basis_kind === "docs") return docsBasisProblem(finding.basis, context)
+  if (finding.basis_kind === "spec" && !context.hasLinkedIssues)
     return "a spec finding needs a linked issue, and this pull request has none; if the code is wrong on its own terms, make it a defect with its failure scenario"
   return undefined
 }
@@ -447,6 +467,7 @@ export function rowPath(path: string): string {
 
 export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
+  major: "🟠 Major",
   suggestion: "🟡 Suggestion",
   nitpick: "⚪ Nitpick",
 } satisfies Record<FindingInput["severity"], string>
@@ -468,7 +489,7 @@ export function toReviewComment(finding: FindingInput): ReviewComment {
 }
 
 export function countBySeverity(findings: readonly FindingInput[]) {
-  const counts = { blocking: 0, suggestion: 0, nitpick: 0 } satisfies Record<FindingInput["severity"], number>
+  const counts = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 } satisfies Record<FindingInput["severity"], number>
   for (const finding of findings) counts[finding.severity]++
   return counts
 }

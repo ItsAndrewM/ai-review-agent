@@ -23,6 +23,7 @@ import {
   verifyModelFor,
   type ConfigRead,
 } from "../src/repository/config.ts"
+import { DEFAULT_DOC_GLOBS } from "../src/repository/docs.ts"
 
 const ref = { owner: "o", repo: "r" }
 const BASE = "ba5e5".repeat(8)
@@ -44,6 +45,9 @@ const FULL_FILE = [
   "  path_filters:",
   "    - '!**/*.snap'",
   "    - '!pnpm-lock.yaml'",
+  "  docs:",
+  "    - 'wiki/**/*.md'",
+  "    - '!wiki/old/**'",
   "  path_instructions:",
   "    - path: 'apps/web/**'",
   "      instructions: Use the design tokens, not raw colors.",
@@ -71,6 +75,7 @@ const FULL_CONFIG = {
     verify: false,
     sandbox: false,
     path_filters: ["!**/*.snap", "!pnpm-lock.yaml"],
+    docs: ["wiki/**/*.md", "!wiki/old/**"],
     path_instructions: [
       { path: "apps/web/**", instructions: "Use the design tokens, not raw colors." },
       { path: "**/*.sql", instructions: "A migration must be reversible.\nName the rollback.\n" },
@@ -89,6 +94,7 @@ const LITERAL_DEFAULTS = {
     verify: true,
     sandbox: true,
     path_filters: [],
+    docs: [...DEFAULT_DOC_GLOBS],
     path_instructions: [],
   },
 }
@@ -125,6 +131,20 @@ const failOnUnreadable = (error: string): void => {
 }
 
 const served = (body: string) => () => new Response(body, { status: 200 })
+
+describe("reviews.docs", () => {
+  it("rejects a value that isn't a list of globs, naming the key", () => {
+    expect(parseConfig("reviews:\n  docs: wiki\n").error).toContain("/reviews/docs")
+    expect(parseConfig("reviews:\n  docs:\n    - ''\n").error).toContain("/reviews/docs")
+  })
+
+  it("defaults to the authoritative docs and takes a list in their place", () => {
+    expect(parseConfig("reviews:\n  auto: true\n").config.reviews.docs).toEqual([...DEFAULT_DOC_GLOBS])
+    expect(parseConfig("reviews:\n  docs:\n    - '!docs/archive/**'\n").config.reviews.docs).toEqual([
+      "!docs/archive/**",
+    ])
+  })
+})
 
 describe("DEFAULT_CONFIG", () => {
   it("reviews on every push, waits on drafts, restricts no base branch, ignores no title, filters no path, adds no instructions, verifies and allows the sandbox", () => {
@@ -209,6 +229,7 @@ describe("parseConfig", () => {
           verify: true,
           sandbox: true,
           path_filters: ["!**/*.snap"],
+          docs: [...DEFAULT_DOC_GLOBS],
           path_instructions: [],
         },
       },
