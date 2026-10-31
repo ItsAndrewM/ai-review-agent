@@ -54,11 +54,10 @@ export const RunMeta = Type.Object({
 })
 export type RunMeta = Static<typeof RunMeta>
 
-export const ResultsFile = Type.Object({
-  meta: RunMeta,
-  score: SetScore,
-  runs: Type.Array(Type.Object({ head: Type.String(), run: Type.Integer(), answer: RecordedAnswer })),
-})
+export const ResultsRow = Type.Object({ head: Type.String(), run: Type.Integer(), answer: RecordedAnswer })
+export type ResultsRow = Static<typeof ResultsRow>
+
+export const ResultsFile = Type.Object({ meta: RunMeta, score: SetScore, runs: Type.Array(ResultsRow) })
 export type ResultsFile = Static<typeof ResultsFile>
 
 export interface Rescored {
@@ -85,8 +84,12 @@ function headOf(set: RecallSet, sha: string): HeadCase {
   return head
 }
 
+export function rescoreRuns(set: RecallSet, rows: readonly ResultsRow[]): RunScore[] {
+  return rows.map((row) => scoreRun(headOf(set, row.head), row.run, answerOf(row.answer)))
+}
+
 export function rescore(set: RecallSet, results: ResultsFile): Rescored {
-  const runs = results.runs.map((row) => scoreRun(headOf(set, row.head), row.run, answerOf(row.answer)))
+  const runs = rescoreRuns(set, results.runs)
   const { model, thinking, skills } = results.meta
   const score = scoreSet(set, runs, { model, thinking, skills })
   return { meta: { ...results.meta, partial: score.partial }, score, runs }

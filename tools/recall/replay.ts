@@ -1,12 +1,12 @@
 import { appendFile, mkdir, open, readFile, unlink, writeFile } from "node:fs/promises"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import type { Message } from "@earendil-works/pi-ai"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { reviewableFiles, filterGlobs, isFiltered, type ChangedFile } from "../../src/github/diff.ts"
 import { outputLimitOf, withBudgetRefusal, withForcedJson, withOutputLimit } from "../../src/models.ts"
 import { reviewBudgetOf } from "../../src/review/budget.ts"
-import { SpendBudget } from "../replay/budget.ts"
+import { ReplaySpendCapError, SpendBudget } from "../replay/budget.ts"
 import { GitFiles } from "../replay/git.ts"
 import { openModel, thinkingLevelOf, type ReplayModel } from "../replay/model.ts"
 import { checkWorkersAiAccess } from "../replay/preflight.ts"
@@ -15,16 +15,17 @@ import { NeuronBudget } from "./budget.ts"
 import { attemptReview } from "./conversation.ts"
 import { changedFilesAt } from "./files.ts"
 import { ReviewHost } from "./host.ts"
+import { parseJournal, remainingReviews, stampOfJournal, type PendingReview } from "./journal.ts"
 import { promptFor, reviewSkill, systemFor, type ReviewSkill } from "./prompt.ts"
 import { compareTable, resultsFileName, resultsTable } from "./report.ts"
-import { parseResults, rescore } from "./rescore.ts"
+import { parseResults, rescore, rescoreRuns } from "./rescore.ts"
 import { parseSet, setProblems, type HeadCase, type RecallSet } from "./schema.ts"
 import { barVerdict, scoreRun, scoreSet, SetScore, type RunScore } from "./score.ts"
 import { standardsAt } from "./standards.ts"
 import { RecallTools, type RecallSource } from "./tools.ts"
 
 const USAGE =
-  "Usage: pnpm recall --inspect | --prompt <sha prefix> | --compare <baseline.json> <run.json> | --rescore <results.json> | --model <Workers AI model id> [--thinking low] [--runs 3] [--case <sha prefix>] (a run needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)"
+  "Usage: pnpm recall --inspect | --prompt <sha prefix> | --compare <baseline.json> <run.json> | --rescore <results.json> | --model <Workers AI model id> [--thinking low] [--runs 3] [--case <sha prefix>] [--resume <journal.jsonl>] (a run needs CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN)"
 const ROOT = process.cwd()
 const BOT_LOGIN = "andabot"
 const SPEND_CAP_USD = 15
@@ -40,6 +41,7 @@ interface Options {
   prompt: string | undefined
   compare: [string, string] | undefined
   rescore: string | undefined
+  resume: string | undefined
 }
 
 interface Prepared {
@@ -82,6 +84,9 @@ function valuedOption(options: Options, name: string, value: string | undefined)
     case "--prompt":
       options.prompt = value
       return true
+    case "--resume":
+      options.resume = value
+      return true
     default:
       return false
   }
@@ -97,6 +102,7 @@ function optionsOf(args: readonly string[]): Options {
     prompt: undefined,
     compare: undefined,
     rescore: undefined,
+    resume: undefined,
   }
   for (let index = 0; index < args.length; index++) {
     const arg = args[index] ?? ""
@@ -248,6 +254,58 @@ async function rescoreFile(set: RecallSet, path: string): Promise<void> {
   console.log(`${resultsTable(set, rescored.score)}\n\nRescored: ${path}`)
 }
 
+interface Recorded {
+  readonly stamp: string
+  readonly journal: URL
+  readonly runs: RunScore[]
+}
+
+interface ReviewContext {
+  readonly git: GitFiles
+  readonly skill: ReviewSkill
+  readonly toolNames: string[]
+  readonly model: ReplayModel
+  readonly neurons: number
+  readonly journal: URL
+  readonly transcripts: URL
+}
+
+async function recordedRuns(set: RecallSet, resume: string | undefined): Promise<Recorded> {
+  if (resume === undefined) {
+    const stamp = new Date().toISOString()
+    return { stamp, journal: new URL(`${stamp.replaceAll(":", "-")}.jsonl`, RUNS_DIR), runs: [] }
+  }
+  const rows = parseJournal(await readFile(resume, "utf8"))
+  return { stamp: stampOfJournal(resume), journal: pathToFileURL(resume), runs: rescoreRuns(set, rows) }
+}
+
+function reviewLine(head: HeadCase, run: number, scored: RunScore): string {
+  const outcome = scored.answer.source ?? scored.answer.reason
+  return `#${head.pr} ${head.head.slice(0, 7)} run ${run}: ${outcome} · ${scored.matches.length} matched · ${scored.unmatched.length} unmatched · $${scored.answer.usd.toFixed(4)}`
+}
+
+async function reviewPending(
+  pending: readonly PendingReview[],
+  context: ReviewContext,
+  runs: RunScore[],
+): Promise<boolean> {
+  let prepared: Prepared | undefined
+  try {
+    for (const { head, run } of pending) {
+      if (prepared?.head !== head) prepared = await prepare(head, context.git, context.skill, context.toolNames)
+      const scored = await reviewOnce(prepared, run, context.model, context.neurons, context.transcripts)
+      runs.push(scored)
+      await appendFile(context.journal, `${JSON.stringify(scored)}\n`)
+      console.error(reviewLine(head, run, scored))
+    }
+    return false
+  } catch (error) {
+    if (!(error instanceof ReplaySpendCapError)) throw error
+    console.error(`${error.message} Resume with --resume ${fileURLToPath(context.journal)} once the cap allows.`)
+    return true
+  }
+}
+
 async function measure(set: RecallSet, options: Options, account: string, token: string): Promise<void> {
   if (options.model === undefined) throw new Error(USAGE)
   const thinking = thinkingLevelOf(options.thinking)
@@ -265,23 +323,20 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     wrap: (provider) => withBudgetRefusal(withForcedJson(withOutputLimit(provider, maxTokens))),
   })
   const skill = await reviewSkill()
-  const git = new GitFiles(ROOT)
-  const toolNames = toolNamesOf()
-  const stamp = new Date().toISOString()
-  const journal = new URL(`${stamp.replaceAll(":", "-")}.jsonl`, RUNS_DIR)
-  const transcripts = new URL(`${stamp.replaceAll(":", "-")}-transcripts.jsonl`, RUNS_DIR)
-  const runs: RunScore[] = []
-  for (const head of headsMatching(set, options.onlyCase)) {
-    const prepared = await prepare(head, git, skill, toolNames)
-    for (let run = 1; run <= options.runs; run++) {
-      const scored = await reviewOnce(prepared, run, model, neurons, transcripts)
-      runs.push(scored)
-      await appendFile(journal, `${JSON.stringify(scored)}\n`)
-      console.error(
-        `#${head.pr} ${head.head.slice(0, 7)} run ${run}: ${scored.answer.source ?? scored.answer.reason} · ${scored.matches.length} matched · ${scored.unmatched.length} unmatched · $${scored.answer.usd.toFixed(4)}`,
-      )
-    }
+  const recorded = await recordedRuns(set, options.resume)
+  const transcripts = new URL(`${recorded.stamp.replaceAll(":", "-")}-transcripts.jsonl`, RUNS_DIR)
+  const pending = remainingReviews(headsMatching(set, options.onlyCase), options.runs, recorded.runs)
+  const context: ReviewContext = {
+    git: new GitFiles(ROOT),
+    skill,
+    toolNames: toolNamesOf(),
+    model,
+    neurons,
+    journal: recorded.journal,
+    transcripts,
   }
+  const runs = recorded.runs
+  const capped = await reviewPending(pending, context, runs)
   const score = scoreSet(set, runs, { model: options.model, thinking, skills: skill.fingerprint })
   const meta: RunMeta = {
     model: options.model,
@@ -290,13 +345,15 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     maxOutputTokens: maxTokens,
     maxReviewNeurons: neurons,
     runs: options.runs,
-    at: stamp,
-    partial: score.partial,
+    at: recorded.stamp,
+    partial: score.partial || capped,
   }
-  const file = new URL(resultsFileName(stamp, options.model, thinking, options.onlyCase), RESULTS_DIR)
-  await writeFile(file, `${JSON.stringify({ meta, score, runs }, null, 2)}\n`, { flag: "wx" })
+  const file = new URL(resultsFileName(recorded.stamp, options.model, thinking, options.onlyCase), RESULTS_DIR)
+  await writeFile(file, `${JSON.stringify({ meta, score, runs }, null, 2)}\n`, {
+    flag: options.resume === undefined ? "wx" : "w",
+  })
   console.log(
-    `${resultsTable(set, score)}\n\nResults: ${file.pathname}\nJournal: ${journal.pathname}\nTranscripts: ${transcripts.pathname}`,
+    `${resultsTable(set, score)}\n\nResults: ${file.pathname}\nJournal: ${recorded.journal.pathname}\nTranscripts: ${transcripts.pathname}`,
   )
 }
 

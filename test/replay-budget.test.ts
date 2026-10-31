@@ -69,6 +69,25 @@ describe("SpendBudget", () => {
     expect((await readFile(path, "utf8")).split("\n").filter(Boolean)).toHaveLength(1)
   })
 
+  it("settles an error response at what it reported, so a refused call frees its reserve", async () => {
+    const path = await journal()
+    const budget = await SpendBudget.open(path, 0.15)
+    const refused = {
+      ...response,
+      stopReason: "error" as const,
+      usage: { ...response.usage, cost: { ...response.usage.cost, total: 0 } },
+    }
+    await budget.complete("model", context, rates, 16_000, async () => refused)
+    const resumed = await SpendBudget.open(path, 0.15)
+    let calls = 0
+    await resumed.complete("model", context, rates, 16_000, async () => {
+      calls++
+      return response
+    })
+    expect(calls).toBe(1)
+    expect((await readFile(path, "utf8")).split("\n").filter(Boolean)).toHaveLength(4)
+  })
+
   it("stops the replay when the cap is reached instead of scoring every remaining batch as unjudged", async () => {
     const tools = new ReplayTools({ readFile: async () => "", grep: async () => "", tree: async () => "" })
     await expect(
