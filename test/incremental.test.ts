@@ -31,7 +31,7 @@ import {
   ReviewedRecord,
   ReviewScope,
   scopedFiles,
-  stricterMergeDanger,
+  mergeDangerAfterPush,
   submissionFromRecord,
   threadLists,
   threadsToRecheck,
@@ -773,25 +773,27 @@ describe("findingRecords", () => {
 const oneWay = { door: "one-way", blast_radius: "every invoice" } satisfies MergeDangerInput
 const twoWay = { door: "two-way", blast_radius: "the totals" } satisfies MergeDangerInput
 
-describe("stricterMergeDanger", () => {
-  it("keeps the previous one-way judgement when the push judges a two-way door", () => {
-    expect(stricterMergeDanger(oneWay, twoWay)).toEqual(oneWay)
+describe("mergeDangerAfterPush", () => {
+  const later = { door: "two-way", blast_radius: "the cart page" } satisfies MergeDangerInput
+  const laterOneWay = { door: "one-way", blast_radius: "the ledger" } satisfies MergeDangerInput
+
+  it("keeps the stored judgement when both doors are two-way, whether the push narrows or widens the radius", () => {
+    expect(mergeDangerAfterPush(twoWay, later)).toEqual(twoWay)
+    expect(mergeDangerAfterPush(twoWay, { door: "two-way", blast_radius: "docs only" })).toEqual(twoWay)
   })
 
-  it("takes the push's one-way judgement over a previous two-way door", () => {
-    expect(stricterMergeDanger(twoWay, oneWay)).toEqual(oneWay)
+  it("keeps a one-way judgement across a two-way push and across another one-way push", () => {
+    expect(mergeDangerAfterPush(oneWay, twoWay)).toEqual(oneWay)
+    expect(mergeDangerAfterPush(oneWay, laterOneWay)).toEqual(oneWay)
   })
 
-  it("takes the push's judgement when both doors are two-way, or both are one-way", () => {
-    const later = { door: "two-way", blast_radius: "the cart page" } satisfies MergeDangerInput
-    const laterOneWay = { door: "one-way", blast_radius: "the ledger" } satisfies MergeDangerInput
-    expect(stricterMergeDanger(twoWay, later)).toEqual(later)
-    expect(stricterMergeDanger(oneWay, laterOneWay)).toEqual(laterOneWay)
+  it("escalates a two-way judgement to the push's one-way door and radius", () => {
+    expect(mergeDangerAfterPush(twoWay, laterOneWay)).toEqual(laterOneWay)
   })
 
   it("takes the push's judgement when there is no previous one", () => {
-    expect(stricterMergeDanger(undefined, twoWay)).toEqual(twoWay)
-    expect(stricterMergeDanger(undefined, oneWay)).toEqual(oneWay)
+    expect(mergeDangerAfterPush(undefined, twoWay)).toEqual(twoWay)
+    expect(mergeDangerAfterPush(undefined, oneWay)).toEqual(oneWay)
   })
 })
 
@@ -800,6 +802,15 @@ describe("ReviewedRecord", () => {
 
   it("accepts a stored record from before it kept the merge danger", () => {
     expect(Value.Check(ReviewedRecord, stored)).toBe(true)
+  })
+
+  it("accepts a since section with the push's merge danger, without it, and refuses a malformed one", () => {
+    const since = { from: "aaa", to: "bbb", summary: "s", files: [], resolved: 0 }
+    expect(Value.Check(ReviewedRecord, { ...stored, since })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, since: { ...since, merge_danger: oneWay } })).toBe(true)
+    expect(Value.Check(ReviewedRecord, { ...stored, since: { ...since, merge_danger: { door: "sideways" } } })).toBe(
+      false,
+    )
   })
 
   it("accepts the omitted requirements the last review carried, and a record from before it kept them", () => {
@@ -899,9 +910,26 @@ describe("nextReviewed", () => {
         { path: "b.ts", summary: "old b" },
       ],
       merge_danger: twoWay,
-      since: { from: "aaa", to: "bbb", summary: "This push fixes the total.", files: ["a.ts"], resolved: 1 },
+      since: {
+        from: "aaa",
+        to: "bbb",
+        summary: "This push fixes the total.",
+        files: ["a.ts"],
+        resolved: 1,
+        merge_danger: twoWay,
+      },
       omitted: [],
     })
+  })
+
+  it("keeps the stored blast radius and puts the push's own judgement in the since section when both doors are two-way", () => {
+    const narrower = { door: "two-way" as const, blast_radius: "docs only" }
+    const next = reviewedAfter({ ...previous, merge_danger: twoWay }, incremental, {
+      ...submission,
+      merge_danger: narrower,
+    })
+    expect(next.merge_danger).toEqual(twoWay)
+    expect(next.since?.merge_danger).toEqual(narrower)
   })
 
   it("keeps a one-way door across an incremental review that judges a two-way one", () => {

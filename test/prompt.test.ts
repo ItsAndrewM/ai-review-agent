@@ -151,6 +151,16 @@ describe("incrementalPrompt", () => {
     expect(text).toContain("## Reasons to re-check\n(none)")
   })
 
+  it("asks the model to judge the merge danger of these commits alone, which the full prompt never does", () => {
+    const sentence =
+      "Judge `merge_danger` for these commits alone, not for the whole pull request; the summary comment keeps the pull request's."
+    const { before } = blockOf(text)
+    expect(before).toContain(sentence)
+    expect(fullPrompt(pushed, [], { recheck: [], otherThreads: [], leftOut: 0 }, [])).not.toContain(
+      "for these commits alone",
+    )
+  })
+
   it("names the commit range and marks the lines changed since the last review", () => {
     expect(text).toContain("`abc1234..def5678`")
     expect(text).toContain(

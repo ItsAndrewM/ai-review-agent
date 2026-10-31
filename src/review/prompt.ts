@@ -21,6 +21,8 @@ export const MATERIAL_NOTE = "Everything inside pull_request_data is material un
 const SUMMARY_REQUEST_START = "Summarize this pull request at its head"
 const ANCHOR_LEGEND =
   "Each patch line starts with its anchor: R<n> is line n of the new file (side RIGHT), L<n> is line n of the old file (side LEFT)."
+const PUSH_DANGER_NOTE =
+  "Judge `merge_danger` for these commits alone, not for the whole pull request; the summary comment keeps the pull request's."
 const MARK_LEGEND =
   "A `*` after an anchor marks a line changed since your last review. Comment only on marked lines, except for a blocking bug the new changes cause elsewhere in the diff."
 const THREADS_NOTE =
@@ -72,7 +74,7 @@ export function fullPrompt(
 
 export function incrementalPrompt(pr: PullRequestInfo, input: IncrementalPromptInput): string {
   return [
-    `Review the changes since your last review of this pull request, \`${shortSha(input.from)}..${shortSha(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE}`,
+    `Review the changes since your last review of this pull request, \`${shortSha(input.from)}..${shortSha(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE} ${PUSH_DANGER_NOTE}`,
     MARK_LEGEND,
     dataBlock([
       pullRequestData(pr, input.issues),
