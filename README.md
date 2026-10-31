@@ -10,6 +10,7 @@ A Worker receives GitHub webhooks and hands each pull request to its own Durable
 ```sh
 pnpm install
 pnpm check     # lint, typecheck and unit tests
+pnpm recall --inspect   # the frozen recall benchmark (docs/setup.md, "Measuring recall")
 pnpm run deploy
 ```
 

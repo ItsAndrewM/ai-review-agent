@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
-import { replayContexts, replaySource } from "../tools/verify-replay/checkout.ts"
+import { snapshotSource } from "../tools/replay/snapshot.ts"
+import { replayContexts } from "../tools/verify-replay/checkout.ts"
 import { labelled } from "./verify-replay-fixtures.ts"
 
 describe("replayContexts", () => {
@@ -32,7 +33,7 @@ describe("replayContexts", () => {
       diff: async () => "",
       paths: async () => ["src/example.ts", "src/missing.ts"],
     }
-    const source = await replaySource("a".repeat(40), "b".repeat(40), files)
+    const source = await snapshotSource("a".repeat(40), "b".repeat(40), files)
     expect(await source.grep({ pattern: "legacyFunction" })).toContain("src/example.ts:1: legacyFunction()")
     expect(await source.tree({ path: "src" })).toContain("src/example.ts")
     expect(await source.readFile({ path: "src/example.ts" })).toBe("    1 | legacyFunction()")

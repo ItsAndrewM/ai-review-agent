@@ -73,8 +73,7 @@ export class SpendBudget {
     const id = crypto.randomUUID()
     await this.record(id, model, "reserve", reserve)
     const response = await request()
-    if (response.stopReason !== "error" && response.stopReason !== "aborted")
-      await this.record(id, model, "settle", response.usage.cost.total - reserve)
+    await this.record(id, model, "settle", response.usage.cost.total - reserve)
     return response
   }
 }
