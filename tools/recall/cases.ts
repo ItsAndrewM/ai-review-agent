@@ -332,6 +332,13 @@ export const cases: readonly Case[] = [
     allowed: [],
     knownFalse: [
       {
+        id: "91-f5",
+        path: "src/pull-request.ts",
+        pattern:
+          "zero-changed-files|changed\\.length > 0|all\\.length > 0|no changed files[^.]{0,80}(guard|blame)|restore the guard",
+        note: "false: everyFileFiltered answers false for an empty list (test/diff.test.ts), so the plan's guard lives inside it",
+      },
+      {
         id: "91-f4",
         path: "src/pull-request.ts",
         pattern:
@@ -953,7 +960,22 @@ export const cases: readonly Case[] = [
     ]),
     verdict: "request_changes",
     summary: "footer",
-    allowed: [],
+    allowed: [
+      {
+        id: "54-a1",
+        path: "src/pull-request.ts",
+        pattern:
+          "(Reviewed by|footer|summary comment)[^.]{0,120}(elapsed|time|seconds|in [0-9.]+ s)|(elapsed|time)[^.]{0,80}(Reviewed by|footer)|requirement 2",
+        note: "true: the planted omission of requirement 2 (the footer time), expected in the summary, filed as a finding",
+      },
+      {
+        id: "54-a2",
+        path: "src/review/render.ts",
+        pattern:
+          "(Reviewed by|footer|summary comment)[^.]{0,120}(elapsed|time|seconds|in [0-9.]+ s)|(elapsed|time)[^.]{0,80}(Reviewed by|footer)|requirement 2",
+        note: "true: the planted omission of requirement 2 (the footer time), expected in the summary, filed as a finding",
+      },
+    ],
     knownFalse: [],
   },
   {
@@ -1030,6 +1052,12 @@ export const cases: readonly Case[] = [
     verdict: "approve",
     allowed: [],
     knownFalse: [
+      {
+        id: "144-f2",
+        path: "docs/setup.md",
+        pattern: "never merge|fixture pull request|do not merge|non-fixture",
+        note: "false: restates the description's own never-merge note",
+      },
       {
         id: "144-f1",
         path: "docs/setup.md",
