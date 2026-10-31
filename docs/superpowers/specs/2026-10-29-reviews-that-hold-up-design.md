@@ -189,3 +189,35 @@ Unit: the `Finding` schema accepts `major` and rejects a fifth value; `pairingPr
 - The reasons are decided before unreadable threads: a review that carries a reason while the threads can't be read is `WITHHELD`, not `AWAITING_CHECKS`, since `withheld` keeps the re-evaluation from ever lifting it and an awaiting label would have promised an approval that never comes.
 - An activation is recorded after the SDK's `activate_skill` ran, and not when it answered "Skill not found" or threw, so a skill that failed to load never widens the `standard` basis check; the SDK's own `z.enum` of offered names already keeps a made-up name from reaching the tool. The record write is best-effort (`skills.activation_unrecorded`), as the activation log always was, so a storage error can't fail the model's call.
 - Left as they are, for a follow-up if they show: the not-for-merging bullet says "The description says" even when the quote came from the title; a one-word `not_for_merging` quote found anywhere in the title withholds (it fails safe); `posted:<sha>` keeps only the event, so a rerun that finds a withheld review already posted titles its run "Commented"; the texts of reasons dropped on the second submission are counted but not logged; the skill's resubmission sentence doesn't name rejected reasons (the tool description does); `budgetReasons()` reads the in-memory block count, so an eviction between the block and the post loses the reason, as the footer note always could; `checkReasons` doesn't deduplicate a requirement listed twice.
+
+## Slice 5, #124: the pull request's blast radius survives a narrowing push
+
+### Why
+
+An incremental review's `merge_danger` describes the new commits, and `stricterMergeDanger` in `src/review/incremental.ts` lets it replace the stored judgement whole, blast radius included, whenever the two doors are equal; only a stored one-way door survives a two-way push. So a small push makes the whole pull request look harmless: on #109 a merge from `main` changed only `docs/design.md`, and the summary's merge danger then read "two-way door · None at runtime: the only changed file this round is documentation", though the pull request changes `grep` and `tree`. The audit's two other signs on this line, #112's overstated radius and forty summaries that all said two-way, are the model's judgement and not this slice's: ChatGPT's review of the audit noted that most changes here may really be two-way doors. Grilled with Andrew on 31 Oct 2026; the rulings below are his.
+
+### Rulings
+
+- **The host keeps the pull request's judgement; the push judges itself.** The incremental prompt asks for the merge danger of these commits alone. The PR line under the verdict keeps the door and blast radius of the last full review or `summary`; the push's own door and radius show in the "Since" section as "This push: …". No new model judgement of "widens": a wider two-way push shows in the Since section until a full review or a `summary` re-judges the whole. Re-judging the whole pull request on every push, told the previous judgement, was rejected because GLM may echo or narrow the old text, which is the bug the audit saw; two fields in the submission were rejected as more for the model to keep consistent.
+- **A one-way push escalates the PR line and takes the push's radius.** When the stored door is two-way and the push's is one-way, the PR line becomes "one-way door · <the push's blast radius>", since the one-way danger is the push's and its radius is the one a reader needs; the Since section shows the push line as well. Joining both radii, or keeping the stored radius under the escalated door, were rejected.
+- **No fixture.** Unit tests cover the merge for equal doors, a narrowing push and a widening push, and the first real pull request to get an incremental review after the deploy shows the kept PR line and the "This push" line.
+
+### The push's own judgement
+
+The incremental prompt's request sentence gains: "Judge `merge_danger` for these commits alone, not for the whole pull request; the summary comment keeps the pull request's." The review skill's step 5 adds the same rule in one sentence ("In an incremental review, `merge_danger` judges the new commits alone; the host keeps the pull request's judgement from the last full review or `summary`"), and its version moves on by one. The full prompt, the fresh prompt and the `summary` skill are unchanged: they judge the whole pull request, as today. The review skill is version 10 since #191 merged (30 Oct 2026, 23:08Z), so this slice writes 11.
+
+### The record
+
+`SinceSection` gains `merge_danger: Type.Optional(MergeDanger)`, the push's judgement as submitted; a stored `since` without it still parses. `ReviewedRecord.merge_danger` stays the pull request's. `nextReviewed` on an incremental review writes `merge_danger: mergeDangerAfterPush(previous.merge_danger, submission.merge_danger)` and `since.merge_danger: submission.merge_danger`. `mergeDangerAfterPush(previous, push)` replaces `stricterMergeDanger`: no previous answers the push; a previous one-way door answers the previous; a previous two-way door with a one-way push answers the push; two two-way doors answer the previous. The one-way-plus-one-way case answers the previous too, since nothing escalated and the push's radius is in the Since section. A full or fresh review and `submissionFromRecord` keep storing and showing the submission's merge danger as the pull request's, and `summarizedRecord` still replaces it on a `summary` and drops `since`.
+
+### The copy
+
+The Since section gains one line between the push's summary and the Files line: "This push: two-way door · docs only." (the push's door and its blast radius through `oneLine`, as the PR line prints them). A `since` stored before this slice, without a merge danger, prints no such line. The PR line's format is unchanged.
+
+### Docs
+
+`docs/design.md`'s `reviewed` record entry and its summary-comment paragraph (the "stricter door" sentences) describe the new rule: the PR line keeps the last whole judgement, escalates to one-way with the push's radius, and the Since section carries the push's own.
+
+### Tests
+
+Unit: `mergeDangerAfterPush` for no previous, equal two-way doors with a narrower push (the stored radius stays), equal two-way doors with a wider push (the stored radius stays, the push's lands in `since`), a one-way push on a two-way record (escalates and takes the push's radius), a two-way push on a one-way record (keeps the record), and two one-way doors (keeps the record); `nextReviewed` writing both fields on an incremental review and neither change on a full one; `SinceSection` parsing with and without the merge danger; `renderSummaryComment`'s Since section with and without the push line; the incremental prompt's new sentence and the full prompt without it; the skill's version. Live: the next real incremental review after the deploy.
