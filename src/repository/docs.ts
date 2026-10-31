@@ -47,6 +47,7 @@ export interface DocMentions {
   overflow: number
   searched: number
   stopped: boolean
+  longLines: number
 }
 
 export type ChangedLinesByDoc = ReadonlyMap<string, ReadonlySet<number>>
@@ -115,7 +116,7 @@ export function docMentions(
   const docs = new Set([...files.paths()].filter((path) => isDoc(path) && !isHistory(path)))
   const selected = (path: string): boolean => docs.has(path)
   const stopped = snapshotMissesDocs(files, (path) => isDoc(path) && !isHistory(path))
-  if (docs.size === 0) return { mentions: [], overflow: 0, searched: 0, stopped }
+  if (docs.size === 0) return { mentions: [], overflow: 0, searched: 0, stopped, longLines: 0 }
   return mentionsIn(files, work, selected, searchableCode(code), under, stopped)
 }
 
@@ -130,14 +131,17 @@ function mentionsIn(
   const startUnits = work.units()
   const perFile: MentionHit[][] = []
   let stopped = missing
+  let longLines = 0
   for (const file of searchable) {
     if (work.spent() || work.units() - startUnits > MAX_SEARCH_WORK) break
     const found = mentionsOf(files, work, selected, file.filename)
     stopped ||= found.stopped
+    longLines = Math.max(longLines, found.longLines)
     perFile.push(found.hits.filter((hit) => !under.get(hit.path)?.has(hit.line)))
   }
   const { kept, overflow } = roundRobin(perFile)
-  return { mentions: kept, overflow, searched: perFile.length, stopped: stopped || perFile.length < searchable.length }
+  const unfinished = stopped || perFile.length < searchable.length
+  return { mentions: kept, overflow, searched: perFile.length, stopped: unfinished, longLines }
 }
 
 function snapshotMissesDocs(files: SnapshotFiles, selected: DocMatcher): boolean {
@@ -173,16 +177,18 @@ function mentionsOf(files: SnapshotFiles, work: GrepWork, selected: DocMatcher, 
   const seen = new Set<string>()
   const hits: MentionHit[] = []
   let stopped = false
+  let longLines = 0
   for (const pattern of mentionPatterns(path)) {
     const found = grepMentions(files, selected, pattern, work)
     stopped ||= found.stopped
+    longLines = Math.max(longLines, found.longLines)
     for (const hit of found.hits.sort(byPlace)) {
       if (seen.has(placeOf(hit))) continue
       seen.add(placeOf(hit))
       hits.push(hit)
     }
   }
-  return { hits, stopped }
+  return { hits, stopped, longLines }
 }
 
 const placeOf = (hit: MentionHit): string => `${hit.path}:${hit.line}`
@@ -192,8 +198,8 @@ const byPlace = (a: MentionHit, b: MentionHit): number => {
   return a.path < b.path ? -1 : 1
 }
 
-export function docPathsAtHead(paths: Iterable<string>, isDoc: DocMatcher, under: readonly string[]): string[] {
-  const reserved = new Set(under)
+export function docPathsAtHead(paths: Iterable<string>, isDoc: DocMatcher, kept: readonly string[]): string[] {
+  const reserved = new Set(kept)
   const others = new Set<string>()
   for (const path of paths) if (isDoc(path) && !isHistory(path) && !reserved.has(path)) others.add(path)
   const room = Math.max(0, MAX_DOC_PATHS - reserved.size)

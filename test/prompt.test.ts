@@ -394,6 +394,7 @@ describe("the docs sections", () => {
     ],
     mentions: [mention],
     overflow: 0,
+    longLines: 0,
     search: "ready" as const,
   }
 
@@ -428,6 +429,10 @@ describe("the docs sections", () => {
     const spent = reviewPrompt(pr, [], false, [], { ...NO_DOCS, search: "spent" })
     expect(spent).toContain(
       "## Docs mentioning the change\nThe repository search's budget was spent, so no docs were searched.",
+    )
+    const cut = reviewPrompt(pr, [], false, [], { ...docs, longLines: 2 })
+    expect(cut).toContain(
+      "docs/design.md:112: The snapshot is dropped when the review ends.\n2 long doc lines were searched only in their first 500 characters, so a mention past the cut isn't listed.",
     )
     const stopped = reviewPrompt(pr, [], false, [], { ...docs, search: "stopped" })
     expect(stopped).toContain(

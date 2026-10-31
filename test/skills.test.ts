@@ -303,6 +303,7 @@ describe("bundledSkills", () => {
     }
     expect(verify?.body).toContain("`references/severity.md`, below")
     expect(verify?.body).toContain("For a `docs` finding anchored on code, `read_file` the doc")
+    expect(verify?.body).toContain("and check that the doc makes the claim")
     expect(verify?.body).toContain(`at most ${VERIFY_TOOL_BUDGET} tool calls`)
     expect(verify?.body).toContain(`\`${SUBMIT_VERDICTS_TOOL}\``)
   })

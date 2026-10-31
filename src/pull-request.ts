@@ -1744,7 +1744,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const fields = docsStartFields(sorted, searched.found, searched.search)
     log("review.docs", { number: pr.number, head: shortSha(pr.head.sha), ...fields })
     const { found, search } = searched
-    return { under: sorted.under, mentions: found?.mentions ?? [], overflow: found?.overflow ?? 0, search }
+    const mentions = found?.mentions ?? []
+    return { under: sorted.under, mentions, overflow: found?.overflow ?? 0, search, longLines: found?.longLines ?? 0 }
   }
 
   private async searchDocs(sorted: DocsInChange, isDoc: DocMatcher): Promise<SearchedDocs> {
@@ -1753,7 +1754,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const access = await this.repositorySearch("grep")
     if (access.kind !== "ready") return { found: undefined, search: docsSearchOf(access.kind), headDocs: underPaths }
     const found = docMentions(access.files, access.work, isDoc, sorted.code, changedLinesByDoc(sorted.under))
-    const headDocs = docPathsAtHead(access.files.paths(), isDoc, underPaths)
+    const mentioned = found.mentions.map((mention) => mention.path)
+    const headDocs = docPathsAtHead(access.files.paths(), isDoc, [...underPaths, ...mentioned])
     return { found, search: found.stopped ? "stopped" : "ready", headDocs }
   }
 

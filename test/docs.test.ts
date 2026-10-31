@@ -224,10 +224,23 @@ describe("docMentions", () => {
     expect(refused.stopped).toBe(true)
   })
 
+  it("counts the long doc lines searched only up to the cut, once per line across the changed files", () => {
+    const long = `${"x".repeat(600)} src/review/tools.ts`
+    const found = docMentions(
+      snapshotOf({ "README.md": `${long}\nshort\n` }),
+      new GrepWork(),
+      isDoc,
+      [tools],
+      new Map(),
+    )
+    expect(found.mentions).toEqual([])
+    expect(found.longLines).toBe(1)
+  })
+
   it("greps nothing when the snapshot holds no doc, so a docs-free repository pays no scan per changed file", () => {
     const work = new GrepWork()
     const found = docMentions(snapshotOf({ "src/a.ts": "tools\n" }), work, isDoc, [tools], new Map())
-    expect(found).toEqual({ mentions: [], overflow: 0, searched: 0, stopped: false })
+    expect(found).toEqual({ mentions: [], overflow: 0, searched: 0, stopped: false, longLines: 0 })
     expect(work.units()).toBe(0)
   })
 
@@ -281,9 +294,10 @@ describe("docPathsAtHead", () => {
       (_, i) => `packages/p${String(i).padStart(4, "0")}/README.md`,
     )
     expect(docPathsAtHead(many, docMatcher(DEFAULT_DOC_GLOBS), [])).toHaveLength(MAX_DOC_PATHS)
-    const kept = docPathsAtHead(many, docMatcher(DEFAULT_DOC_GLOBS), ["zzz/README.md"])
+    const kept = docPathsAtHead(many, docMatcher(DEFAULT_DOC_GLOBS), ["zzz/README.md", "packages/p0204/README.md"])
     expect(kept).toHaveLength(MAX_DOC_PATHS)
     expect(kept).toContain("zzz/README.md")
+    expect(kept).toContain("packages/p0204/README.md")
   })
 })
 
@@ -304,6 +318,7 @@ describe("docsStartFields", () => {
       overflow: 4,
       searched: 2,
       stopped: false,
+      longLines: 0,
     }
     expect(docsStartFields(sorted, found, "ready")).toEqual({
       under: 2,

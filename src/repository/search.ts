@@ -267,14 +267,15 @@ const joined = (parts: readonly string[]): string => parts.filter(present).join(
 export interface MentionSearch {
   hits: MentionHit[]
   stopped: boolean
+  longLines: number
 }
 
 export function grepMentions(files: SnapshotFiles, selected: Selector, pattern: string, work: GrepWork): MentionSearch {
-  if (work.spent() || patternProblem(pattern) !== undefined) return { hits: [], stopped: true }
+  if (work.spent() || patternProblem(pattern) !== undefined) return { hits: [], stopped: true, longLines: 0 }
   const found = search(files, selected, engineFor(compile(pattern).regex))
   work.charge(found.work)
   const hits = found.hits.map(({ path, line, content }) => ({ path, line, text: content }))
-  return { hits, stopped: found.stopped }
+  return { hits, stopped: found.stopped, longLines: found.longLines }
 }
 
 export function grep(files: SnapshotFiles, query: GrepQuery, work: GrepWork): string {
