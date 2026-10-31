@@ -211,7 +211,8 @@ function renderMentions(docs: DocsSections): string {
   const heading = "## Docs mentioning the change"
   if (docs.search === "unavailable") return `${heading}\n${SEARCH_UNAVAILABLE}`
   if (docs.search === "spent") return `${heading}\n${SEARCH_SPENT}`
-  if (docs.mentions.length === 0 && docs.search === "ready") return `${heading}\n(none)`
+  const clean = docs.mentions.length === 0 && docs.search === "ready" && docs.longLines === 0
+  if (clean) return `${heading}\n(none)`
   const lines = docs.mentions.map((mention) => `${mention.path}:${mention.line}: ${mention.text}`)
   if (docs.overflow > 0) lines.push(`${docs.overflow} more mentions aren't listed.`)
   if (docs.longLines > 0) lines.push(longLinesNote(docs.longLines))

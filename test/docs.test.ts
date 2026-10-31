@@ -225,12 +225,12 @@ describe("docMentions", () => {
   })
 
   it("counts the long doc lines searched only up to the cut, once per line across the changed files", () => {
-    const long = `${"x".repeat(600)} src/review/tools.ts`
+    const long = `${"x".repeat(600)} src/review/tools.ts src/review/basis.ts`
     const found = docMentions(
       snapshotOf({ "README.md": `${long}\nshort\n` }),
       new GrepWork(),
       isDoc,
-      [tools],
+      [tools, changed("src/review/basis.ts")],
       new Map(),
     )
     expect(found.mentions).toEqual([])

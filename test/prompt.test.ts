@@ -430,6 +430,11 @@ describe("the docs sections", () => {
     expect(spent).toContain(
       "## Docs mentioning the change\nThe repository search's budget was spent, so no docs were searched.",
     )
+    const onlyCut = reviewPrompt(pr, [], false, [], { ...NO_DOCS, longLines: 1 })
+    expect(onlyCut).toContain(
+      "## Docs mentioning the change\n1 long doc line was searched only in its first 500 characters, so a mention past the cut isn't listed.",
+    )
+    expect(onlyCut).not.toContain("## Docs mentioning the change\n(none)")
     const cut = reviewPrompt(pr, [], false, [], { ...docs, longLines: 2 })
     expect(cut).toContain(
       "docs/design.md:112: The snapshot is dropped when the review ends.\n2 long doc lines were searched only in their first 500 characters, so a mention past the cut isn't listed.",
