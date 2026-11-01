@@ -50,7 +50,7 @@ import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from 
 import {
   CONFIG_PREFIX,
   configKey,
-  configReadOf,
+  cachedRead,
   configStatus,
   isCacheable,
   pullRequestFacts,
@@ -65,6 +65,7 @@ import {
   storedConfig,
   type AndabotConfig,
   type ConfigRead,
+  type ConfigSource,
   type ConfigStatus,
   type SkipReason,
 } from "./repository/config.ts"
@@ -1631,16 +1632,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.key(),
       baseSha,
       (error) => logError("config.unreadable", { ...fields, error }),
-      configSourceOf(this.botLogin(), this.env.AUTO_REVIEW),
+      this.#configSource(),
     )
     if (isCacheable(read)) await this.cacheConfig(baseSha, read)
     return read
   }
 
+  #configSource(): ConfigSource {
+    return configSourceOf(this.botLogin(), this.env.AUTO_REVIEW)
+  }
+
   private async cachedConfig(baseSha: string): Promise<ConfigRead | undefined> {
     const key = configKey(baseSha)
     const stored = await this.ctx.storage.get(key)
-    if (Value.Check(StoredConfig, stored)) return configReadOf(stored)
+    if (Value.Check(StoredConfig, stored)) return cachedRead(stored, this.#configSource().auto)
     if (stored !== undefined) await this.ctx.storage.delete(key)
     return undefined
   }
@@ -1650,7 +1655,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const listed = await this.ctx.storage.list({ prefix: CONFIG_PREFIX })
       const stale = staleConfigKeys([...listed.keys()], baseSha)
       if (stale.length > 0) await this.ctx.storage.delete(stale)
-      await this.ctx.storage.put(configKey(baseSha), storedConfig(baseSha, read))
+      await this.ctx.storage.put(configKey(baseSha), storedConfig(baseSha, read, this.#configSource().auto))
     } catch (error) {
       logError("config.uncached", { base: shortSha(baseSha), error: errorText(error) })
     }

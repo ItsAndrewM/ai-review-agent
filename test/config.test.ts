@@ -21,6 +21,7 @@ import {
   staleConfigKeys,
   StoredConfig,
   storedConfig,
+  cachedRead,
   verifyModelFor,
   type ConfigRead,
 } from "../src/repository/config.ts"
@@ -678,21 +679,35 @@ describe("the config cache", () => {
     ["valid", VALID],
     ["invalid", INVALID],
   ])("reads back the record of a %s file as it was read", (_name, read) => {
-    const stored = structuredClone(storedConfig(BASE, read))
+    const stored = structuredClone(storedConfig(BASE, read, true))
     expect(Value.Check(StoredConfig, stored)).toBe(true)
     expect(stored.baseSha).toBe(BASE)
     expect(configReadOf(stored)).toEqual(read)
   })
 
   it("refuses a record a read could not have written", () => {
-    const stored = storedConfig(BASE, VALID)
+    const stored = storedConfig(BASE, VALID, true)
     expect(Value.Check(StoredConfig, { ...stored, config: { reviews: { auto: true } } })).toBe(false)
     expect(Value.Check(StoredConfig, { ...stored, error: 5 })).toBe(false)
     expect(Value.Check(StoredConfig, { baseSha: BASE, config: FULL_CONFIG })).toBe(false)
   })
 
+  it("reads a record back only under the AUTO_REVIEW it was read with, so flipping the var rereads the file", () => {
+    const quiet = storedConfig(BASE, VALID, false)
+    expect(cachedRead(quiet, false)).toEqual(VALID)
+    expect(cachedRead(quiet, true)).toBeUndefined()
+    expect(cachedRead(storedConfig(BASE, VALID, true), false)).toBeUndefined()
+  })
+
+  it("reads a record cached before AUTO_REVIEW existed as one read with it on", () => {
+    const { autoReview: _dropped, ...older } = storedConfig(BASE, VALID, true)
+    expect(Value.Check(StoredConfig, older)).toBe(true)
+    expect(cachedRead(older, true)).toEqual(VALID)
+    expect(cachedRead(older, false)).toBeUndefined()
+  })
+
   it("refuses a record cached before reviews.verify existed, so it reads as a miss and the file is read again", () => {
-    const stored = storedConfig(BASE, VALID)
+    const stored = storedConfig(BASE, VALID, true)
     expect(Value.Check(StoredConfig, { ...stored, config: { reviews: BEFORE_VERIFY_REVIEWS } })).toBe(false)
   })
 })
