@@ -60,6 +60,20 @@ Variables in `wrangler.jsonc`:
 
 **What a pull request can cost in the sandbox.** Every pull request runs checks, a stranger's included, bounded by caps rather than by who opened it. Its test files run, so a hostile pull request can make a test sleep (one `SANDBOX_CHECK_TIMEOUT`, 300 s), call out (the allowlist answers 403 to every host but `github.com` and `registry.npmjs.org`) or add install scripts (the install runs none). One review spends at most about 1,200 s of `standard-1`, $0.025: checkout and install each stop at five minutes, checks run one at a time under the 300-second timeout while the sandbox's wall time is under `MAX_SANDBOX_SECONDS` (900 s), and a check that starts just under the budget runs to its own timeout. A review that dies without destroying its container is ended by a drop job at the budget plus two minutes, $0.021 at most, with the 30-minute inactivity backstop ($0.037) as the last resort (#140). Across pull requests the lease caps running sandboxes at three, each lease outliving its review by at most the budget plus two minutes, so the account runs at most three containers at once, $0.22 an hour and $5.33 a day with every slot busy around the clock. Measured on 29 Oct 2026 (#135), a review that asks for the sandbox costs $0.002 to $0.003 of container time.
 
+## Staging: `andabot-staging`
+
+A second deploy beside andabot, with its own GitHub App, Worker, Durable Objects and container, configured as `env.staging` in `wrangler.jsonc` (#177). It runs the same code under the login `andabot-staging`, so it reads `.andabot-staging.yaml`, writes its own hidden markers and never edits andabot's comments. Its `AUTO_REVIEW` is `false`: it reviews only after `@andabot-staging review` (or another command), on any base, whatever the repository's config files say about andabot. Use it to try a change on a real pull request before production runs it.
+
+```sh
+node scripts/register-app.mjs ~/andabot-staging-app.json andabot-staging https://andabot-staging.dinocode.workers.dev/webhook
+pnpm exec wrangler deploy --env staging
+scripts/set-secrets.sh ~/andabot-staging-app.json staging
+```
+
+Register it with the same permissions and events as andabot (the script's manifest has them), and install it on `ai-review-agent` only. `GET https://andabot-staging.dinocode.workers.dev/health` answers `{"name":"andabot-staging","ok":true}`. Its vars must match production's, `BOT_LOGIN` and `AUTO_REVIEW` aside; `test/wrangler.test.ts` fails when they drift apart.
+
+It shares the Cloudflare account with production: the same Workers AI neurons and the account's container limits. The lease cap of three running sandboxes is per deploy, so the two together can run six. Each bot's check run is just another check to the other, so a staging check that fails or hangs holds andabot's approval of that pull request, and the reverse. Until #182 deploys from CI, staging is deployed by hand, as above.
+
 ## 3. Local development
 
 Copy `.dev.vars.example` to `.dev.vars` and fill it in, then `pnpm dev`. The AI binding is remote, so `wrangler login` is needed even locally; in a non-interactive shell set `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` instead. To deliver real webhooks to a local Worker, point the App at a tunnel (`cloudflared tunnel --url http://localhost:8787`).
