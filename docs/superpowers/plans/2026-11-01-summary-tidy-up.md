@@ -38,11 +38,11 @@
 **Interfaces:**
 - Produces: `export function plural(count: number, noun: string, plurals = \`${noun}s\`): string` → `"1 thread"`, `"0 threads"`; `export function were(count: number): "was" | "were"`.
 
-- [ ] **Step 1: Write the failing tests.** `test/copy.test.ts`: `plural(1, "thread")` → `"1 thread"`, `plural(0, "thread")` → `"0 threads"`, `plural(2, "finding")` → `"2 findings"`, `were(1)` → `"was"`, `were(3)` → `"were"`. In `test/findings.test.ts` (describe `renderSummaryComment`): the status line with one suggestion and one nitpick reads `· 🟡 1 suggestion · ⚪ 1 nitpick`; the Since footer reads `Resolved 1 thread.` and `Resolved 0 threads.` (update the two existing assertions at ~1131 and ~1170); the dropped line reads `1 finding was dropped because` and `2 findings were dropped because`; held back reads `1 blocking finding couldn't be posted inline and holds approval back:` and `2 blocking findings couldn't be posted inline and hold approval back:`; `countsLine` (through the review body) reads `1 blocking finding to address before approval, 1 major finding worth fixing, 1 suggestion, 2 nitpicks.`. In `test/check.test.ts` the title with one suggestion still reads `1 suggestion` (pins the shared helper).
-- [ ] **Step 2: Run them.** `pnpm vitest run test/copy.test.ts test/findings.test.ts test/check.test.ts` — Expected: FAIL (`plural` not found; copy mismatches).
-- [ ] **Step 3: Implement.** `copy.ts` with `plural` and `were`; `render.ts` uses them at the five sites (the status line keeps `🔴 N blocking · 🟠 N major`); `check.ts` deletes `counted` and imports `plural`; `pull-request.ts` reply: `` `Posted review ${review.id} (${event}) with ${plural(n, "inline comment")}.` `` and `` ` ${plural(d, "finding")} that still failed the checks ${were(d)} dropped.` ``.
-- [ ] **Step 4: Run.** Same command — Expected: PASS; then `pnpm check` green.
-- [ ] **Step 5: Commit.** `git add src/review/copy.ts src/review/render.ts src/review/check.ts src/pull-request.ts test/copy.test.ts test/findings.test.ts test/check.test.ts && git commit -m "Say one thread and two threads: one plural helper for every count the reader sees"`.
+- [x] **Step 1: Write the failing tests.** `test/copy.test.ts`: `plural(1, "thread")` → `"1 thread"`, `plural(0, "thread")` → `"0 threads"`, `plural(2, "finding")` → `"2 findings"`, `were(1)` → `"was"`, `were(3)` → `"were"`. In `test/findings.test.ts` (describe `renderSummaryComment`): the status line with one suggestion and one nitpick reads `· 🟡 1 suggestion · ⚪ 1 nitpick`; the Since footer reads `Resolved 1 thread.` and `Resolved 0 threads.` (update the two existing assertions at ~1131 and ~1170); the dropped line reads `1 finding was dropped because` and `2 findings were dropped because`; held back reads `1 blocking finding couldn't be posted inline and holds approval back:` and `2 blocking findings couldn't be posted inline and hold approval back:`; `countsLine` (through the review body) reads `1 blocking finding to address before approval, 1 major finding worth fixing, 1 suggestion, 2 nitpicks.`. In `test/check.test.ts` the title with one suggestion still reads `1 suggestion` (pins the shared helper).
+- [x] **Step 2: Run them.** `pnpm vitest run test/copy.test.ts test/findings.test.ts test/check.test.ts` — Expected: FAIL (`plural` not found; copy mismatches).
+- [x] **Step 3: Implement.** `copy.ts` with `plural` and `were`; `render.ts` uses them at the five sites (the status line keeps `🔴 N blocking · 🟠 N major`); `check.ts` deletes `counted` and imports `plural`; `pull-request.ts` reply: `` `Posted review ${review.id} (${event}) with ${plural(n, "inline comment")}.` `` and `` ` ${plural(d, "finding")} that still failed the checks ${were(d)} dropped.` ``.
+- [x] **Step 4: Run.** Same command — Expected: PASS; then `pnpm check` green.
+- [x] **Step 5: Commit.** `git add src/review/copy.ts src/review/render.ts src/review/check.ts src/pull-request.ts test/copy.test.ts test/findings.test.ts test/check.test.ts && git commit -m "Say one thread and two threads: one plural helper for every count the reader sees"`.
 
 ---
 
@@ -55,11 +55,11 @@
 **Interfaces:**
 - Produces: `export function rowsWithin(rows: readonly WalkthroughInput[], files: readonly ChangedFile[]): WalkthroughInput[]` in `findings.ts` (keeps, in order, the rows whose `rowPath(row.path)` is a `file.filename`; the returned rows carry the normalised path). `NextReviewedInput` gains `files: readonly ChangedFile[]` (the reviewable files).
 
-- [ ] **Step 1: Failing tests.** `rowsWithin` keeps `src/a.ts` and drops `vendor/x.js` when only `src/a.ts` is reviewable, and matches `` `./src/a.ts` `` through `rowPath`. `summarizedRecord` with a written row for a file outside `files` leaves it out (and keeps the stored-row behaviour). `nextReviewed` full mode drops a written row for a file not in `files`; incremental mode drops it before the merge. `test/skills.test.ts` expects version `"13"` and the body to contain `never what the review did or saw there`.
-- [ ] **Step 2: Run** `pnpm vitest run test/findings.test.ts test/summary.test.ts test/incremental.test.ts test/skills.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** `rowsWithin`; `summarizedRows` applies it to `written`; `storeSummary` with no record returns `{ ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }`; `nextReviewed` takes `files` and filters `submission.walkthrough` in both branches; the object passes `files` (the reviewable list it already holds) at the `nextReviewed` call. `SKILL.md` line 26 becomes "Note the file's walkthrough row for `submit_review`: one sentence on what changed in the file, never what the review did or saw there. Every changed file gets a row; …"; `metadata.version: "13"`.
-- [ ] **Step 4: Run** — Expected: PASS; `pnpm check` green.
-- [ ] **Step 5: Commit.** `git commit -m "Drop a walkthrough row for a file the filters leave out, on the summary and the review, and say what a row is"` with the touched paths.
+- [x] **Step 1: Failing tests.** `rowsWithin` keeps `src/a.ts` and drops `vendor/x.js` when only `src/a.ts` is reviewable, and matches `` `./src/a.ts` `` through `rowPath`. `summarizedRecord` with a written row for a file outside `files` leaves it out (and keeps the stored-row behaviour). `nextReviewed` full mode drops a written row for a file not in `files`; incremental mode drops it before the merge. `test/skills.test.ts` expects version `"13"` and the body to contain `never what the review did or saw there`.
+- [x] **Step 2: Run** `pnpm vitest run test/findings.test.ts test/summary.test.ts test/incremental.test.ts test/skills.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** `rowsWithin`; `summarizedRows` applies it to `written`; `storeSummary` with no record returns `{ ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }`; `nextReviewed` takes `files` and filters `submission.walkthrough` in both branches; the object passes `files` (the reviewable list it already holds) at the `nextReviewed` call. `SKILL.md` line 26 becomes "Note the file's walkthrough row for `submit_review`: one sentence on what changed in the file, never what the review did or saw there. Every changed file gets a row; …"; `metadata.version: "13"`.
+- [x] **Step 4: Run** — Expected: PASS; `pnpm check` green.
+- [x] **Step 5: Commit.** `git commit -m "Drop a walkthrough row for a file the filters leave out, on the summary and the review, and say what a row is"` with the touched paths.
 
 ---
 
@@ -78,11 +78,11 @@
 - `NextReviewedInput` gains `linkOf: (thread: OpenThread) => string`; the Since text is `linkThreads(submission.changes_since ?? submission.summary, [...scope.recheck, ...threadLists(scope.open, scope.recheck).otherThreads], linkOf)`.
 - The incremental request sentence gains: "Put what the new commits do in `changes_since`; `summary` still describes the pull request."
 
-- [ ] **Step 1: Failing tests.** Schema accepts and omits `changes_since`; `changesSinceMissing` is true in incremental mode for a missing and a blank field, false in full mode; `problemsText` with the flag names the field and without it doesn't; `linkThreads` on `"Fixes T1 and T2; T10 is untouched."` with threads T1 ("Null total", first comment 5) and T2 links both and leaves `T10`; a handle inside `T1a` or inside a URL is left; `nextReviewed` incremental writes `since.summary` from `changes_since` with the links and falls back to `summary` when the field is absent; `nextReviewed` full mode ignores the field; the incremental prompt contains the new sentence and the full prompt doesn't; the submit_review description names `changes_since`.
-- [ ] **Step 2: Run** `pnpm vitest run test/findings.test.ts test/prompt.test.ts test/incremental.test.ts test/tools.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement.** The schema field; `changesSinceMissing`; `problemsText`'s paragraph; in `submitReview`, `problems` includes `changesSinceMissing(submission, checked.scope)` and the text is passed the flag; on the second submission with it still missing the review proceeds and logs `review.changes_since_missing` with `number` and `head`; `linkThreads`, `threadLink`; `nextReviewed` as above; the object passes `linkOf: (thread) => threadLink(pr.base.repo.full_name, pr.number, thread)`; the prompt sentence; the tool description adds "an incremental review also says what the new commits do in `changes_since`".
-- [ ] **Step 4: Run** — Expected: PASS; `pnpm check` green.
-- [ ] **Step 5: Commit.** `git commit -m "Ask an incremental review what the new commits do, and link the threads its Since text names"`.
+- [x] **Step 1: Failing tests.** Schema accepts and omits `changes_since`; `changesSinceMissing` is true in incremental mode for a missing and a blank field, false in full mode; `problemsText` with the flag names the field and without it doesn't; `linkThreads` on `"Fixes T1 and T2; T10 is untouched."` with threads T1 ("Null total", first comment 5) and T2 links both and leaves `T10`; a handle inside `T1a` or inside a URL is left; `nextReviewed` incremental writes `since.summary` from `changes_since` with the links and falls back to `summary` when the field is absent; `nextReviewed` full mode ignores the field; the incremental prompt contains the new sentence and the full prompt doesn't; the submit_review description names `changes_since`.
+- [x] **Step 2: Run** `pnpm vitest run test/findings.test.ts test/prompt.test.ts test/incremental.test.ts test/tools.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement.** The schema field; `changesSinceMissing`; `problemsText`'s paragraph; in `submitReview`, `problems` includes `changesSinceMissing(submission, checked.scope)` and the text is passed the flag; on the second submission with it still missing the review proceeds and logs `review.changes_since_missing` with `number` and `head`; `linkThreads`, `threadLink`; `nextReviewed` as above; the object passes `linkOf: (thread) => threadLink(pr.base.repo.full_name, pr.number, thread)`; the prompt sentence; the tool description adds "an incremental review also says what the new commits do in `changes_since`".
+- [x] **Step 4: Run** — Expected: PASS; `pnpm check` green.
+- [x] **Step 5: Commit.** `git commit -m "Ask an incremental review what the new commits do, and link the threads its Since text names"`.
 
 ---
 
@@ -98,11 +98,11 @@
 - `ReviewedRecord.seconds: Type.Optional(Type.Number())`; `NextReviewedInput.seconds: number | undefined`; `renderSummaryComment` input `seconds?: number | undefined`; `reviewedBy(model, skills, repo, verify, seconds)` ends `` ` in ${seconds} s.` `` when given (`in 34.8 s.`, `in 35 s.` for a whole number).
 - `review.done` logs `seconds: elapsedSeconds(pending.openedAt ?? run.started, Date.now())` and no `ms`.
 
-- [ ] **Step 1: Failing tests.** `elapsedSeconds(0, 34_760)` → `34.8`, `(0, 35_040)` → `35`; `resumedPending` keeps `openedAt`; `migratePending` leaves a record without it; `nextReviewed` writes `seconds` in both modes and leaves it out when undefined; `summarizedRecord` copies `seconds`; the footer reads `<sub>Reviewed by \`m\` with skills \`review@…\` in 34.8 s.</sub>` with `seconds` and exactly today's text without.
-- [ ] **Step 2: Run** `pnpm vitest run test/flight.test.ts test/incremental.test.ts test/summary.test.ts test/findings.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement** as the interfaces say; the object's one `renderSummaryComment` call (the review's post) passes the record's `seconds`; the approval's verdict rewrite patches the comment text in place and keeps the footer, and the `summary` command renders its own "Summarized by" footer, so no other call changes.
-- [ ] **Step 4: Run** — Expected: PASS; `pnpm check` green.
-- [ ] **Step 5: Commit.** `git commit -m "Say how long each review took, in review.done and in the footer"`.
+- [x] **Step 1: Failing tests.** `elapsedSeconds(0, 34_760)` → `34.8`, `(0, 35_040)` → `35`; `resumedPending` keeps `openedAt`; `migratePending` leaves a record without it; `nextReviewed` writes `seconds` in both modes and leaves it out when undefined; `summarizedRecord` copies `seconds`; the footer reads `<sub>Reviewed by \`m\` with skills \`review@…\` in 34.8 s.</sub>` with `seconds` and exactly today's text without.
+- [x] **Step 2: Run** `pnpm vitest run test/flight.test.ts test/incremental.test.ts test/summary.test.ts test/findings.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement** as the interfaces say; the object's one `renderSummaryComment` call (the review's post) passes the record's `seconds`; the approval's verdict rewrite patches the comment text in place and keeps the footer, and the `summary` command renders its own "Summarized by" footer, so no other call changes.
+- [x] **Step 4: Run** — Expected: PASS; `pnpm check` green.
+- [x] **Step 5: Commit.** `git commit -m "Say how long each review took, in review.done and in the footer"`.
 
 ---
 
@@ -118,11 +118,11 @@
 - `export function approvedPosted(posted: PostedReview): PostedReview` in `approval.ts` → `{ ...posted, shown: "APPROVE" }`.
 - `submitApproval`, after `rewriteSummaryVerdict`: reads `posted:${head}`; when it parses, writes `approvedPosted(posted)` back and, when `checkRunId` is set, calls `updateCheckRun(key, checkRunId, approvedCheckRun(posted, await this.summaryCommentUrl(), Date.now()))` inside try/catch that logs `approval.check_run_failed` with `head`, `checkRunId` and `error`.
 
-- [ ] **Step 1: Failing tests.** `PostedReview` parses with and without `checkRunId`; `approvedCheckRun` with counts `{blocking: 0, major: 0, suggestion: 1, nitpick: 2}` titles `Approved: 1 suggestion, 2 nitpicks`, with no counts `Approved`, with `unverified` `… (unverified)`, summary text as fixed, `details_url` passed through; `approvedPosted` sets `shown` to `APPROVE` and keeps the rest; `postedEarlierCheckRun(approvedPosted(posted), …)` titles `Approved…`.
-- [ ] **Step 2: Run** `pnpm vitest run test/check.test.ts test/approval.test.ts test/records.test.ts` — Expected: FAIL.
-- [ ] **Step 3: Implement** as above.
-- [ ] **Step 4: Run** — Expected: PASS; `pnpm check` green.
-- [ ] **Step 5: Commit.** `git commit -m "Retitle the check run and mark the posted record when the evaluation approves"`.
+- [x] **Step 1: Failing tests.** `PostedReview` parses with and without `checkRunId`; `approvedCheckRun` with counts `{blocking: 0, major: 0, suggestion: 1, nitpick: 2}` titles `Approved: 1 suggestion, 2 nitpicks`, with no counts `Approved`, with `unverified` `… (unverified)`, summary text as fixed, `details_url` passed through; `approvedPosted` sets `shown` to `APPROVE` and keeps the rest; `postedEarlierCheckRun(approvedPosted(posted), …)` titles `Approved…`.
+- [x] **Step 2: Run** `pnpm vitest run test/check.test.ts test/approval.test.ts test/records.test.ts` — Expected: FAIL.
+- [x] **Step 3: Implement** as above.
+- [x] **Step 4: Run** — Expected: PASS; `pnpm check` green.
+- [x] **Step 5: Commit.** `git commit -m "Retitle the check run and mark the posted record when the evaluation approves"`.
 
 ---
 
@@ -130,8 +130,8 @@
 
 **Files:**
 - Modify: `docs/design.md:189` (summary comment paragraph: the Since text comes from `changes_since`, handles become links; written rows outside the reviewable set are dropped), `:191` (`summary` keeps `seconds`), `:224` (the footer ends "in 34.8 s"), `:246` ("The check run keeps the review's title" → the approval retitles it to "Approved: …" and marks the posted record), `:323` (`path_filters`: a written row for a filtered file is dropped on the summary and the review), the `reviewed`/`posted` record entries (`seconds`, `checkRunId`, `openedAt`); the plan's boxes.
-- [ ] **Step 1: Edit the paragraphs**; `pnpm format`; `pnpm check`.
-- [ ] **Step 2: Commit.** `git commit -m "Describe the Since text, the thread links, the footer's time and the approval's retitle"`.
+- [x] **Step 1: Edit the paragraphs**; `pnpm format`; `pnpm check`.
+- [x] **Step 2: Commit.** `git commit -m "Describe the Since text, the thread links, the footer's time and the approval's retitle"`.
 
 ---
 
