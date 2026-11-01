@@ -26,6 +26,7 @@ import {
   mergeWalkthrough,
   renderReviewBody,
   renderSummaryComment,
+  sweepLines,
   renderUnpostedNote,
   renderUnpostedSummary,
   reviewEventOf,
@@ -1815,6 +1816,47 @@ describe("the close block in every summary comment", () => {
       closes: block,
     })
     expect(text).toContain(`${block.join("\n")}\n<sub>Reviewed by`)
+  })
+})
+
+describe("the sweep's footer line", () => {
+  const block = ["<!-- andabot:closes -->", "<sub>Merging closes #80.</sub>", "<!-- andabot:closes-end -->"]
+  const started = "<sub>Started by the 15-minute sweep: no webhook reached andabot for this push.</sub>"
+  const restarted = "<sub>Restarted by the 15-minute sweep: the earlier review stopped without finishing.</sub>"
+  const comment = (sweep: "started" | "restarted" | undefined) =>
+    renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "APPROVE",
+      submission: base,
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      closes: block,
+      sweep,
+    })
+
+  it("says a review the sweep started was started by it, between the close block and Reviewed by", () => {
+    expect(comment("started")).toContain(`${block.join("\n")}\n${started}\n<sub>Reviewed by`)
+  })
+
+  it("says a review the sweep restarted was restarted by it", () => {
+    const text = comment("restarted")
+    expect(text).toContain(`${block.join("\n")}\n${restarted}\n<sub>Reviewed by`)
+    expect(text).not.toContain("Started by the 15-minute sweep")
+  })
+
+  it("says nothing of the sweep on a review a webhook started", () => {
+    expect(comment(undefined)).not.toContain("15-minute sweep")
+  })
+
+  it("gives the same lines alone for the check run's summary", () => {
+    expect(sweepLines("started")).toEqual([started])
+    expect(sweepLines("restarted")).toEqual([restarted])
+    expect(sweepLines(undefined)).toEqual([])
   })
 })
 

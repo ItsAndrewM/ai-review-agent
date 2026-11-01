@@ -82,6 +82,14 @@ export function failedCheckRun(reason: string, detailsUrl: string | undefined, c
   return completedCheckRun("failure", checkOutput("Review did not complete", reason), detailsUrl, completedAt)
 }
 
+export function gaveUpCheckRun(headSha: string, botLogin: string, completedAt: number): UpdateCheckRun {
+  const output = checkOutput(
+    "Review didn't finish",
+    `The review of \`${shortSha(headSha)}\` stopped twice without finishing. Comment \`@${botLogin} review\` to try again.`,
+  )
+  return completedCheckRun("neutral", output, undefined, completedAt)
+}
+
 export function supersededCheckRun(newHeadSha: string, completedAt: number): UpdateCheckRun {
   const head = shortSha(newHeadSha)
   const output = checkOutput(`Superseded by ${head}`, `A newer head, \`${head}\`, is being reviewed instead.`)

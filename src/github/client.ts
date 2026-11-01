@@ -304,7 +304,7 @@ export interface CreateReview {
   comments: ReviewComment[]
 }
 
-export type CheckRunConclusion = "success" | "failure" | "cancelled"
+export type CheckRunConclusion = "success" | "failure" | "cancelled" | "neutral"
 
 export interface CheckRunOutput {
   title: string
