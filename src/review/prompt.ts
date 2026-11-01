@@ -52,7 +52,6 @@ const INERT_CLOSING_TAG = `</pull_request_data${ZERO_WIDTH_SPACE}>`
 const CUT_NOTE = "(cut; get_issue has the full body)"
 export const ACTIVATE_SKILL_TOOL = "activate_skill"
 export const SUBMIT_REVIEW_TOOL = "submit_review"
-export const BUDGET_REFUSAL_MARKER = "andabot:review-budget-refused"
 const CATALOG_TOOLS_NOTE = `${ACTIVATE_SKILL_TOOL} opens one of the repository's own skills, listed under Available skills, and read_skill_resource reads one of that skill's files.`
 
 export function systemPrompt(botLogin: string, offered: readonly string[]): string {
@@ -333,19 +332,25 @@ export interface ThreadQuestion {
   headSha: string
 }
 
-function findingLine(thread: ThreadQuestion): string {
+function findingLine(thread: ThreadQuestion, botLogin: string): string {
   if (thread.severity === undefined || thread.title === undefined) return ""
-  return `The thread is andabot's ${thread.severity} finding "${thread.title}"; the head is now \`${shortSha(thread.headSha)}\`.\n\n`
+  return `The thread is ${botLogin}'s ${thread.severity} finding "${thread.title}"; the head is now \`${shortSha(thread.headSha)}\`.\n\n`
 }
 
-export function threadAnswerPrompt(author: string, text: string, skill: string, thread: ThreadQuestion): string {
+export function threadAnswerPrompt(
+  author: string,
+  text: string,
+  skill: string,
+  thread: ThreadQuestion,
+  botLogin: string,
+): string {
   const where =
     thread.line === null
       ? `on \`${thread.path}\`, on a line the latest push no longer shows`
       : `on \`${thread.path}\` line ${thread.line}`
   const fence = fenceFor(thread.diffHunk)
   const opening = thread.opening === undefined ? "" : `The thread opens with this comment:\n\n${thread.opening}\n\n`
-  return `${skill}\n\n${author} replies in a review thread ${where}:\n\n${fence}diff\n${thread.diffHunk}\n${fence}\n\n${opening}${findingLine(thread)}${author}'s reply:\n\n${text}\n\nAnswer them directly, in text.`
+  return `${skill}\n\n${author} replies in a review thread ${where}:\n\n${fence}diff\n${thread.diffHunk}\n${fence}\n\n${opening}${findingLine(thread, botLogin)}${author}'s reply:\n\n${text}\n\nAnswer them directly, in text.`
 }
 
 export function fenceFor(text: string): string {

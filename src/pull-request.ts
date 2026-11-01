@@ -287,7 +287,7 @@ import {
   renderUnpostedNote,
   renderUnpostedSummary,
   reviewEventOf,
-  SUMMARY_MARKER,
+  summaryCommentId,
   withApprovedVerdict,
   type Coverage,
   type RetryOutcome,
@@ -506,7 +506,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       this.registry.install(this.#verifyTools)
       await this.restoreCatalog()
       const models = createModels()
-      models.setProvider(withBudgetRefusal(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit()))))
+      models.setProvider(
+        withBudgetRefusal(withForcedJson(withOutputLimit(this.ai.provider, this.outputLimit())), this.botLogin()),
+      )
       return Harness.open(
         storage,
         {
@@ -792,7 +794,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async #abandonReview(incoming: ReviewIncoming, error: Error, minutes: number): Promise<void> {
-    const text = `GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}); comment \`@andabot review\` to retry.`
+    const text = `GitHub was unreachable for ${minutes} minutes (${failureSummary(error)}); comment \`@${this.botLogin()} review\` to retry.`
     const update = await this.failedRun(text)
     const pending = await this.pendingFor(incoming.deliveryId)
     if (pending?.checkRunId === undefined) {
@@ -1034,7 +1036,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     const note = incompleteNote(missing)
     await this.upsertSummary(
-      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note,
+        closes: closesBlockOf(pr, this.botLogin()),
+      }),
     )
     this.#incompleteDelivery = pending.deliveryId
     await this.endOwnRun(pending.deliveryId, await this.failedRun(note))
@@ -1240,7 +1247,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       seconds: reviewed.seconds,
-      closes: closesBlockOf(pr),
+      closes: closesBlockOf(pr, this.botLogin()),
       headSha: pr.head.sha,
       event: verdict,
       submission: submissionFromRecord(submission, reviewed),
@@ -2229,7 +2236,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (await this.headMoved(pr, run)) return
     const note = `_The review did not complete: ${failure}._`
     await this.upsertSummary(
-      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note,
+        closes: closesBlockOf(pr, this.botLogin()),
+      }),
     )
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
@@ -2261,7 +2273,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const note = renderUnpostedNote(written, retryOutcome(failure, retryRefusal))
     await this.upsertSummary(
-      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note,
+        closes: closesBlockOf(pr, this.botLogin()),
+      }),
     )
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
@@ -2349,7 +2366,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const body = (await github.getIssueComment(key, commentId)).body ?? ""
     const line = await this.shownPausedLine()
-    const edited = line === undefined ? withoutPausedLine(body) : withPausedLine(body, line)
+    const edited =
+      line === undefined ? withoutPausedLine(body, this.botLogin()) : withPausedLine(body, line, this.botLogin())
     if (edited !== body) await github.updateIssueComment(key, commentId, edited)
   }
 
@@ -2357,7 +2375,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const pr = await this.currentPullRequest()
     const note = "_Not reviewed yet._"
     await this.upsertSummary(
-      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+      renderUnpostedSummary({
+        botLogin: this.botLogin(),
+        headSha: pr.head.sha,
+        note,
+        closes: closesBlockOf(pr, this.botLogin()),
+      }),
     )
   }
 
@@ -2647,7 +2670,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         skillsFingerprint: (await bundledSkills()).fingerprint,
         linkedIssues: issues.map(({ number }) => number),
         configError: read.error,
-        closes: closesBlockOf(pr),
+        closes: closesBlockOf(pr, this.botLogin()),
       }),
     )
     log("summary.posted", {
@@ -2742,7 +2765,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const github = await this.github()
     const body = (await github.getIssueComment(key, commentId)).body ?? ""
     const closes = closesOf(pr.body, pr.base.repo.full_name)
-    const edited = withClosesBlock(body, closesBlockFor(pr, closes))
+    const edited = withClosesBlock(body, closesBlockFor(pr, closes, this.botLogin()), this.botLogin())
     if (edited !== undefined) await github.updateIssueComment(key, commentId, edited)
     log("closes.refreshed", { number: pr.number, ...closesFields(closes), changed: edited !== undefined })
   }
@@ -2854,7 +2877,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const key = await this.key()
       const github = await this.github()
       const comment = await github.getIssueComment(key, commentId)
-      const body = withApprovedVerdict(comment.body ?? "", headSha)
+      const body = withApprovedVerdict(comment.body ?? "", headSha, this.botLogin())
       if (body !== undefined) await github.updateIssueComment(key, commentId, body)
     } catch (error) {
       logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })
@@ -2894,7 +2917,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const operationId = `chat:${incoming.deliveryId}`
       const skill = renderActivatedSkill(await loadSkill((await bundledSkills()).source, "answer"))
       const prompt = incoming.thread
-        ? threadAnswerPrompt(incoming.author, text, skill, await this.#threadQuestion(incoming.thread, thread))
+        ? threadAnswerPrompt(
+            incoming.author,
+            text,
+            skill,
+            await this.#threadQuestion(incoming.thread, thread),
+            this.botLogin(),
+          )
         : answerPrompt(incoming.author, text, skill)
       const answering = incoming.thread ? startAnswering(thread, this.botLogin(), incoming.deliveryId) : undefined
       if (answering !== undefined) this.#answers.set(incoming.deliveryId, answering)
@@ -2972,7 +3001,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const detail = Value.Check(StoredDetailText, record.detail) ? record.detail : JSON.stringify(record.detail)
       return detail.slice(0, 800)
     } catch (error) {
-      console.warn("andabot: failure detail unavailable", error)
+      console.warn(`${this.botLogin()}: failure detail unavailable`, error)
       return undefined
     }
   }
@@ -2995,14 +3024,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const ref: RepoRef = key
     const commentId = await this.findSummaryComment()
     const line = await this.shownPausedLine()
-    const shown = line === undefined ? body : withPausedLine(body, line)
+    const shown = line === undefined ? body : withPausedLine(body, line, this.botLogin())
     if (commentId !== undefined) {
       try {
         await github.updateIssueComment(ref, commentId, shown)
         await this.ctx.storage.put("summaryCommentId", commentId)
         return
       } catch (error) {
-        console.warn("andabot: summary comment update failed, creating a new one", error)
+        console.warn(`${this.botLogin()}: summary comment update failed, creating a new one`, error)
       }
     }
     const created = await github.createIssueComment(ref, key.number, shown)
@@ -3014,7 +3043,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (stored !== undefined) return stored
     const key = await this.key()
     const comments = await (await this.github()).listIssueComments(key, key.number)
-    return comments.find((comment) => comment.body?.startsWith(SUMMARY_MARKER))?.id
+    return summaryCommentId(comments, this.botLogin())
   }
 
   private async shownPausedLine(): Promise<string | undefined> {

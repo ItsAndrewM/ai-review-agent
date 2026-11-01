@@ -1,8 +1,9 @@
 import type { AssistantMessage, Context, Message, ToolCall } from "@earendil-works/pi-ai"
 import { errorText } from "../../src/log.ts"
+import { budgetRefusalMarkerOf } from "../../src/names.ts"
 import { BUDGET_REFUSAL } from "../../src/review/budget.ts"
 import { parseWrittenReview, type WrittenReview } from "../../src/review/findings.ts"
-import { BUDGET_REFUSAL_MARKER, resubmitPrompt } from "../../src/review/prompt.ts"
+import { resubmitPrompt } from "../../src/review/prompt.ts"
 import { ReplaySpendCapError } from "../replay/budget.ts"
 import { neuronsOf, type NeuronBudget } from "./budget.ts"
 import type { HostOutcome, PostedReview, ReviewHost } from "./host.ts"
@@ -114,7 +115,7 @@ function failed(response: AssistantMessage): Ending {
 }
 
 function marker(): Message {
-  return { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: Date.now() }
+  return { role: "user", content: budgetRefusalMarkerOf("andabot"), timestamp: Date.now() }
 }
 
 function textOf(response: AssistantMessage): string {

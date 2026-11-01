@@ -10,11 +10,12 @@ import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
 import { withBudgetRefusal } from "../src/models.ts"
+import { budgetRefusalMarkerOf } from "../src/names.ts"
 import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
 import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import { BUDGET_REFUSAL, budgetBlock } from "../src/review/budget.ts"
-import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
+import { SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
 import type { ResolveThreadArgs } from "../src/review/thread-resolution.ts"
 import {
   changedFilesText,
@@ -249,7 +250,7 @@ describe("the budget hooks", () => {
   const toolTask = ToolTask.definition.name
   const generationTask = GenerationTask.definition.name
   const transcript: Message[] = [{ role: "user", content: "Review this pull request.", timestamp: 1 }]
-  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 }
+  const marker = { role: "user", content: budgetRefusalMarkerOf("andabot"), timestamp: 0 }
 
   it("hooks the tool task's beforeTool and the generation task's beforeRequest", () => {
     const extension = createReviewExtension(host)
@@ -332,7 +333,7 @@ describe("the budget hooks", () => {
     const { beforeRequest } = hooksOf(createReviewExtension(refusing), generationTask)
     const marked = await beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })
     const faux = fauxProvider()
-    const answer = await withBudgetRefusal(faux.provider)
+    const answer = await withBudgetRefusal(faux.provider, "andabot")
       .streamSimple(faux.getModel(), normalizeContext({ messages: [...(marked?.messages ?? [])] }))
       .result()
     expect(answer).toMatchObject({ stopReason: "error", errorMessage: BUDGET_REFUSAL })

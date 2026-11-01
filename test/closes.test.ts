@@ -1,16 +1,10 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { PullRequestInfo } from "../src/github/client.ts"
-import {
-  CLOSES_END,
-  CLOSES_START,
-  closesBlock,
-  closesBlockOf,
-  closesOf,
-  refText,
-  withClosesBlock,
-  type Closes,
-} from "../src/review/closes.ts"
+import { closesMarkersOf } from "../src/names.ts"
+import { closesBlock, closesBlockOf, closesOf, refText, withClosesBlock, type Closes } from "../src/review/closes.ts"
+
+const { start: CLOSES_START, end: CLOSES_END } = closesMarkersOf("andabot")
 
 const REPO = "ItsAndrewM/ai-review-agent"
 
@@ -134,7 +128,7 @@ describe("closesOf", () => {
 
 describe("closesBlock", () => {
   const block = (body: string, base = "main", defaultBranch: string | undefined = "main"): string[] =>
-    closesBlock(closesOf(body, REPO), base, defaultBranch)
+    closesBlock(closesOf(body, REPO), base, defaultBranch, "andabot")
 
   it("wraps the close line in the markers, joining the issues with commas and a final and", () => {
     expect(block("Closes #80")).toEqual([
@@ -211,7 +205,7 @@ describe("closesBlock", () => {
   })
 
   it("takes a base with no known default branch as the default", () => {
-    expect(closesBlock(closesOf("Closes #80", REPO), "staging", undefined)[1]).toBe(
+    expect(closesBlock(closesOf("Closes #80", REPO), "staging", undefined, "andabot")[1]).toBe(
       "<sub>Merging closes #80 (from the description).</sub>",
     )
   })
@@ -221,7 +215,7 @@ describe("withClosesBlock", () => {
   const comment = ["<!-- andabot:summary -->", "body", CLOSES_START, "<sub>old</sub>", CLOSES_END, "footer"].join("\n")
 
   it("replaces only the text between the markers", () => {
-    expect(withClosesBlock(comment, [CLOSES_START, "<sub>new</sub>", CLOSES_END])).toBe(
+    expect(withClosesBlock(comment, [CLOSES_START, "<sub>new</sub>", CLOSES_END], "andabot")).toBe(
       ["<!-- andabot:summary -->", "body", CLOSES_START, "<sub>new</sub>", CLOSES_END, "footer"].join("\n"),
     )
   })
@@ -230,14 +224,34 @@ describe("withClosesBlock", () => {
     const echoed = [CLOSES_START, "summary text", CLOSES_END, "body", CLOSES_START, "<sub>old</sub>", CLOSES_END].join(
       "\n",
     )
-    expect(withClosesBlock(echoed, [CLOSES_START, "<sub>new</sub>", CLOSES_END])).toBe(
+    expect(withClosesBlock(echoed, [CLOSES_START, "<sub>new</sub>", CLOSES_END], "andabot")).toBe(
       [CLOSES_START, "summary text", CLOSES_END, "body", CLOSES_START, "<sub>new</sub>", CLOSES_END].join("\n"),
     )
   })
 
   it("answers nothing for a comment without the markers, or when the block is unchanged", () => {
-    expect(withClosesBlock("<!-- andabot:summary -->\nolder comment", [CLOSES_START, CLOSES_END])).toBeUndefined()
-    expect(withClosesBlock(comment, [CLOSES_START, "<sub>old</sub>", CLOSES_END])).toBeUndefined()
+    expect(
+      withClosesBlock("<!-- andabot:summary -->\nolder comment", [CLOSES_START, CLOSES_END], "andabot"),
+    ).toBeUndefined()
+    expect(withClosesBlock(comment, [CLOSES_START, "<sub>old</sub>", CLOSES_END], "andabot")).toBeUndefined()
+  })
+})
+
+describe("closes markers across deploys", () => {
+  it("andabot's block keeps the literal markers it has always posted", () => {
+    expect(closesBlock(closesOf("Part of #6.", REPO), "main", "main", "andabot")).toEqual([
+      "<!-- andabot:closes -->",
+      "<!-- andabot:closes-end -->",
+    ])
+  })
+
+  it("leaves another deploy's block alone, even when its login starts with this one's", () => {
+    const staging = closesMarkersOf("andabot-staging")
+    const comment = ["<!-- andabot-staging:summary -->", staging.start, "<sub>old</sub>", staging.end].join("\n")
+    expect(withClosesBlock(comment, [CLOSES_START, "<sub>new</sub>", CLOSES_END], "andabot")).toBeUndefined()
+    expect(withClosesBlock(comment, [staging.start, "<sub>new</sub>", staging.end], "andabot-staging")).toContain(
+      "<sub>new</sub>",
+    )
   })
 })
 
@@ -259,10 +273,12 @@ describe("closesBlockOf", () => {
   })
 
   it("reads the description, the base and the repository's default branch from the pull request", () => {
-    expect(closesBlockOf(pr("Closes #80", "main", "main"))[1]).toBe(
+    expect(closesBlockOf(pr("Closes #80", "main", "main"), "andabot")[1]).toBe(
       "<sub>Merging closes #80 (from the description).</sub>",
     )
-    expect(closesBlockOf(pr("Closes #80", "staging", "main"))[1]).toContain("Merging into `staging` closes no issue")
+    expect(closesBlockOf(pr("Closes #80", "staging", "main"), "andabot")[1]).toContain(
+      "Merging into `staging` closes no issue",
+    )
     expect(Value.Check(PullRequestInfo, pr("Closes #80", "main", "main"))).toBe(true)
     expect(Value.Check(PullRequestInfo, pr(null, "main"))).toBe(true)
   })

@@ -335,7 +335,7 @@ async function measure(set: RecallSet, options: Options, account: string, token:
     token,
     budget,
     maxTokens,
-    wrap: (provider) => withBudgetRefusal(withForcedJson(withOutputLimit(provider, maxTokens))),
+    wrap: (provider) => withBudgetRefusal(withForcedJson(withOutputLimit(provider, maxTokens)), BOT_LOGIN),
   })
   const skill = await reviewSkill()
   const recorded = await recordedRuns(set, options.resume, options.runs)

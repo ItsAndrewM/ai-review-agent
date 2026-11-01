@@ -1,6 +1,7 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { commentableLines, type ChangedFile } from "../src/github/diff.ts"
+import { summaryMarkerOf } from "../src/names.ts"
 import type { BasisContext } from "../src/review/basis.ts"
 import { budgetNote } from "../src/review/budget.ts"
 import type { ReviewSpend } from "../src/review/cost.ts"
@@ -29,7 +30,7 @@ import {
   renderUnpostedNote,
   renderUnpostedSummary,
   reviewEventOf,
-  SUMMARY_MARKER,
+  summaryCommentId,
   withApprovedVerdict,
   MOST_CHECK_TAIL_BLOCKS,
   VERDICT_LABEL,
@@ -1269,7 +1270,7 @@ describe("renderSummaryComment", () => {
 
   it("starts with the marker and shows counts, summary and walkthrough", () => {
     const text = summaryWith({ model: "@cf/openai/gpt-oss-120b", skillsFingerprint: "89abcdef01234567" })
-    expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
+    expect(text.startsWith(summaryMarkerOf("andabot"))).toBe(true)
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
     expect(text).toContain("<sub>1 finding was dropped because it failed the host's checks, even after a retry.</sub>")
@@ -1727,7 +1728,7 @@ describe("withApprovedVerdict", () => {
   })
 
   it("rewrites a request for changes as the approval of its head and keeps the rest of the line", () => {
-    const rewritten = withApprovedVerdict(requested, "def5678901")
+    const rewritten = withApprovedVerdict(requested, "def5678901", "andabot")
     expect(rewritten).toContain(
       "`0123456` · **Verdict:** Approved at `def5678` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions",
     )
@@ -1735,7 +1736,11 @@ describe("withApprovedVerdict", () => {
   })
 
   it("replaces an earlier approval's verdict", () => {
-    const twice = withApprovedVerdict(withApprovedVerdict(requested, "def5678901") ?? "", "fedcba9876")
+    const twice = withApprovedVerdict(
+      withApprovedVerdict(requested, "def5678901", "andabot") ?? "",
+      "fedcba9876",
+      "andabot",
+    )
     expect(twice).toContain("**Verdict:** Approved at `fedcba9` · 🔴 1 blocking")
     expect(twice).not.toContain("def5678")
   })
@@ -1746,11 +1751,36 @@ describe("withApprovedVerdict", () => {
       headSha: "0123456789abcdef",
       note: "_The review did not complete._",
     })
-    expect(withApprovedVerdict(unposted, "def5678901")).toBeUndefined()
+    expect(withApprovedVerdict(unposted, "def5678901", "andabot")).toBeUndefined()
   })
 
   it("leaves a comment that isn't the summary alone", () => {
-    expect(withApprovedVerdict("**Verdict:** Changes requested", "def5678901")).toBeUndefined()
+    expect(withApprovedVerdict("**Verdict:** Changes requested", "def5678901", "andabot")).toBeUndefined()
+  })
+
+  it("starts with the literal marker andabot has always posted, so its earlier summaries stay found", () => {
+    expect(requested.startsWith("<!-- andabot:summary -->\n")).toBe(true)
+  })
+
+  it("leaves another deploy's summary alone, even when its login starts with this one's", () => {
+    const staging = requested.replace("<!-- andabot:summary -->", "<!-- andabot-staging:summary -->")
+    expect(withApprovedVerdict(staging, "def5678901", "andabot")).toBeUndefined()
+    expect(withApprovedVerdict(staging, "def5678901", "andabot-staging")).toContain("Approved at `def5678`")
+  })
+})
+
+describe("summaryCommentId", () => {
+  const comments = [
+    { id: 1, body: "a question" },
+    { id: 2, body: "<!-- andabot-staging:summary -->\n## andabot-staging review" },
+    { id: 3, body: "<!-- andabot:summary -->\n## andabot review" },
+    { id: 4 },
+  ]
+
+  it("finds this deploy's summary comment and not another deploy's", () => {
+    expect(summaryCommentId(comments, "andabot")).toBe(3)
+    expect(summaryCommentId(comments, "andabot-staging")).toBe(2)
+    expect(summaryCommentId(comments, "gamesheetbot")).toBeUndefined()
   })
 })
 
@@ -1777,7 +1807,7 @@ describe("renderUnpostedSummary", () => {
       headSha: "0123456789abcdef",
       note: "_The review did not complete: model_error._",
     })
-    expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
+    expect(text.startsWith(summaryMarkerOf("andabot"))).toBe(true)
     expect(text).toContain("`0123456`")
     expect(text).toContain("_The review did not complete: model_error._")
   })

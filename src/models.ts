@@ -10,9 +10,10 @@ import {
 import { clampMaxTokensToContext } from "@earendil-works/pi-ai/api/simple-options"
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
+import { budgetRefusalMarkerOf } from "./names.ts"
 import { BUDGET_REFUSAL } from "./review/budget.ts"
 import { ReviewSubmission, SummarySubmission } from "./review/findings.ts"
-import { BUDGET_REFUSAL_MARKER, isResubmitPrompt, isSummaryPrompt } from "./review/prompt.ts"
+import { isResubmitPrompt, isSummaryPrompt } from "./review/prompt.ts"
 
 const DEFAULT_OUTPUT_LIMIT = 16_000
 
@@ -63,17 +64,18 @@ function latestMessage(context: TranscriptContext) {
   return context.messages.filter((message) => message.role !== "system").at(-1)
 }
 
-export function withBudgetRefusal(provider: Provider): Provider {
+export function withBudgetRefusal(provider: Provider, botLogin: string): Provider {
+  const marker = budgetRefusalMarkerOf(botLogin)
   return {
     ...provider,
     streamSimple: (model, context, options) =>
-      isMarkedForRefusal(context) ? refusedStream(model) : provider.streamSimple(model, context, options),
+      isMarkedForRefusal(context, marker) ? refusedStream(model) : provider.streamSimple(model, context, options),
   }
 }
 
-function isMarkedForRefusal(context: TranscriptContext): boolean {
+function isMarkedForRefusal(context: TranscriptContext, marker: string): boolean {
   const latest = latestMessage(context)
-  return latest?.role === "user" && userText(latest) === BUDGET_REFUSAL_MARKER
+  return latest?.role === "user" && userText(latest) === marker
 }
 
 type RefusedModel = Pick<Model<Api>, "api" | "id" | "provider">

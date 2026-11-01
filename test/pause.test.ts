@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest"
+import { summaryMarkerOf } from "../src/names.ts"
 import {
   evaluatesAfterCatchUp,
   headReviewed,
@@ -11,9 +12,15 @@ import {
   withoutPausedLine,
   withPausedLine,
 } from "../src/review/pause.ts"
-import { SUMMARY_MARKER } from "../src/review/render.ts"
 
-const summary = [SUMMARY_MARKER, "## andabot review", "", "**Head:** `abc1234`", "", "_Not reviewed yet._"].join("\n")
+const summary = [
+  summaryMarkerOf("andabot"),
+  "## andabot review",
+  "",
+  "**Head:** `abc1234`",
+  "",
+  "_Not reviewed yet._",
+].join("\n")
 
 const line = pausedLine("andrew", "andabot")
 
@@ -38,37 +45,48 @@ describe("pausedLine", () => {
 
 describe("withPausedLine", () => {
   it("puts the paused line under the summary's header", () => {
-    expect(withPausedLine(summary, line)).toBe(
-      [SUMMARY_MARKER, "## andabot review", "", line, "", "**Head:** `abc1234`", "", "_Not reviewed yet._"].join("\n"),
+    expect(withPausedLine(summary, line, "andabot")).toBe(
+      [
+        summaryMarkerOf("andabot"),
+        "## andabot review",
+        "",
+        line,
+        "",
+        "**Head:** `abc1234`",
+        "",
+        "_Not reviewed yet._",
+      ].join("\n"),
     )
   })
 
   it("replaces an earlier paused line instead of adding a second", () => {
     const bea = pausedLine("bea", "andabot")
-    const body = withPausedLine(withPausedLine(summary, line), bea)
+    const body = withPausedLine(withPausedLine(summary, line, "andabot"), bea, "andabot")
     expect(body.match(/@bea/g)).toHaveLength(1)
     expect(body).not.toContain("@andrew")
-    expect(body).toBe(withPausedLine(summary, bea))
+    expect(body).toBe(withPausedLine(summary, bea, "andabot"))
   })
 
   it("leaves a comment that isn't the summary alone", () => {
-    expect(withPausedLine("hello", line)).toBe("hello")
+    expect(withPausedLine("hello", line, "andabot")).toBe("hello")
   })
 
   it("puts the paused line under the marker when the summary has no header", () => {
-    expect(withPausedLine(SUMMARY_MARKER, line)).toBe([SUMMARY_MARKER, "", line].join("\n"))
+    expect(withPausedLine(summaryMarkerOf("andabot"), line, "andabot")).toBe(
+      [summaryMarkerOf("andabot"), "", line].join("\n"),
+    )
   })
 })
 
 describe("withoutPausedLine", () => {
   it("takes the paused line out and gives the summary back as it was", () => {
-    expect(withoutPausedLine(withPausedLine(summary, line))).toBe(summary)
-    expect(withoutPausedLine(summary)).toBe(summary)
+    expect(withoutPausedLine(withPausedLine(summary, line, "andabot"), "andabot")).toBe(summary)
+    expect(withoutPausedLine(summary, "andabot")).toBe(summary)
   })
 
   it("takes out every paused line it finds, each with the blank line before it", () => {
     const twice = [
-      SUMMARY_MARKER,
+      summaryMarkerOf("andabot"),
       "## andabot review",
       "",
       line,
@@ -79,7 +97,7 @@ describe("withoutPausedLine", () => {
       "",
       "_Not reviewed yet._",
     ].join("\n")
-    expect(withoutPausedLine(twice)).toBe(summary)
+    expect(withoutPausedLine(twice, "andabot")).toBe(summary)
   })
 
   const quotingLines = [
@@ -89,33 +107,49 @@ describe("withoutPausedLine", () => {
     "| --- | --- |",
     "| `src/review/pause.ts` | adds `<!-- andabot:paused -->` |",
   ]
-  const quoting = [SUMMARY_MARKER, "## andabot review", "", "**Head:** `abc1234`", "", ...quotingLines].join("\n")
+  const quoting = [
+    summaryMarkerOf("andabot"),
+    "## andabot review",
+    "",
+    "**Head:** `abc1234`",
+    "",
+    ...quotingLines,
+  ].join("\n")
 
   it("keeps a summary line that quotes the paused marker", () => {
-    expect(withoutPausedLine(quoting)).toBe(quoting)
-    expect(withPausedLine(quoting, line)).toBe(
-      [SUMMARY_MARKER, "## andabot review", "", line, "", "**Head:** `abc1234`", "", ...quotingLines].join("\n"),
+    expect(withoutPausedLine(quoting, "andabot")).toBe(quoting)
+    expect(withPausedLine(quoting, line, "andabot")).toBe(
+      [summaryMarkerOf("andabot"), "## andabot review", "", line, "", "**Head:** `abc1234`", "", ...quotingLines].join(
+        "\n",
+      ),
     )
-    expect(withoutPausedLine(withPausedLine(quoting, line))).toBe(quoting)
+    expect(withoutPausedLine(withPausedLine(quoting, line, "andabot"), "andabot")).toBe(quoting)
   })
 
   it("takes out only a line that opens like the paused line and ends with its marker", () => {
     const body = [
-      SUMMARY_MARKER,
+      summaryMarkerOf("andabot"),
       "## andabot review",
       "",
       `${line} Pushes stay paused.`,
       "",
       "Pushes are skipped <!-- andabot:paused -->",
     ].join("\n")
-    expect(withoutPausedLine(body)).toBe(body)
-    expect(withoutPausedLine(withPausedLine(body, line))).toBe(body)
+    expect(withoutPausedLine(body, "andabot")).toBe(body)
+    expect(withoutPausedLine(withPausedLine(body, line, "andabot"), "andabot")).toBe(body)
+  })
+
+  it("leaves another deploy's paused line alone, even when its login starts with this one's", () => {
+    const staging = withPausedLine(summary, pausedLine("andrew", "andabot-staging"), "andabot")
+    expect(staging).toContain("<!-- andabot-staging:paused -->")
+    expect(withoutPausedLine(staging, "andabot")).toBe(staging)
+    expect(withoutPausedLine(staging, "andabot-staging")).toBe(summary)
   })
 
   it("finds its paused line through whitespace after the marker", () => {
-    const padded = withPausedLine(summary, `${line}  `)
-    expect(withoutPausedLine(padded)).toBe(summary)
-    expect(withPausedLine(padded, line)).toBe(withPausedLine(summary, line))
+    const padded = withPausedLine(summary, `${line}  `, "andabot")
+    expect(withoutPausedLine(padded, "andabot")).toBe(summary)
+    expect(withPausedLine(padded, line, "andabot")).toBe(withPausedLine(summary, line, "andabot"))
   })
 })
 

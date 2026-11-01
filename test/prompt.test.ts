@@ -648,7 +648,7 @@ describe("threadAnswerPrompt", () => {
   }
 
   it("puts the thread's file, line, hunk and opening comment before the question", () => {
-    const text = threadAnswerPrompt("andrew", "why?", skill, thread)
+    const text = threadAnswerPrompt("andrew", "why?", skill, thread, "andabot")
     expect(text.startsWith('<skill_content name="answer"')).toBe(true)
     expect(text).toContain(
       "andrew replies in a review thread on `src/a.ts` line 12:\n\n```diff\n@@ -10,3 +10,3 @@\n-a\n+b\n```",
@@ -659,33 +659,42 @@ describe("threadAnswerPrompt", () => {
 
   it("names the finding's severity and title and the head's sha when the finding is known, and neither when it isn't", () => {
     const known = { ...thread, severity: "blocking" as const, title: "The caller drops it", headSha: "abc1234def" }
-    const text = threadAnswerPrompt("andrew", "fixed in abc1234", skill, known)
+    const text = threadAnswerPrompt("andrew", "fixed in abc1234", skill, known, "andabot")
     expect(text).toContain(
       'The thread is andabot\'s blocking finding "The caller drops it"; the head is now `abc1234`.',
     )
-    const unknown = threadAnswerPrompt("andrew", "why?", skill, {
-      ...thread,
-      severity: undefined,
-      title: undefined,
-      headSha: "abc1234def",
-    })
+    expect(threadAnswerPrompt("andrew", "fixed", skill, known, "andabot-staging")).toContain(
+      "The thread is andabot-staging's blocking finding",
+    )
+    const unknown = threadAnswerPrompt(
+      "andrew",
+      "why?",
+      skill,
+      {
+        ...thread,
+        severity: undefined,
+        title: undefined,
+        headSha: "abc1234def",
+      },
+      "andabot",
+    )
     expect(unknown).not.toContain("the head is now")
   })
 
   it("calls a thread with no line outdated", () => {
-    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, line: null })).toContain(
+    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, line: null }, "andabot")).toContain(
       "on `src/a.ts`, on a line the latest push no longer shows",
     )
   })
 
   it("leaves the opening comment out when the thread couldn't be read", () => {
-    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, opening: undefined })).not.toContain(
+    expect(threadAnswerPrompt("andrew", "why?", skill, { ...thread, opening: undefined }, "andabot")).not.toContain(
       "The thread opens with this comment",
     )
   })
 
   it("fences a hunk that itself holds three backticks with four", () => {
-    const text = threadAnswerPrompt("andrew", "why?", skill, { ...thread, diffHunk: "@@ -1 +1 @@\n+```ts" })
+    const text = threadAnswerPrompt("andrew", "why?", skill, { ...thread, diffHunk: "@@ -1 +1 @@\n+```ts" }, "andabot")
     expect(text).toContain("````diff\n@@ -1 +1 @@\n+```ts\n````")
   })
 })

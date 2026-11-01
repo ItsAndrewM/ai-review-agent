@@ -12,11 +12,12 @@ import {
 import type { Static } from "typebox"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
+import { budgetRefusalMarkerOf } from "../names.ts"
 import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../repository/search.ts"
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
 import { issueText } from "./linked-issues.ts"
-import { BUDGET_REFUSAL_MARKER, numberedLine, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
+import { numberedLine, SUBMIT_REVIEW_TOOL, systemPrompt } from "./prompt.ts"
 import { RESOLVE_THREAD_TOOL, ResolveThreadParameters, type ResolveThreadArgs } from "./thread-resolution.ts"
 
 export interface SubmitOutcome {
@@ -223,7 +224,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
       }),
       hook(GenerationTask, {
         beforeRequest: async (request, api) =>
-          markedOrNothing(request.messages, await host.requestBudget(api.conversationId)),
+          markedOrNothing(request.messages, await host.requestBudget(api.conversationId), host.botLogin()),
       }),
     ],
   })
@@ -233,9 +234,9 @@ function blockOrNothing(message: string | undefined) {
   return message === undefined ? undefined : { block: message }
 }
 
-function markedOrNothing(messages: readonly Message[], decision: RequestBudget) {
+function markedOrNothing(messages: readonly Message[], decision: RequestBudget, botLogin: string) {
   if (decision === "allow") return undefined
-  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 } satisfies Message
+  const marker = { role: "user", content: budgetRefusalMarkerOf(botLogin), timestamp: 0 } satisfies Message
   return { messages: [...messages, marker] }
 }
 
