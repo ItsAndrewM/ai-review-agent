@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox"
+import type { PullRequestInfo } from "../github/client.ts"
 import { SweepFacts, type ReviewIncoming } from "./delivery.ts"
 import type { PendingReview } from "./flight.ts"
 
@@ -87,4 +88,8 @@ export function restartedPending(previous: PendingReview, headSha: string, now: 
 
 export function decidedRecord(headSha: string, reason: DecidedReason, facts: SweepFacts | undefined): StoredDecided {
   return facts === undefined ? { headSha, reason } : { headSha, reason, facts }
+}
+
+export function factsOf(pr: Pick<PullRequestInfo, "title" | "draft" | "base">): SweepFacts {
+  return { draft: pr.draft ?? false, baseRef: pr.base.ref, title: pr.title }
 }

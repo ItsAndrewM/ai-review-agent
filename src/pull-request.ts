@@ -172,6 +172,7 @@ import {
   StoredDelivery,
   type DeliveryHost,
   type Incoming,
+  type SweepFacts,
   type ThreadContext,
 } from "./review/delivery.ts"
 import { describeFailure } from "./review/failure.ts"
@@ -309,6 +310,7 @@ import {
   type SummaryOutcome,
   type WrittenSummary,
 } from "./review/summary.ts"
+import { decidedRecord, factsOf, type DecidedReason, type StoredDecided } from "./review/sweep-decision.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import {
   answeringFor,
@@ -809,6 +811,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const created = await github.createCheckRun(key, start)
       await github.updateCheckRun(key, created.id, update)
     }
+    await this.recordDecided(incoming.headSha, "failed", undefined)
     await this.endOwnRun(incoming.deliveryId, update)
   }
 
@@ -1438,7 +1441,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
       return "in_progress"
     }
-    if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
+    if (incoming.full) await this.ctx.storage.delete([`posted:${pr.head.sha}`, "decided"])
     const settings = {
       staleBuild,
       callerBuild: callerVersion?.id,
@@ -1462,6 +1465,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       return undefined
     }
     const started = Date.now()
+    await this.ctx.storage.delete("decided")
     const run = {
       operationId: `review:${incoming.deliveryId}`,
       deliveryId: incoming.deliveryId,
@@ -1515,6 +1519,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const reason = decision.review ? await this.filesSkip(read.config) : decision.reason
     if (reason !== undefined) {
       log("review.skip", { reason, head: shortSha(pr.head.sha), number: pr.number, config: configStatus(read) })
+      await this.recordDecided(pr.head.sha, reason, factsOf(pr))
     }
     return reason
   }
@@ -1888,6 +1893,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.releasePending(run.deliveryId)
     } catch (error) {
       if (afterReviewThrow(errorOf(error)) === "release") {
+        await this.recordDecided(pr.head.sha, "failed", factsOf(pr))
         await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       }
       throw error
@@ -2000,6 +2006,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const reviewed = await this.readReviewed()
     if (reviewed)
       await this.ctx.storage.put<ReviewedRecord>("reviewed", { ...reviewed, headSha: pr.head.sha, at: Date.now() })
+    await this.recordDecided(pr.head.sha, "unchanged", factsOf(pr))
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
@@ -2231,6 +2238,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.upsertSummary(
       renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
     )
+    await this.recordDecided(pr.head.sha, "failed", factsOf(pr))
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -2263,6 +2271,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.upsertSummary(
       renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
     )
+    await this.recordDecided(pr.head.sha, "unposted", factsOf(pr))
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -3114,6 +3123,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async ownsPending(deliveryId: string): Promise<boolean> {
     return (await this.pendingFor(deliveryId)) !== undefined
+  }
+
+  private async recordDecided(headSha: string, reason: DecidedReason, facts: SweepFacts | undefined): Promise<void> {
+    await this.ctx.storage.put<StoredDecided>("decided", decidedRecord(headSha, reason, facts))
   }
 
   private async releasePending(deliveryId: string): Promise<void> {

@@ -4,6 +4,7 @@ import type { PendingReview } from "../src/review/flight.ts"
 import {
   decidedRecord,
   decideSweep,
+  factsOf,
   restartedPending,
   STUCK_MS,
   StoredDecided,
@@ -146,5 +147,22 @@ describe("StoredDecided", () => {
 
   it("refuses a reason it does not know", () => {
     expect(Value.Check(StoredDecided, { headSha: "abc", reason: "bored" })).toBe(false)
+  })
+})
+
+describe("factsOf", () => {
+  const pr = {
+    title: "Add the sweep",
+    draft: true,
+    base: { ref: "main", sha: "base", repo: { full_name: "o/r" } },
+  }
+
+  it("reads the facts a sweep lists off a pull request GitHub sent", () => {
+    expect(factsOf(pr)).toEqual({ draft: true, baseRef: "main", title: "Add the sweep" })
+  })
+
+  it("reads a missing draft as not a draft, as the listing does", () => {
+    const { draft: _draft, ...undrafted } = pr
+    expect(factsOf(undrafted).draft).toBe(false)
   })
 })
