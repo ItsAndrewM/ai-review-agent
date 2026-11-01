@@ -54,6 +54,7 @@ export const PostedReview = Type.Object({
   unverified: Type.Optional(Type.Boolean()),
   sandboxSeconds: Type.Optional(Type.Integer()),
   checks: Type.Optional(Type.Array(CheckRecord)),
+  checkRunId: Type.Optional(Type.Integer()),
 })
 
 export type PostedReview = Static<typeof PostedReview>

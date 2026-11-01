@@ -109,6 +109,7 @@ import type { SnapshotFiles } from "./repository/snapshot.ts"
 import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   approvalRecord,
+  approvedPostedIfNeeded,
   checksState,
   decideApproval,
   evaluatesAfterReview,
@@ -143,6 +144,7 @@ import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
   postedCheckRun,
+  approvedCheckRun,
   postedEarlierCheckRun,
   replacedCheckRun,
   startedCheckRun,
@@ -150,6 +152,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
+import { plural, were } from "./review/copy.ts"
 import {
   neuronsSince,
   reviewSpend,
@@ -186,6 +189,7 @@ import {
 import {
   afterReviewThrow,
   decideFlight,
+  elapsedSeconds,
   resumedPending,
   migratePending,
   ownsOperation,
@@ -216,6 +220,8 @@ import {
   pathFiltersSkip,
   pathsChangedSince,
   pathsNeedingRows,
+  threadLink,
+  changesSinceMissing,
   planThreads,
   promptFiles,
   resolveThreads,
@@ -296,6 +302,7 @@ import {
   recordedVerdict,
   Summarizing,
   summarizedRecord,
+  unrecordedSummary,
   summaryLive,
   summaryReply,
   type SummaryOutcome,
@@ -407,9 +414,11 @@ interface Attribution {
 
 interface CheckedSubmission {
   scope: ReviewScope
+  files: ChangedFile[]
   validated: ValidatedReview
   scoped: ScopedReview
   missing: string[]
+  changesSinceMissing: boolean
   reasons: CheckedReasons
 }
 
@@ -453,6 +462,7 @@ interface ReviewRun {
   operationId: string
   deliveryId: string
   started: number
+  openedAt: number
   checkRunId?: number
   staleBuild: boolean
   callerBuild: string | undefined
@@ -939,10 +949,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const checked = await this.checkSubmission(submission, pr, pending)
     const returned = [...checked.scoped.rejected, ...checked.scoped.duplicates]
     const reasonsRejected = checked.reasons.rejected
-    const problems = returned.length > 0 || checked.missing.length > 0 || reasonsRejected.length > 0
+    const problems =
+      returned.length > 0 || checked.missing.length > 0 || reasonsRejected.length > 0 || checked.changesSinceMissing
     if (pending.rejectionsReturned !== true && problems) {
       await this.markRejectionsReturned(pending.deliveryId)
-      return { text: problemsText(returned, checked.missing, reasonsRejected), done: false }
+      return {
+        text: problemsText(returned, checked.missing, reasonsRejected, checked.changesSinceMissing),
+        done: false,
+      }
     }
     if (checked.missing.length > 0) return this.endIncomplete(pr, pending, checked.missing)
     return this.verifyAndPublish(pr, pending, submission, checked)
@@ -974,6 +988,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
+    const missingChangesSince = changesSinceMissing(submission, scope)
     const reasons = checkReasons(submission, {
       linkedIssues: pending.linkedIssues ?? [],
       title: pr.title,
@@ -989,11 +1004,20 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       rejected: scoped.rejected.length,
       duplicates: scoped.duplicates.length,
       missingRows: missing.length,
+      changesSinceMissing: missingChangesSince,
       reasons: reasons.accepted.length,
       reasonsRejected: reasons.rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    return { scope, validated, scoped, missing, reasons }
+    return {
+      scope,
+      files,
+      validated,
+      scoped,
+      missing,
+      changesSinceMissing: missingChangesSince,
+      reasons,
+    }
   }
 
   private async endIncomplete(
@@ -1205,9 +1229,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       submission,
       resolved: resolved.length,
       omitted: omittedIn(reasons),
+      files: publication.checked.files,
+      linkOf: (thread) => threadLink(pr.base.repo.full_name, pr.number, thread),
+      seconds: elapsedSeconds(openedAt(pending), Date.now()),
     })
+    this.noteChangesSinceMissing(pr, publication.checked.changesSinceMissing)
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
+      seconds: reviewed.seconds,
       headSha: pr.head.sha,
       event: verdict,
       submission: submissionFromRecord(submission, reviewed),
@@ -1264,8 +1293,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       unverified,
       ...attribution,
     }
-    if (sandboxSeconds !== undefined) posted.sandboxSeconds = sandboxSeconds
-    if (checks !== undefined) posted.checks = [...checks.runs]
+    withOptionalPostedFields(posted, sandboxSeconds, checks, pending.checkRunId)
     await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, posted)
     await this.endOwnRun(
       pending.deliveryId,
@@ -1276,10 +1304,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const dropped =
       scoped.rejected.length > 0
-        ? ` ${scoped.rejected.length} finding(s) that still failed the checks were dropped.`
+        ? ` ${plural(scoped.rejected.length, "finding")} that still failed the checks ${were(scoped.rejected.length)} dropped.`
         : ""
     return {
-      text: `Posted review ${review.id} (${event}) with ${scoped.accepted.length} inline comment(s).${dropped}`,
+      text: `Posted review ${review.id} (${event}) with ${plural(scoped.accepted.length, "inline comment")}.${dropped}`,
       done: true,
     }
   }
@@ -1420,16 +1448,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         operationId: previous.operationId,
         deliveryId: previous.deliveryId,
         started: previous.started,
+        openedAt: openedAt(previous),
         ...settings,
       }
       if (previous.checkRunId !== undefined) resumed.checkRunId = previous.checkRunId
       await this.runReview(pr, incoming, resumed)
       return undefined
     }
+    const started = Date.now()
     const run = {
       operationId: `review:${incoming.deliveryId}`,
       deliveryId: incoming.deliveryId,
-      started: Date.now(),
+      started,
+      openedAt: started,
       ...settings,
     }
     await this.ctx.storage.put<PendingReview>("pending", {
@@ -1437,6 +1468,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       deliveryId: incoming.deliveryId,
       operationId: run.operationId,
       started: run.started,
+      openedAt: run.openedAt,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
       ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
@@ -1840,7 +1872,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           outcome: "posted",
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
-          ms: Date.now() - run.started,
+          seconds: elapsedSeconds(run.openedAt, Date.now()),
           ...this.#runs.usage(),
           ...sandboxFields(await this.#sandbox.seconds()),
           checks: (await this.#sandbox.checks()).size,
@@ -2622,7 +2654,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     answer: SummarySubmissionInput,
     files: readonly ChangedFile[],
   ): Promise<SummarySubmissionInput> {
-    if (reviewed === undefined) return answer
+    if (reviewed === undefined) return unrecordedSummary(answer, files)
     const record = summarizedRecord(reviewed, answer, files)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", record)
     return {
@@ -2679,6 +2711,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const pr = await this.currentPullRequest()
       const decision = decideApproval(await this.approvalState(pr, resolved))
       const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
+      if (decision.kind === "wait" && decision.reason === "approved") await this.reconcileApproval()
       if (decision.kind === "wait") return waited(context, decision.reason)
       return await this.approve(pr.head.sha, context)
     } catch (error) {
@@ -2757,8 +2790,34 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
     )
     await this.rewriteSummaryVerdict(head)
+    await this.markPostedApproved(head)
     log("approval.posted", { ...context, review: review.id })
     return { kind: "approved", head }
+  }
+
+  private async reconcileApproval(): Promise<void> {
+    const last = await this.readLastReview()
+    if (last?.event === "APPROVE") await this.markPostedApproved(last.headSha)
+  }
+
+  private async markPostedApproved(head: string): Promise<void> {
+    const stored = await this.ctx.storage.get(`posted:${head}`)
+    if (!Value.Check(PostedReview, stored)) return
+    const posted = approvedPostedIfNeeded(stored)
+    if (posted === undefined) return
+    await this.ctx.storage.put<PostedReview>(`posted:${head}`, posted)
+    if (posted.checkRunId === undefined) return
+    try {
+      const key = await this.key()
+      const update = approvedCheckRun(posted, await this.summaryCommentUrl(), Date.now())
+      await (await this.github()).updateCheckRun(key, posted.checkRunId, update)
+    } catch (error) {
+      logError("approval.check_run_failed", {
+        head: shortSha(head),
+        checkRunId: posted.checkRunId,
+        error: errorText(error),
+      })
+    }
   }
 
   private async rewriteSummaryVerdict(headSha: string): Promise<void> {
@@ -2985,6 +3044,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return failedCheckRun(note, await this.summaryCommentUrl(), Date.now())
   }
 
+  private noteChangesSinceMissing(pr: PullRequestInfo, missing: boolean): void {
+    if (missing) log("review.changes_since_missing", { number: pr.number, head: shortSha(pr.head.sha) })
+  }
+
   private async completeAsPostedEarlier(deliveryId: string, posted: PostedReview): Promise<void> {
     await this.endOwnRun(deliveryId, postedEarlierCheckRun(posted, await this.summaryCommentUrl(), Date.now()))
   }
@@ -3060,6 +3123,21 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function withOptionalPostedFields(
+  posted: PostedReview,
+  sandboxSeconds: number | undefined,
+  checks: ChecksDisplay | undefined,
+  checkRunId: number | undefined,
+): void {
+  if (sandboxSeconds !== undefined) posted.sandboxSeconds = sandboxSeconds
+  if (checks !== undefined) posted.checks = [...checks.runs]
+  if (checkRunId !== undefined) posted.checkRunId = checkRunId
+}
+
+function openedAt(pending: PendingReview): number {
+  return pending.openedAt ?? pending.started
+}
 
 function docsSearchOf(kind: SearchAccess["kind"]): DocsSearch {
   if (kind === "ready") return "ready"

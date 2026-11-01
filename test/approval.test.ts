@@ -1,8 +1,11 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { CheckRunSummary } from "../src/github/client.ts"
+import { PostedReview } from "../src/records.ts"
 import { DEFAULT_CONFIG, parseConfig, type ConfigRead } from "../src/repository/config.ts"
 import {
+  approvedPosted,
+  approvedPostedIfNeeded,
   approvalRecord,
   awaitsApproval,
   checksState,
@@ -49,6 +52,20 @@ function outcome(state: ApprovalState): string {
   const decision = decideApproval(state)
   return decision.kind === "wait" ? decision.reason : decision.kind
 }
+
+describe("approvedPosted", () => {
+  it("marks the posted record as shown approved and keeps everything else", () => {
+    const posted: PostedReview = { reviewId: 9, event: "COMMENT", shown: "AWAITING_CHECKS", at: 5, checkRunId: 12 }
+    expect(approvedPosted(posted)).toEqual({ ...posted, shown: "APPROVE" })
+    expect(Value.Check(PostedReview, approvedPosted(posted))).toBe(true)
+  })
+
+  it("answers nothing for a record already shown approved, so a later evaluation reconciles once and then leaves it", () => {
+    const posted: PostedReview = { reviewId: 9, event: "COMMENT", shown: "APPROVE", at: 5, checkRunId: 12 }
+    expect(approvedPostedIfNeeded(posted)).toBeUndefined()
+    expect(approvedPostedIfNeeded({ ...posted, shown: "AWAITING_CHECKS" })).toEqual(posted)
+  })
+})
 
 describe("decideApproval", () => {
   it("approves a reviewed head whose request for changes has nothing left behind it", () => {

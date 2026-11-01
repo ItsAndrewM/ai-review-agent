@@ -158,6 +158,12 @@ describe("createReviewExtension", () => {
     ])
   })
 
+  it("tells the model that an incremental review also says what the new commits do in changes_since", () => {
+    const submit = createReviewExtension(host).tools?.find((tool) => tool.name === "submit_review")
+    expect(submit?.description).toContain("`changes_since`")
+    expect(submit?.description).toContain("a missing `changes_since` come back once")
+  })
+
   it("offers resolve_thread with a reason and evidence, replayed unsafe, and hands the call to the host", async () => {
     const resolveThread = createReviewExtension(host).tools?.find((tool) => tool.name === "resolve_thread")
     const parameters = JSON.stringify(resolveThread?.parameters)

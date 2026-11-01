@@ -117,6 +117,12 @@ export const ReviewSubmission = Type.Object({
     description:
       "Two to five sentences on what the pull request does and how it does it, naming each linked-issue requirement the diff leaves out, in the issue's words. Markdown.",
   }),
+  changes_since: Type.Optional(
+    Type.String({
+      description:
+        "In an incremental review, two to five sentences on what the new commits since the last review do. Markdown.",
+    }),
+  ),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
   omitted_requirements: Type.Optional(
@@ -462,7 +468,16 @@ export function missingWalkthrough(submission: ReviewSubmissionInput, needed: re
 }
 
 export function rowPath(path: string): string {
-  return path.trim().replace(/^\.\//, "")
+  return path
+    .trim()
+    .replace(/^`(.*)`$/, "$1")
+    .trim()
+    .replace(/^\.\//, "")
+}
+
+export function rowsWithin(rows: readonly WalkthroughInput[], files: readonly ChangedFile[]): WalkthroughInput[] {
+  const reviewable = new Set(files.map((file) => file.filename))
+  return rows.map((row) => ({ ...row, path: rowPath(row.path) })).filter((row) => reviewable.has(row.path))
 }
 
 export const SEVERITY_LABEL = {

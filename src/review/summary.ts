@@ -7,6 +7,7 @@ import type { LastReview } from "./approval.ts"
 import {
   jsonIn,
   rowPath,
+  rowsWithin,
   SummarySubmission,
   type MergeDangerInput,
   type SummarySubmissionInput,
@@ -48,6 +49,13 @@ export function parseWrittenSummary(text: string): WrittenSummary {
   return { kind: "unusable", reason: `the model's answer didn't fit: ${first?.instancePath || "/"}: ${first?.message}` }
 }
 
+export function unrecordedSummary(
+  answer: SummarySubmissionInput,
+  files: readonly ChangedFile[],
+): SummarySubmissionInput {
+  return { ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }
+}
+
 export type SummarizedRecord = ReviewedRecord & { merge_danger: MergeDangerInput }
 
 export function summarizedRecord(
@@ -65,6 +73,7 @@ export function summarizedRecord(
     merge_danger: summary.merge_danger,
   }
   if (reviewed.omitted !== undefined) record.omitted = reviewed.omitted
+  if (reviewed.seconds !== undefined) record.seconds = reviewed.seconds
   return record
 }
 
@@ -73,7 +82,7 @@ function summarizedRows(
   written: readonly WalkthroughInput[],
   files: readonly ChangedFile[],
 ): WalkthroughInput[] {
-  const rows = underRowPath(written)
+  const rows = rowsWithin(written, files)
   const answered = new Set(rows.map((row) => row.path))
   const changed = new Set(files.map((file) => file.filename))
   const kept = underRowPath(stored).filter((row) => changed.has(row.path) && !answered.has(row.path))

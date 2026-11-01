@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import {
+  approvedCheckRun,
   checkRunTitle,
   failedCheckRun,
   isoSeconds,
@@ -115,6 +116,54 @@ describe("postedEarlierCheckRun", () => {
     expect(postedEarlierCheckRun({ ...posted, unverified: false }, undefined, at).output.title).toBe(
       "Changes requested: 1 blocking",
     )
+  })
+})
+
+describe("approvedCheckRun", () => {
+  it("retitles the run as approved with the review's counts and points Details at the summary comment", () => {
+    const posted = { counts: countOf(["suggestion", "nitpick", "nitpick"]) }
+    expect(approvedCheckRun(posted, "https://github.com/o/r/pull/5#issuecomment-1", at)).toEqual({
+      conclusion: "success",
+      completed_at: "2026-10-17T20:36:38Z",
+      details_url: "https://github.com/o/r/pull/5#issuecomment-1",
+      output: {
+        title: "Approved: 1 suggestion, 2 nitpicks",
+        summary: "Approved once the checks passed; the summary comment has the review.",
+      },
+    })
+  })
+
+  it("leaves the blocking count out of the approved title, since approval means its threads are resolved, and keeps the advisory ones", () => {
+    expect(approvedCheckRun({ counts: countOf(["blocking", "major", "suggestion"]) }, undefined, at).output.title).toBe(
+      "Approved: 1 major, 1 suggestion",
+    )
+    expect(approvedCheckRun({ counts: countOf(["blocking"]) }, undefined, at).output.title).toBe("Approved")
+  })
+
+  it("titles a later run of an approved head without the stale blocking count either", () => {
+    const posted = {
+      reviewId: 9,
+      event: "REQUEST_CHANGES" as const,
+      shown: "APPROVE" as const,
+      counts: countOf(["blocking", "suggestion"]),
+    }
+    expect(postedEarlierCheckRun(posted, undefined, at).output.title).toBe("Approved: 1 suggestion")
+    const requested = { ...posted, shown: "REQUEST_CHANGES" as const }
+    expect(postedEarlierCheckRun(requested, undefined, at).output.title).toBe(
+      "Changes requested: 1 blocking, 1 suggestion",
+    )
+  })
+
+  it("titles a record without counts Approved alone, and keeps the unverified mark", () => {
+    expect(approvedCheckRun({}, undefined, at).output.title).toBe("Approved")
+    expect(approvedCheckRun({ counts: countOf([]), unverified: true }, undefined, at).output.title).toBe(
+      "Approved (unverified)",
+    )
+  })
+
+  it("titles a later run of an approved head as approved, through the record the approval marked", () => {
+    const posted = { reviewId: 9, event: "COMMENT" as const, shown: "AWAITING_CHECKS" as const, counts: countOf([]) }
+    expect(postedEarlierCheckRun({ ...posted, shown: "APPROVE" }, undefined, at).output.title).toBe("Approved")
   })
 })
 

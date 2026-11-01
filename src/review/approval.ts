@@ -1,6 +1,6 @@
 import { Type, type Static } from "typebox"
 import type { CheckRunSummary, ReviewEvent } from "../github/client.ts"
-import { SeverityCounts, ShownVerdict } from "../records.ts"
+import { SeverityCounts, ShownVerdict, type PostedReview } from "../records.ts"
 import { configStatus, requestChangesWorkflow, type ConfigRead, type ReviewTrigger } from "../repository/config.ts"
 import { countBySeverity, type FindingInput, type Rejected } from "./findings.ts"
 import type { ThreadPlan } from "./incremental.ts"
@@ -175,6 +175,14 @@ export function lastReviewOf(facts: ReviewFacts): LastReview {
 
 export function evaluatedApprovalOf({ reviewId, headSha, at }: EvaluatedApproval): LastReview {
   return { reviewId, event: "APPROVE", headSha, heldBack: 0, at, requestChangesWorkflow: true }
+}
+
+export function approvedPosted(posted: PostedReview): PostedReview {
+  return { ...posted, shown: "APPROVE" }
+}
+
+export function approvedPostedIfNeeded(posted: PostedReview): PostedReview | undefined {
+  return posted.shown === "APPROVE" ? undefined : approvedPosted(posted)
 }
 
 export function approvalRecord(

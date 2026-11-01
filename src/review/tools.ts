@@ -194,7 +194,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
   const submitReview = defineTool({
     name: SUBMIT_REVIEW_TOOL,
     description:
-      "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, the linked-issue requirements the diff leaves out, and a not-for-merging line when the title or description has one. The host validates every finding, decides the event from the findings and those reasons, and posts the review to GitHub. Call it once; rejected findings, reasons it couldn't check and missing walkthrough rows come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
+      "Submit the review: summary, per-file walkthrough, findings anchored to diff lines, the linked-issue requirements the diff leaves out, a not-for-merging line when the title or description has one, and in an incremental review what the new commits do in `changes_since`. The host validates every finding, decides the event from the findings and those reasons, and posts the review to GitHub. Call it once; rejected findings, reasons it couldn't check, missing walkthrough rows and a missing `changes_since` come back once, so correct them and call it again. A second submission with walkthrough rows still missing ends the review unposted.",
     parameters: ReviewSubmission,
     callers: ["model"],
     executionMode: "sequential",

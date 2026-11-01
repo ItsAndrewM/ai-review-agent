@@ -1,6 +1,7 @@
 import type { CheckRunConclusion, CheckRunOutput, CreateCheckRun, RepoRef, UpdateCheckRun } from "../github/client.ts"
 import type { PostedReview, SeverityCounts } from "../records.ts"
 import { shortSha } from "../sha.ts"
+import { plural } from "./copy.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
 import { VERDICT_LABEL, type Verdict } from "./render.ts"
 
@@ -18,7 +19,7 @@ export interface CheckRunStart {
 }
 
 export function startedCheckRun(start: CheckRunStart): CreateCheckRun {
-  const files = counted(start.fileCount, "file")
+  const files = plural(start.fileCount, "file")
   return {
     name: start.name,
     head_sha: start.headSha,
@@ -50,11 +51,31 @@ export function postedEarlierCheckRun(
   completedAt: number,
 ): UpdateCheckRun {
   const shown = posted.shown ?? posted.event
-  const verdictTitle = posted.counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, posted.counts)
+  const counts = shown === "APPROVE" && posted.counts !== undefined ? approvedCounts(posted.counts) : posted.counts
+  const verdictTitle = counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, counts)
   const title = markedUnverified(verdictTitle, posted.unverified === true)
   const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
   const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
+}
+
+const NO_COUNTS = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 }
+
+function approvedCounts(counts: SeverityCounts): SeverityCounts {
+  return { ...counts, blocking: 0 }
+}
+const APPROVED_SUMMARY = "Approved once the checks passed; the summary comment has the review."
+
+export function approvedCheckRun(
+  posted: Pick<PostedReview, "counts" | "unverified">,
+  detailsUrl: string | undefined,
+  completedAt: number,
+): UpdateCheckRun {
+  const title = markedUnverified(
+    checkRunTitle("APPROVE", approvedCounts(posted.counts ?? NO_COUNTS)),
+    posted.unverified === true,
+  )
+  return completedCheckRun("success", checkOutput(title, APPROVED_SUMMARY), detailsUrl, completedAt)
 }
 
 export function failedCheckRun(reason: string, detailsUrl: string | undefined, completedAt: number): UpdateCheckRun {
@@ -86,8 +107,8 @@ export function checkRunTitle(event: Verdict, counts: SeverityCounts): string {
   if (counts.blocking > 0) parts.push(`${counts.blocking} blocking`)
   const major = counts.major ?? 0
   if (major > 0) parts.push(`${major} major`)
-  if (counts.suggestion > 0) parts.push(counted(counts.suggestion, "suggestion"))
-  if (counts.nitpick > 0) parts.push(counted(counts.nitpick, "nitpick"))
+  if (counts.suggestion > 0) parts.push(plural(counts.suggestion, "suggestion"))
+  if (counts.nitpick > 0) parts.push(plural(counts.nitpick, "nitpick"))
   const label = VERDICT_LABEL[event]
   return parts.length === 0 ? label : `${label}: ${parts.join(", ")}`
 }
@@ -119,8 +140,4 @@ function checkOutput(title: string, summary: string): CheckRunOutput {
   if (summary.length <= MAX_CHECK_SUMMARY_CHARS) return { title, summary }
   const kept = summary.slice(0, MAX_CHECK_SUMMARY_CHARS - 1).replace(TRAILING_HIGH_SURROGATE, "")
   return { title, summary: `${kept}…` }
-}
-
-function counted(count: number, noun: string): string {
-  return `${count} ${count === 1 ? noun : `${noun}s`}`
 }

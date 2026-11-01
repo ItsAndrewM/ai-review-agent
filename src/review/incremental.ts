@@ -19,6 +19,7 @@ import {
   Severity,
   Walkthrough,
   walkthroughPaths,
+  rowsWithin,
   type FindingInput,
   type MergeDangerInput,
   type Rejected,
@@ -26,7 +27,7 @@ import {
   type ValidatedReview,
 } from "./findings.ts"
 import { OmittedRequirement, type OmittedRequirementInput } from "./reasons.ts"
-import { mergeWalkthrough } from "./render.ts"
+import { clippedPlain, mergeWalkthrough } from "./render.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
 
@@ -55,6 +56,7 @@ export const ReviewedRecord = Type.Object({
   merge_danger: Type.Optional(MergeDanger),
   since: Type.Optional(SinceSection),
   omitted: Type.Optional(Type.Array(OmittedRequirement)),
+  seconds: Type.Optional(Type.Number()),
 })
 
 export type ReviewedRecord = Static<typeof ReviewedRecord>
@@ -150,6 +152,9 @@ export interface NextReviewedInput {
   submission: ReviewSubmissionInput
   resolved: number
   omitted: readonly OmittedRequirementInput[]
+  files: readonly ChangedFile[]
+  linkOf: (thread: OpenThread) => string
+  seconds: number | undefined
 }
 
 export interface DeltaScope {
@@ -530,7 +535,14 @@ export function findingRecords(
 }
 
 export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
-  const { previous, scope, headSha, baseRef, at, submission, resolved, omitted } = input
+  const record = reviewedWithoutTiming(input)
+  if (input.seconds !== undefined) record.seconds = input.seconds
+  return record
+}
+
+function reviewedWithoutTiming(input: NextReviewedInput): ReviewedRecord {
+  const { previous, scope, headSha, baseRef, at, submission, resolved, omitted, files, linkOf } = input
+  const rows = rowsWithin(submission.walkthrough, reviewableFiles(files, scope.pathFilters ?? []))
   if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {
     return {
       headSha,
@@ -538,7 +550,7 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
       at,
       mode: scope.mode,
       summary: submission.summary,
-      walkthrough: submission.walkthrough,
+      walkthrough: rows,
       merge_danger: submission.merge_danger,
       omitted: [...omitted],
     }
@@ -551,18 +563,51 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     at,
     mode: "incremental",
     summary: previous.summary,
-    walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
+    walkthrough: mergeWalkthrough(previous.walkthrough, rows, rowsTaken),
     merge_danger: mergeDangerAfterPush(previous.merge_danger, submission.merge_danger),
     since: {
       from: scope.from,
       to: headSha,
-      summary: submission.summary,
+      summary: sinceText(submission, scope, linkOf),
       files: [...covered],
       resolved,
       merge_danger: submission.merge_danger,
     },
     omitted: [...omitted],
   }
+}
+
+const HANDLE = /`(T\d+)`|(?<![\p{L}\p{N}_/#.:=?&[-])(T\d+)(?![\p{L}\p{N}_])/gu
+const MOST_LINK_TITLE_CHARS = 80
+
+export function changesSinceMissing(submission: ReviewSubmissionInput, scope: ReviewScope): boolean {
+  return scope.mode === "incremental" && (submission.changes_since ?? "").trim() === ""
+}
+
+function sinceText(submission: ReviewSubmissionInput, scope: ReviewScope, linkOf: (thread: OpenThread) => string) {
+  const text = changesSinceMissing(submission, scope) ? submission.summary : (submission.changes_since ?? "")
+  const listed = [...scope.recheck, ...threadLists(scope.open, scope.recheck).otherThreads]
+  return linkThreads(text, listed, linkOf)
+}
+
+export function linkThreads(
+  text: string,
+  threads: readonly OpenThread[],
+  linkOf: (thread: OpenThread) => string,
+): string {
+  const byHandle = new Map(threads.map((thread) => [thread.handle, thread]))
+  return text.replace(HANDLE, (written, inTicks: string | undefined, bare: string | undefined) => {
+    const thread = byHandle.get(inTicks ?? bare ?? "")
+    return thread === undefined ? written : `[${linkTitle(thread.title)}](${linkOf(thread)})`
+  })
+}
+
+function linkTitle(title: string): string {
+  return clippedPlain(title, MOST_LINK_TITLE_CHARS).replace(/[\\[\]]/g, (character) => `\\${character}`)
+}
+
+export function threadLink(repo: string, number: number, thread: OpenThread): string {
+  return `https://github.com/${repo}/pull/${number}#discussion_r${thread.firstCommentId}`
 }
 
 export function mergeDangerAfterPush(previous: MergeDangerInput | undefined, push: MergeDangerInput): MergeDangerInput {

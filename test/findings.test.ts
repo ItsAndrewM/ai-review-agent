@@ -1,12 +1,13 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { commentableLines } from "../src/github/diff.ts"
+import { commentableLines, type ChangedFile } from "../src/github/diff.ts"
 import type { BasisContext } from "../src/review/basis.ts"
 import { budgetNote } from "../src/review/budget.ts"
 import type { ReviewSpend } from "../src/review/cost.ts"
 import {
   MAX_FINDINGS,
   missingWalkthrough,
+  rowsWithin,
   parseWrittenReview,
   ReviewSubmission,
   toReviewComment,
@@ -592,6 +593,29 @@ describe("basis", () => {
   })
 })
 
+describe("rowsWithin", () => {
+  const file = (filename: string): ChangedFile => ({ filename, status: "modified", additions: 1, deletions: 0 })
+
+  it("keeps, in order and with the path normalised, the rows whose file is reviewable, and drops the rest", () => {
+    const rows = [
+      { path: "vendor/x.js", summary: "generated" },
+      { path: "./src/a.ts", summary: "a" },
+      { path: "src/b.ts", summary: "b" },
+    ]
+    expect(rowsWithin(rows, [file("src/a.ts"), file("src/b.ts")])).toEqual([
+      { path: "src/a.ts", summary: "a" },
+      { path: "src/b.ts", summary: "b" },
+    ])
+    expect(rowsWithin(rows, [])).toEqual([])
+  })
+
+  it("reads a path written in backticks, as models write them, so the row is kept rather than dropped", () => {
+    expect(rowsWithin([{ path: "`./src/a.ts`", summary: "a" }], [file("src/a.ts")])).toEqual([
+      { path: "src/a.ts", summary: "a" },
+    ])
+  })
+})
+
 describe("missingWalkthrough", () => {
   it("names source and binary files without a row and ignores generated ones", () => {
     const files = [
@@ -741,6 +765,12 @@ describe("the major grade", () => {
     expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows })).toBe(true)
   })
 
+  it("takes changes_since, the new commits' description for an incremental review, as an optional field", () => {
+    const rows = [{ path: "src/x.ts", summary: "s" }]
+    expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows, changes_since: "Fixes the total." })).toBe(true)
+    expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows, changes_since: 3 })).toBe(false)
+  })
+
   it("labels a major finding 🟠 Major", () => {
     expect(toReviewComment(finding({ severity: "major" })).body).toMatch(/^\*\*🟠 Major: b changed\*\*/)
   })
@@ -752,6 +782,26 @@ describe("the major grade", () => {
       suggestion: 0,
       nitpick: 1,
     })
+  })
+
+  it("counts one suggestion and one nitpick in the singular on the status line, and two dropped findings in the plural", () => {
+    const one = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "def5678901",
+      event: "APPROVE",
+      submission: base,
+      accepted: [
+        finding({ severity: "suggestion", title: "Tidy" }),
+        finding({ severity: "nitpick", title: "Name", line: 11 }),
+      ],
+      droppedCount: 2,
+      linkedIssues: [],
+      instructionFiles: [],
+    })
+    expect(one).toContain("· 🔴 0 blocking · 🟠 0 major · 🟡 1 suggestion · ⚪ 1 nitpick")
+    expect(one).toContain(
+      "<sub>2 findings were dropped because they failed the host's checks, even after a retry.</sub>",
+    )
   })
 
   it("shows the major count on the status line between blocking and suggestions", () => {
@@ -771,7 +821,7 @@ describe("the major grade", () => {
   it("counts major findings as worth fixing in the review body, and says only blocking ones gate approval", () => {
     const body = renderReviewBody("REQUEST_CHANGES", [finding(), finding({ severity: "major", line: 3 })], [])
     expect(body).toBe(
-      "1 blocking finding(s) to address before approval, 1 major finding(s) worth fixing. Blocking findings are marked 🔴 and gate approval; the others don't.",
+      "1 blocking finding to address before approval, 1 major finding worth fixing. Blocking findings are marked 🔴 and gate approval; the others don't.",
     )
   })
 })
@@ -893,12 +943,12 @@ describe("the reasons block of the review body", () => {
     )
     expect(body).toBe(
       [
-        "1 blocking finding(s) to address before approval. Blocking findings are marked 🔴 and gate approval; the others don't.",
+        "1 blocking finding to address before approval. Blocking findings are marked 🔴 and gate approval; the others don't.",
         "",
         "Not approved because:",
         "- #121 asks for “Unit tests cover the basis check”, and the diff leaves it out.",
         "",
-        "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
+        "1 blocking finding couldn't be posted inline and holds approval back:\n- **Total is NaN** in `src/x.ts`",
         "",
         "<sub>Full review.</sub>",
       ].join("\n"),
@@ -971,7 +1021,7 @@ describe("renderReviewBody", () => {
       ],
     )
     expect(body).toBe(
-      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+      "1 blocking finding couldn't be posted inline and holds approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
     )
   })
 
@@ -993,7 +1043,7 @@ describe("renderReviewBody", () => {
       ],
     )
     expect(body).toBe(
-      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+      "1 blocking finding couldn't be posted inline and holds approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
     )
   })
 
@@ -1007,7 +1057,7 @@ describe("renderReviewBody", () => {
       context({ hasLinkedIssues: false }),
     )
     expect(renderReviewBody("REQUEST_CHANGES", [], rejected)).toBe(
-      "1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
+      "1 blocking finding couldn't be posted inline and holds approval back:\n- **Total is NaN for an empty cart** in `src/x.ts`",
     )
   })
 
@@ -1018,7 +1068,7 @@ describe("renderReviewBody", () => {
       [{ finding: finding({ title: "Total is NaN" }), reason: "r", unfounded: false }],
     )
     expect(body).toBe(
-      "1 nitpick(s). Blocking findings are marked 🔴 and gate approval; the others don't.\n\n1 blocking finding(s) couldn't be posted inline and hold approval back:\n- **Total is NaN** in `src/x.ts`",
+      "1 nitpick. Blocking findings are marked 🔴 and gate approval; the others don't.\n\n1 blocking finding couldn't be posted inline and holds approval back:\n- **Total is NaN** in `src/x.ts`",
     )
   })
 
@@ -1029,7 +1079,7 @@ describe("renderReviewBody", () => {
       unfounded: false,
     }))
     const lines = renderReviewBody("REQUEST_CHANGES", [], rejected).split("\n")
-    expect(lines[0]).toBe("7 blocking finding(s) couldn't be posted inline and hold approval back:")
+    expect(lines[0]).toBe("7 blocking findings couldn't be posted inline and hold approval back:")
     expect(lines[1]).toBe(`- **${"0".repeat(100)}…** in \`src/x.ts\``)
     expect(lines).toHaveLength(6)
   })
@@ -1128,7 +1178,7 @@ describe("renderSummaryComment", () => {
     })
     expect(text).toContain("### Summary\n\nThe whole PR.")
     expect(text).toContain(
-      "### Since `abc1234`\n\nFixed the total.\n\nThis push: two-way door · docs \\| only.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread(s).",
+      "### Since `abc1234`\n\nFixed the total.\n\nThis push: two-way door · docs \\| only.\n\nFiles: `a.ts`, `b.ts`. Resolved 1 thread.",
     )
   })
 
@@ -1167,7 +1217,7 @@ describe("renderSummaryComment", () => {
       instructionFiles: [],
       since: { from: "abc1234567", to: "def5678901", summary: "Fixed the total.", files: ["a.ts"], resolved: 0 },
     })
-    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`. Resolved 0 thread(s).")
+    expect(text).toContain("### Since `abc1234`\n\nFixed the total.\n\nFiles: `a.ts`. Resolved 0 threads.")
     expect(text).not.toContain("This push:")
   })
 
@@ -1198,6 +1248,7 @@ describe("renderSummaryComment", () => {
     configError?: string
     verify?: VerifyDisplay
     checks?: ChecksDisplay
+    seconds?: number
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -1221,15 +1272,30 @@ describe("renderSummaryComment", () => {
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
     expect(text).toContain("`0123456` · **Verdict:** Changes requested · 🔴 1 blocking")
     expect(text).toContain("| `src/x.ts` | b is \\| now 3 |")
-    expect(text).toContain(
-      "<sub>1 finding(s) were dropped because they failed the host's checks, even after a retry.</sub>",
-    )
+    expect(text).toContain("<sub>1 finding was dropped because it failed the host's checks, even after a retry.</sub>")
     expect(text).toContain("**Merge danger:** two-way door · one module")
     expect(text).toContain("<sub>Reviewed by `@cf/openai/gpt-oss-120b` with skills `review@89abcdef`.</sub>")
   })
 
   it("puts the merge danger on the line under the verdict, before the summary", () => {
     expect(summaryWith({})).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
+  })
+
+  it("ends the footer's first line with how long the review took, when the record knows it", () => {
+    const timed = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      seconds: 34.8,
+    })
+    expect(timed).toContain(
+      "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@89abcdef` in 34.8 s.</sub>",
+    )
+    const whole = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      seconds: 35,
+    })
+    expect(whole).toContain("with skills `review@89abcdef` in 35 s.</sub>")
   })
 
   it("flattens a multi-line blast radius onto the merge-danger line", () => {
@@ -1643,7 +1709,7 @@ describe("renderReviewBody when approval waits for the checks", () => {
 
   it("keeps the findings line and adds the wait", () => {
     expect(renderReviewBody("AWAITING_CHECKS", [finding({ severity: "suggestion" })], [])).toBe(
-      "1 suggestion(s). Blocking findings are marked 🔴 and gate approval; the others don't. I'll approve once the head's checks pass.",
+      "1 suggestion. Blocking findings are marked 🔴 and gate approval; the others don't. I'll approve once the head's checks pass.",
     )
   })
 })

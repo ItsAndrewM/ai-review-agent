@@ -345,3 +345,74 @@ The fresh review probed the mentions and the basis check against this repository
 - A doc the review's `path_filters` leave out is no doc to the review (the one matcher takes the filters): it is neither searched for mentions nor citable, keeping the filters' contract that a filtered file gets no listing in the prompt. A snapshot that holds no doc is never scanned.
 
 Left as they are, for a follow-up if they show: the word pattern can still match a common word used as a file name (`review.ts` in docs about reviews); narrowing it to a file-reference shape and naming the changed file on each mention line are Andrew's calls on the spec's copy; `grepMentions` counts at most `MAX_MATCHES` hits per pattern, so the overflow count can run low; a correct `docs` finding reached with `read_file` is refused when the search was unavailable and the doc was neither changed nor mentioned; "1 more mentions aren't listed." reads wrongly for one; `reviews.docs: []` falls back to the defaults and only `["!**"]` turns the check off, which `setup.md` doesn't say; the mentions search still walks the snapshot's rows once per changed file and pattern (the selector is a set lookup, so unselected rows cost only their read), and a subset scan would need a snapshot method or an in-memory copy of every doc, deferred until `review.docs` shows the cost.
+
+
+## Slice 7, #119, #50 and #126: the summary says what the push did, who it answers, and how long it took
+
+### Why
+
+Three P3 items from the 24 Oct audit and one old request, batched as PR #91 batched the slice 3 follow-ups. The Since section of an incremental review restates the whole pull request (#84, #87), because the review stores the submission's `summary`, whose description asks for "what the pull request does", as the section's text; readers meet the prompt's thread handles ("T1", "T2") in that text; after the approval evaluation approves a head, the check run still reads "Approval waits for the checks" (#98, #108, #109), though `docs/design.md` says the run keeps the review's title; the copy says "1 nitpicks", "1 finding(s)" and "Resolved 0 thread(s)."; walkthrough rows the model writes for a file `path_filters` leave out reach the summary on both of its paths and a full review's record, though `docs/design.md` says a filtered file needs no row; and on #66 rows read "no marked hunks to comment on", describing the review rather than the file. #50 asks each review to say how long it took, in `review.done` and in the footer.
+
+### Rulings (grill of 1 Nov 2026)
+
+- **A field of its own for the push.** `ReviewSubmission` gains `changes_since`, two to five sentences on what the new commits since the last review do, Markdown. The incremental prompt asks for it; an incremental submission without it is refused through the resubmission path that already asks for missing walkthrough rows, naming the field; a full review ignores it. `summary` keeps its meaning and its description; in an incremental review the record keeps the previous summary as today, and the Since section's text is `changes_since`. Repurposing `summary` in incremental mode was rejected: one field with two meanings, read by a schema description the mode can't change.
+- **The host turns handles into links.** Before the Since text is stored, every `T<n>` in `changes_since` that names a thread the prompt listed (re-check or open) becomes `[<the thread's title>](<link>)`, where the link is the pull request's URL with `#discussion_r<first comment id>`; a handle that names no listed thread stays as written. The prompt keeps its handles, since `addressed_threads` matches on them; showing titles instead of handles, or asking the model to write links, was rejected as a model behaviour where a deterministic rewrite does.
+- **The approval retitles the check run.** `PostedReview` keeps the review's `checkRunId`; when the evaluation approves, after the APPROVE review posts and the summary's verdict line is rewritten, the run is updated to the approved title with the review's counts (`checkRunTitle("APPROVE", counts)`, the "(unverified)" mark kept), status unchanged, the summary link kept; a record without an id, or an update that fails, is logged (`approval.check_run_failed`) and skipped. Leaving the run and correcting the design was rejected.
+- **`seconds` replaces `ms`.** `review.done` logs `seconds`, the time since the run started to one decimal (34.8, not 35); `ms` goes. `ReviewedRecord` gains `seconds`, written with the record, so the footer's "Reviewed by" line ends "in 34.8 s" on the review and on every later rewrite of the comment; a record from before the field prints the line as today. `review.transcript`, the check run's text and the `summary` command's "Summarized by" line are unchanged.
+- **Rows outside the reviewable set are dropped on every path, and the skill says what a row is.** One helper keeps only the written rows whose path is in the reviewable set, applied in `summarizedRows`, in `storeSummary` when there is no `reviewed` record, and in `nextReviewed` for a full and an incremental review. The review skill's walkthrough rule says a row states, in one sentence, what changed in the file, never what the review did or saw there; the skill becomes version 13.
+- **Plurals through one helper.** "1 suggestion", "2 suggestions", "1 nitpick", "1 finding was dropped", "2 findings were dropped", "1 blocking finding couldn't be posted inline and holds approval back", "1 major finding worth fixing", "Resolved 1 thread.", "Resolved 0 threads."; the check-run title's `counted` and the render's `plural` become one function. "blocking" and "major" in the verdict line stay as they are (adjectives with a count).
+- **No fixture, no pre-merge deploy.** Unit tests pin the record, the rendering and the retitle; after the merge and the deploy of main, the first real pull request's incremental review and approval show the Since text from `changes_since`, the thread links, the footer's time, the plurals and the retitled run, and the result is posted on the three issues. Deploying the branch so its own pull request could show them was offered and declined.
+
+### The field
+
+`changes_since: Type.Optional(Type.String({ description: "In an incremental review, two to five sentences on what the new commits since the last review do. Markdown." }))`. The incremental prompt's request sentence names it beside `merge_danger`'s. `submitReview` in incremental mode treats a missing or blank `changes_since` as it treats missing rows: the refusal names it and the model resubmits the whole review. `nextReviewed` writes `since.summary` from `changes_since` after the handle rewrite. The verify replay and the recall benchmark run `fresh` reviews and ignore the field.
+
+### The links
+
+`linkThreads(text, threads, pull)`: for each listed thread (the scope's re-check and open lists carry `handle`, `title`, `firstCommentId`), every whole-word occurrence of its handle in the text becomes `[title](https://github.com/<repo full name>/pull/<number>#discussion_r<firstCommentId>)`, the title on one line and clipped as the held-back list clips; an unknown handle is left. Applied to `changes_since` only.
+
+### The retitle
+
+`PostedReview.checkRunId: Type.Optional(Type.Integer())`, written where the review posts from the pending record's `checkRunId`. `submitApproval`, after `rewriteSummaryVerdict`, reads the head's posted record and, when it holds an id, calls the check-run update with `checkRunTitle("APPROVE", posted.counts ?? zero counts)` marked unverified when `posted.unverified`, the summary comment URL as details and the run's existing summary text replaced by one line, "Approved once the checks passed; the summary comment has the review." Failures log and never fail the approval.
+
+### The time
+
+`review.done` gains `seconds: Math.round((Date.now() - run.started) / 100) / 10` and loses `ms`. `ReviewedRecord.seconds: Type.Optional(Type.Number())`, set by `nextReviewed` from the run; `renderSummaryComment` takes `seconds` and `reviewedBy` ends "in 34.8 s." when it is given, before the full stop. `storeSummary` keeps the record's `seconds`.
+
+### The rows
+
+`rowsWithin(rows, reviewable)` keeps the rows whose `rowPath` is among the reviewable files' names, in order. `summarizedRows` applies it to the written rows; `storeSummary` without a record returns the answer with its rows filtered; `nextReviewed` applies it to `submission.walkthrough` for a full review (the reviewable set is the scope's files) and before `mergeWalkthrough` for an incremental one. The skill's walkthrough sentence: "Note the file's walkthrough row for `submit_review`: one sentence on what changed in the file, never what the review did or saw there."
+
+### Docs
+
+`docs/design.md`: the summary-comment paragraph (Since text from `changes_since`, handles become links, the footer's time), the `reviewed` and `posted` record entries (`seconds`, `checkRunId`), the approval paragraph (the run retitles), the `path_filters` paragraph (written rows outside the set are dropped on the summary and the review), and the `review.done` field list. `docs/setup.md` is unchanged.
+
+### Tests
+
+Unit: `changes_since` required in incremental mode and ignored in full mode; `nextReviewed` writing `since.summary` from it with handles linked; `linkThreads` with a known handle, an unknown one, two handles in one sentence and a handle inside a word; the approval's retitle with and without an id, with and without the unverified mark, and a failing update; `review.done`'s `seconds` to one decimal; the footer with and without `seconds`, and `storeSummary` keeping it; `rowsWithin` on both summary paths and both review modes; the plural forms at every site, singular and plural. The slice's own pull request is the live check.
+
+### Calls made after the builder check
+
+- **A `changes_since` still missing after the one refusal doesn't end the review.** The first incremental submission without it is refused with the missing-rows text; a second one is posted with `summary` as the Since text and `review.changes_since_missing` logged, since the phase's goal is that a push's review lands, and a prose field is not worth losing a review's findings and resolutions over.
+- **One immutable clock.** `StoredPending` gains `openedAt`, set once when the pending record is first written and kept by `restartGrace` and `resumedPending`; `review.done`'s `seconds` and the record's `seconds` both count from it, so a retried or resumed review reports the time since `review.start`, as #50 asks. `started` keeps its liveness role.
+- **The approval also marks the posted record.** `submitApproval` writes `shown: "APPROVE"` on the head's `posted` record beside retitling the run, so a later rerun on the same head (`postedEarlierCheckRun`) titles itself approved rather than "Approval waits for the checks" through a second path.
+- Taken as the builder proposed: the plural helper covers every reader-facing "(s)" and the tool replies' "inline comment(s)" and "finding(s) that still failed"; `linkThreads` matches only the threads the prompt listed; `nextReviewed` takes the reviewable files and the pull request key for `rowsWithin` and the links; `summarizedRecord` copies `seconds`; the retitle resends `success` and `completed_at` since `UpdateCheckRun` requires them; only `review.done` loses `ms`.
+
+### Left to the builder
+
+The helper's home for the shared plural function; how the refusal text for a missing `changes_since` reads beside the missing-rows text; whether the retitle reuses `completeCheckRun` or a plainer update, as long as a failure can't fail the approval; the exact log fields of `approval.check_run_failed`.
+
+
+### Rulings after the review
+
+The fresh review (opus, 1 Nov 2026) found no Critical, two Important and seven Minor. Fixed:
+
+- The approved title leaves the blocking count out ("Approved: 1 major, 1 suggestion"), since the evaluation approves only after the blocking threads resolve, so that count is stale by construction; the major, suggestion and nitpick counts stay, as a fresh approving review's title shows them. A later run of an approved head titles itself the same way through the marked posted record.
+- A handle written in backticks links without them, and a handle in a query string, after `=` or `&`, inside `[…]` or beside a letter outside ASCII is left alone; the link's title is flattened and clipped to 80 characters with an ellipsis, then `[`, `]` and `\` are escaped (a `|` stays as written, since the Since text is not a table).
+- The posted-record mark is idempotent, and an evaluation that stops because the head is approved reconciles it, so a failed write after the approval is made good by the next evaluation; a failed check-run update is still logged and not retried.
+- The summary's no-record path is a pure helper (`unrecordedSummary`) with its own test.
+- Acknowledged, not changed: a missing `changes_since` shares the one resubmission round with rejected findings, missing rows and unchecked reasons, so a second submission that drops the field after a first one refused for something else posts with the summary as the Since text, as a second submission still missing rows ends the review; one round bounds the model's calls, and the fallback is the text before this slice.
+- `rowPath` strips a surrounding backtick pair, so a row written as `` `src/a.ts` `` is kept rather than dropped on the summary and counted as present on the review.
+- `docs/design.md` says only a failed retitle is logged and that `review.done` logs `seconds`; the `submit_review` description says a missing `changes_since` comes back once; `review.findings` logs `changesSinceMissing`.
+
+Left as they are, for a follow-up if they show: a later run on the same head that ends as posted-earlier before the approval keeps its own "waits for the checks" title, since the posted record holds the first run's id; the refuse-once flow and the retitle are tested through their pure helpers, not the object, as the repository tests everything else; `review.changes_since_missing` logs twice when a publish is retried; the approved summary's verdict line still shows the review's counts as they stood.

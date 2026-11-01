@@ -12,6 +12,7 @@ import {
   recordedVerdict,
   Summarizing,
   summarizedRecord,
+  unrecordedSummary,
   summaryLive,
   summaryReply,
 } from "../src/review/summary.ts"
@@ -64,6 +65,24 @@ describe("parseWrittenSummary", () => {
   })
 })
 
+describe("unrecordedSummary", () => {
+  it("drops a written row for a file outside the reviewable set when there is no reviewed record", () => {
+    const changed = (filename: string): ChangedFile => ({ filename, status: "modified", additions: 1, deletions: 0 })
+    const answer = {
+      summary: "new",
+      walkthrough: [
+        { path: "./a.ts", summary: "new a" },
+        { path: "vendor/x.js", summary: "generated" },
+      ],
+      merge_danger: { door: "two-way", blast_radius: "one module" },
+    } satisfies SummarySubmissionInput
+    expect(unrecordedSummary(answer, [changed("a.ts")])).toEqual({
+      ...answer,
+      walkthrough: [{ path: "a.ts", summary: "new a" }],
+    })
+  })
+})
+
 describe("summarizedRecord", () => {
   const changed = (filename: string): ChangedFile => ({ filename, status: "modified", additions: 1, deletions: 0 })
   const files = [changed("a.ts"), changed("b.ts")]
@@ -93,6 +112,16 @@ describe("summarizedRecord", () => {
     expect(record.omitted).toEqual(omitted)
     expect(record).not.toHaveProperty("since")
     expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("omitted")
+  })
+
+  it("keeps how long the last review took, so the rewritten footer still says it", () => {
+    expect(summarizedRecord({ ...reviewed, seconds: 12.5 }, written, files).seconds).toBe(12.5)
+    expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("seconds")
+  })
+
+  it("drops a written row for a file outside the reviewable set, as the review does", () => {
+    const stray = { ...written, walkthrough: [...written.walkthrough, { path: "vendor/x.js", summary: "generated" }] }
+    expect(summarizedRecord(reviewed, stray, files).walkthrough.map((row) => row.path)).toEqual(["a.ts", "b.ts"])
   })
 
   it("replaces the summary, walkthrough and merge danger, drops the since section and keeps the head", () => {
