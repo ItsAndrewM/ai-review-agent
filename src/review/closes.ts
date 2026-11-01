@@ -1,4 +1,5 @@
 import type { PullRequestInfo } from "../github/client.ts"
+import { withoutCode } from "./code-blanking.ts"
 import { codeSpan } from "./render.ts"
 
 export interface IssueRef {
@@ -29,14 +30,6 @@ const KEYWORD = String.raw`(?<![\p{L}\p{N}_])(close[sd]?|fix(?:e[sd])?|resolve[s
 const REFERENCE = String.raw`(https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)|([\w.-]+/[\w.-]+)#(\d+)|#(\d+))(?![\p{L}\p{N}_])`
 const CLOSE = new RegExp(`${KEYWORD}:?\\s+${REFERENCE}`, "giu")
 const NEXT = new RegExp(`\\s*(,\\s*and|,|and|&|or)\\s*${REFERENCE}`, "iuy")
-const INLINE_CODE_OR_COMMENT = /<!--[\s\S]*?-->|(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g
-const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
-const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
-const COMMENT_BLOCK = /^ {0,3}<!--/
-const COMMENT_END = "-->"
-const LIST_MARKER = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)/
-const CODE_INDENT = 4
-const TAB_STOP = 4
 const CLAUSE_END = /[.!?;\n]/g
 const WORD = /\S+/g
 const NEGATIONS = new Set(["not", "never", "without"])
@@ -60,8 +53,7 @@ export function refText(ref: IssueRef): string {
 }
 
 export function closesOf(body: string | null, repo: string): Closes {
-  const text = body ?? ""
-  const readable = withoutCode(text)
+  const readable = withoutCode((body ?? "").replace(/\r\n?/g, "\n"))
   const found: Found = { closes: new Map(), listed: new Map(), negated: new Map() }
   for (const match of readable.matchAll(CLOSE)) recordClose(found, readable, match, repo)
   const listed = [...found.listed].filter(([key]) => !found.closes.has(key)).map(([, entry]) => entry)
@@ -133,112 +125,6 @@ function negates(word: string, next: string | undefined): boolean {
 
 function plainWord(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}'’]/gu, "")
-}
-
-interface OpenFence {
-  run: string
-  indent: number
-}
-
-interface BlockScan {
-  fence: OpenFence | undefined
-  comment: boolean
-  listIndent: number | undefined
-  paragraph: boolean
-}
-
-function withoutCode(text: string): string {
-  return blankBlocks(text).replace(INLINE_CODE_OR_COMMENT, blank)
-}
-
-function blankBlocks(text: string): string {
-  const scan: BlockScan = { fence: undefined, comment: false, listIndent: undefined, paragraph: false }
-  return text
-    .split("\n")
-    .map((line) => blankedLine(scan, line))
-    .join("\n")
-}
-
-function blankedLine(scan: BlockScan, line: string): string {
-  if (scan.fence !== undefined) return fenceLine(scan, scan.fence, line)
-  if (scan.comment) return endOfComment(scan, line)
-  if (line.trim() === "") {
-    scan.paragraph = false
-    return line
-  }
-  return contentLine(scan, line)
-}
-
-function fenceLine(scan: BlockScan, fence: OpenFence, line: string): string {
-  const closer = FENCE_CLOSE.exec(dedented(line, fence.indent))?.[1]
-  if (closer !== undefined && closer[0] === fence.run[0] && closer.length >= fence.run.length) {
-    scan.fence = undefined
-    scan.paragraph = false
-  }
-  return blank(line)
-}
-
-function endOfComment(scan: BlockScan, line: string): string {
-  const end = line.indexOf(COMMENT_END)
-  if (end < 0) return blank(line)
-  scan.comment = false
-  scan.paragraph = false
-  const after = end + COMMENT_END.length
-  return `${blank(line.slice(0, after))}${line.slice(after)}`
-}
-
-function contentLine(scan: BlockScan, line: string): string {
-  const indent = indentOf(line)
-  leaveListUnlessContinued(scan, line, indent)
-  const container = scan.listIndent ?? 0
-  if (indent - container >= CODE_INDENT && !scan.paragraph) return blank(line)
-  return blockStart(scan, line, dedented(line, container), container)
-}
-
-function leaveListUnlessContinued(scan: BlockScan, line: string, indent: number): void {
-  if (scan.listIndent === undefined || indent >= scan.listIndent) return
-  const lazy = scan.paragraph && !FENCE_OPEN.test(line) && !COMMENT_BLOCK.test(line) && !LIST_MARKER.test(line)
-  if (!lazy) scan.listIndent = undefined
-}
-
-function blockStart(scan: BlockScan, line: string, body: string, container: number): string {
-  const run = FENCE_OPEN.exec(body)?.[1]
-  if (run !== undefined) {
-    scan.fence = { run, indent: container }
-    return blank(line)
-  }
-  if (COMMENT_BLOCK.test(body) && !body.includes(COMMENT_END)) {
-    scan.comment = true
-    return blank(line)
-  }
-  const marker = LIST_MARKER.exec(body)?.[0]
-  if (marker !== undefined) scan.listIndent = container + indentOf(marker.replace(/[^ \t]/g, " "))
-  scan.paragraph = true
-  return line
-}
-
-function indentOf(line: string): number {
-  let columns = 0
-  for (const character of line) {
-    if (character === " ") columns += 1
-    else if (character === "\t") columns += TAB_STOP - (columns % TAB_STOP)
-    else break
-  }
-  return columns
-}
-
-function dedented(line: string, columns: number): string {
-  let used = 0
-  let index = 0
-  while (index < line.length && used < columns && (line[index] === " " || line[index] === "\t")) {
-    used += line[index] === "\t" ? TAB_STOP - (used % TAB_STOP) : 1
-    index += 1
-  }
-  return line.slice(index)
-}
-
-function blank(span: string): string {
-  return span.replace(/[^\n]/g, " ")
 }
 
 export const CLOSES_START = "<!-- andabot:closes -->"

@@ -82,6 +82,24 @@ describe("closesOf", () => {
     expect(closed("Para\n    Closes #13")).toEqual(["#13"])
   })
 
+  it("reads CRLF and lone CR line endings as GitHub's web editor writes them", () => {
+    expect(closed("```\r\ncode\r\n```\r\nCloses #5")).toEqual(["#5"])
+    expect(closed("`a\r\n\r\nCloses #6 b`")).toEqual(["#6"])
+    expect(closed("~~~\rResolves #7\r~~~\rFixes #8")).toEqual(["#8"])
+  })
+
+  it("follows the remaining CommonMark block rules a reviewer raised", () => {
+    expect(closed("```lang`bad\nCloses #27")).toEqual(["#27"])
+    expect(closed("- outer\n    - inner\n\n    Fixes #13")).toEqual(["#13"])
+    expect(closed("Intro\n2. item\n\n    Closes #5")).toEqual([])
+    expect(closed("Intro\n1. item\n\n    Closes #5")).toEqual(["#5"])
+    expect(closed("# Heading\n    Closes #42")).toEqual([])
+    expect(closed("Para\n***\n    Closes #45")).toEqual([])
+    expect(closed("> ~~~\n> Closes #42\n> ~~~\nCloses #43")).toEqual(["#43"])
+    expect(closed("~~~\n> ~~~\nCloses #44\n~~~")).toEqual([])
+    expect(closed("> ```\n> Closes #46\nCloses #47")).toEqual(["#47"])
+  })
+
   it("reads a keyword in a blockquote or in bold", () => {
     expect(closed("> Fixes #125")).toEqual(["#125"])
     expect(closed("**Closes #118**")).toEqual(["#118"])
