@@ -202,3 +202,7 @@ export function withClosesBlock(body: string, block: readonly string[]): string 
   const rewritten = `${body.slice(0, start)}${block.join("\n")}${body.slice(end + CLOSES_END.length)}`
   return rewritten === body ? undefined : rewritten
 }
+
+export function closesFields(closes: Closes) {
+  return { closes: closes.closes.length, listed: closes.listed.length, negated: closes.negated.length }
+}

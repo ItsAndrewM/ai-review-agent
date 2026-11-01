@@ -1,3 +1,4 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubError } from "../src/github/errors.ts"
 import {
@@ -7,6 +8,7 @@ import {
   RETRY_DELAYS_MS,
   retryDelay,
   retryJobId,
+  StoredIncoming,
   type DeliveryHost,
   type Incoming,
   type RetryJob,
@@ -57,6 +59,13 @@ describe("the ladder and the keys", () => {
   it("keys the record and the job by delivery and kind, since one delivery can carry two incomings", () => {
     expect(deliveryKey("d-1", "review")).toBe("delivery:d-1:review")
     expect(retryJobId("d-1", "review")).toBe("event.retry:d-1:review")
+  })
+})
+
+describe("StoredIncoming", () => {
+  it("keeps an edited event, which refreshes the summary's close block", () => {
+    const key = { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 }
+    expect(Value.Check(StoredIncoming, { kind: "edited", key, deliveryId: "d" })).toBe(true)
   })
 })
 

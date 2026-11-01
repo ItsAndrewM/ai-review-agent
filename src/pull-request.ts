@@ -152,7 +152,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
-import { closesBlockOf } from "./review/closes.ts"
+import { closesBlockOf, closesFields, closesOf, withClosesBlock } from "./review/closes.ts"
 import { plural, were } from "./review/copy.ts"
 import {
   neuronsSince,
@@ -1414,6 +1414,8 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         this.#runs.dropIdle(incoming.key.number, "closed")
         await this.#sandbox.dropIdle("closed")
         return
+      case "edited":
+        return this.refreshCloses()
     }
   }
 
@@ -2729,6 +2731,23 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       logError("approval.failed", { trigger, delivery: deliveryId, error: errorText(error) })
       return { kind: "failed", transient: isTransient(errorOf(error)) }
     }
+  }
+
+  private async refreshCloses(): Promise<void> {
+    const commentId = await this.summaryCommentId()
+    if (commentId === undefined) return
+    const pr = await this.currentPullRequest()
+    if (pr.state !== "open") return
+    const key = await this.key()
+    const github = await this.github()
+    const body = (await github.getIssueComment(key, commentId)).body ?? ""
+    const edited = withClosesBlock(body, closesBlockOf(pr))
+    if (edited !== undefined) await github.updateIssueComment(key, commentId, edited)
+    log("closes.refreshed", {
+      number: pr.number,
+      ...closesFields(closesOf(pr.body, pr.base.repo.full_name)),
+      changed: edited !== undefined,
+    })
   }
 
   private async currentPullRequest(): Promise<PullRequestInfo> {

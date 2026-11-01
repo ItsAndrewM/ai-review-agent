@@ -47,6 +47,7 @@ export const WebhookPayload = Type.Object({
   ),
   check_run: Type.Optional(CheckTarget),
   check_suite: Type.Optional(CheckTarget),
+  changes: Type.Optional(Type.Object({ body: Type.Optional(Type.Object({})), base: Type.Optional(Type.Object({})) })),
 })
 
 export type WebhookPayload = Static<typeof WebhookPayload>
@@ -96,7 +97,7 @@ function routeFromAnySender(
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
   if (eventName === "pull_request" && payload.pull_request) {
-    return routePullRequest(payload.pull_request, delivery, botLogin)
+    return routePullRequest(payload.pull_request, delivery, botLogin, payload.changes)
   }
   if (eventName === "pull_request_review_thread" && payload.pull_request) {
     return routeThread(payload.pull_request, delivery)
@@ -126,8 +127,22 @@ function checkTarget(eventName: string, payload: WebhookPayload): CheckTarget | 
   return undefined
 }
 
-function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Routed {
+function routeEdited(pullRequest: PullRequestEvent, delivery: Delivery, changes: WebhookPayload["changes"]): Routed {
+  if (changes?.body === undefined && changes?.base === undefined) {
+    return ignore("pull_request edited without a body or base change")
+  }
+  const key = { ...delivery.repo, number: pullRequest.number }
+  return { kind: "handle", incoming: [{ kind: "edited", key, deliveryId: delivery.deliveryId }] }
+}
+
+function routePullRequest(
+  pullRequest: PullRequestEvent,
+  delivery: Delivery,
+  botLogin: string,
+  changes: WebhookPayload["changes"],
+): Routed {
   const action = delivery.action ?? ""
+  if (action === "edited") return routeEdited(pullRequest, delivery, changes)
   if (!REVIEW_ACTIONS.has(action)) return ignore(`pull_request ${action}`)
   const reaction = action === "opened" ? descriptionReaction(pullRequest, delivery, botLogin) : undefined
   const review = reviewOf(pullRequest, delivery)
