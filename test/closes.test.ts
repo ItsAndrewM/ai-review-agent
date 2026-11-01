@@ -59,6 +59,19 @@ describe("closesOf", () => {
     expect(listed(closesOf("Write `Closes #80 and #100` instead.", REPO))).toEqual([])
   })
 
+  it("follows GitHub on the forms probe #203 measured: indented code, fences, code spans and comments", () => {
+    expect(closed("Intro paragraph.\n\n    Fixes #146\n")).toEqual([])
+    expect(closed("Intro.\n\n\tFixes #123\n")).toEqual([])
+    expect(closed("- item\n\n    Closes #140\n")).toEqual(["#140"])
+    expect(closed("```\ncode\n```md\nCloses #132\n```")).toEqual([])
+    expect(closed("~~~\nResolves #125\n~~~")).toEqual([])
+    expect(closed("`a\n\nCloses #131 b`")).toEqual(["#131"])
+    expect(closed("Use `<!--` comments.\n\nCloses #124")).toEqual(["#124"])
+    expect(closed("<!--\n```\n-->\nCloses #5")).toEqual(["#5"])
+    expect(closed("Fixes:#135")).toEqual([])
+    expect(listed(closesOf("Fixes #134,#133", REPO))).toEqual(['#133 after ","'])
+  })
+
   it("reads a keyword in a blockquote or in bold", () => {
     expect(closed("> Fixes #125")).toEqual(["#125"])
     expect(closed("**Closes #118**")).toEqual(["#118"])
@@ -116,6 +129,13 @@ describe("closesBlock", () => {
       '⚠️ #2 and #3 follow "Fixes #1" without a keyword of their own, so merging won\'t close them. Repeat the keyword for each issue: "Fixes #1, fixes #2, fixes #3".',
       "<sub>Merging closes #1 (from the description).</sub>",
       CLOSES_END,
+    ])
+  })
+
+  it("warns once per list, keyed by its keyword and first reference, so two lists from one issue stay apart", () => {
+    expect(block("Closes #1 and #2. Fixes #1, #3.").filter((line) => line.startsWith("⚠️"))).toEqual([
+      '⚠️ #2 follows "and" after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Closes #1, closes #2".',
+      '⚠️ #3 follows "," after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Fixes #1, fixes #3".',
     ])
   })
 

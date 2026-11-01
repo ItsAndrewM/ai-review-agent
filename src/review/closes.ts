@@ -28,10 +28,14 @@ export interface Closes {
 const KEYWORD = String.raw`(?<![\p{L}\p{N}_])(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?![\p{L}\p{N}_])`
 const REFERENCE = String.raw`(https://github\.com/([\w.-]+/[\w.-]+)/issues/(\d+)|([\w.-]+/[\w.-]+)#(\d+)|#(\d+))(?![\p{L}\p{N}_])`
 const CLOSE = new RegExp(`${KEYWORD}:?\\s+${REFERENCE}`, "giu")
-const NEXT = new RegExp(`\\s*(,\\s*and|,|and|&|or)\\s+${REFERENCE}`, "iuy")
-const HTML_COMMENT = /<!--[\s\S]*?(?:-->|$(?![\s\S]))/g
-const INLINE_CODE = /(`+)[^`][\s\S]*?\1/g
-const FENCE = /^ {0,3}(`{3,}|~{3,})/
+const NEXT = new RegExp(`\\s*(,\\s*and|,|and|&|or)\\s*${REFERENCE}`, "iuy")
+const INLINE_CODE_OR_COMMENT = /<!--[\s\S]*?-->|(?<!`)(`+)(?!`)(?:(?!\n[ \t]*\n)[\s\S])*?(?<!`)\1(?!`)/g
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
+const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
+const COMMENT_BLOCK = /^ {0,3}<!--/
+const COMMENT_END = "-->"
+const INDENTED = /^(?: {4}|\t)/
+const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/
 const CLAUSE_END = /[.!?;\n]/g
 const WORD = /\S+/g
 const NEGATIONS = new Set(["not", "never", "without"])
@@ -130,33 +134,76 @@ function plainWord(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}'’]/gu, "")
 }
 
-function withoutCode(text: string): string {
-  return blankInlineCode(blankFences(text.replace(HTML_COMMENT, blank)))
+interface BlockScan {
+  fence: string | undefined
+  comment: boolean
+  indentedCode: boolean
+  inList: boolean
+  previousBlank: boolean
 }
 
-function blankFences(text: string): string {
-  let fence: string | undefined
+function withoutCode(text: string): string {
+  return blankBlocks(text).replace(INLINE_CODE_OR_COMMENT, blank)
+}
+
+function blankBlocks(text: string): string {
+  const scan: BlockScan = { fence: undefined, comment: false, indentedCode: false, inList: false, previousBlank: true }
   return text
     .split("\n")
     .map((line) => {
-      const opener = FENCE.exec(line)?.[1]
-      if (fence !== undefined) {
-        if (closesFence(opener, fence)) fence = undefined
-        return blank(line)
-      }
-      if (opener === undefined) return line
-      fence = opener
-      return blank(line)
+      const blanked = blankedLine(scan, line)
+      scan.previousBlank = line.trim() === ""
+      return blanked
     })
     .join("\n")
 }
 
-function closesFence(opener: string | undefined, fence: string): boolean {
-  return opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length
+function blankedLine(scan: BlockScan, line: string): string {
+  if (scan.fence !== undefined) {
+    if (closesFence(line, scan.fence)) scan.fence = undefined
+    return blank(line)
+  }
+  if (scan.comment) return endOfComment(scan, line)
+  return openingLine(scan, line)
 }
 
-function blankInlineCode(text: string): string {
-  return text.replace(INLINE_CODE, blank)
+function closesFence(line: string, fence: string): boolean {
+  const closer = FENCE_CLOSE.exec(line)?.[1]
+  return closer !== undefined && closer[0] === fence[0] && closer.length >= fence.length
+}
+
+function endOfComment(scan: BlockScan, line: string): string {
+  const end = line.indexOf(COMMENT_END)
+  if (end < 0) return blank(line)
+  scan.comment = false
+  const after = end + COMMENT_END.length
+  return `${blank(line.slice(0, after))}${line.slice(after)}`
+}
+
+function openingLine(scan: BlockScan, line: string): string {
+  const fence = FENCE_OPEN.exec(line)?.[1]
+  if (fence !== undefined) {
+    scan.fence = fence
+    return blank(line)
+  }
+  if (COMMENT_BLOCK.test(line) && !line.includes(COMMENT_END)) {
+    scan.comment = true
+    return blank(line)
+  }
+  return indentedLine(scan, line)
+}
+
+function indentedLine(scan: BlockScan, line: string): string {
+  if (line.trim() === "") return line
+  trackList(scan, line)
+  const code = INDENTED.test(line) && !scan.inList && (scan.previousBlank || scan.indentedCode)
+  scan.indentedCode = code
+  return code ? blank(line) : line
+}
+
+function trackList(scan: BlockScan, line: string): void {
+  if (LIST_ITEM.test(line)) scan.inList = true
+  else if (scan.previousBlank && !INDENTED.test(line)) scan.inList = false
 }
 
 function blank(span: string): string {
@@ -200,8 +247,12 @@ function cappedWarnings(warnings: readonly string[]): string[] {
 
 function runsOf(listed: readonly ListedRef[]): ListedRef[][] {
   const runs = new Map<string, ListedRef[]>()
-  for (const entry of listed) runs.set(refText(entry.first), [...(runs.get(refText(entry.first)) ?? []), entry])
+  for (const entry of listed) runs.set(runKey(entry), [...(runs.get(runKey(entry)) ?? []), entry])
   return [...runs.values()]
+}
+
+function runKey(entry: ListedRef): string {
+  return `${entry.keyword.toLowerCase()} ${refText(entry.first)}`
 }
 
 function runWarning(run: readonly ListedRef[]): string {
