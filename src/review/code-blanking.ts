@@ -89,6 +89,7 @@ function leaveListsUnlessContinued(scan: BlockScan, rest: string, indent: number
   const opens = FENCE_OPEN.test(rest) || COMMENT_BLOCK.test(rest) || LIST_MARKER.test(rest)
   if (scan.paragraph && !opens) return
   while ((scan.lists.at(-1) ?? -1) > indent) scan.lists.pop()
+  scan.paragraph = false
 }
 
 function blockStart(scan: BlockScan, line: string, body: string, container: number): string {
@@ -116,8 +117,7 @@ function startList(scan: BlockScan, body: string, container: number): void {
   const marker = LIST_MARKER.exec(body)
   if (marker === null) return
   const ordinal = marker[1]
-  const interrupts = scan.paragraph && scan.lists.length === 0
-  if (interrupts && ordinal !== undefined && Number(ordinal) !== 1) return
+  if (scan.paragraph && ordinal !== undefined && Number(ordinal) !== 1) return
   scan.lists.push(container + indentOf(marker[0].replace(/[^ \t]/g, " ")))
 }
 
