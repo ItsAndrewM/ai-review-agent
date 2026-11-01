@@ -32,7 +32,7 @@ describe("buildSkillManifest", () => {
     expect(manifest.id).toBe("builtin")
     expect(manifest.skills.map((s) => s.name).sort()).toEqual(["answer", "review", "summary", "verify"])
     const review = manifest.skills.find((s) => s.name === "review")
-    expect(review?.version).toBe("12")
+    expect(review?.version).toBe("13")
     expect(review?.resources?.map((r) => r.path).sort()).toEqual([
       "CREDITS.md",
       "references/merge-danger.md",
@@ -269,6 +269,7 @@ describe("bundledSkills", () => {
 
   it("names the files that need a walkthrough row in an incremental review, in its step and in its completion criterion", async () => {
     const review = await (await bundledSkills()).source.load("review")
+    expect(review?.body).toContain("one sentence on what changed in the file, never what the review did or saw there")
     expect(review?.body).toContain(
       "Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.",
     )

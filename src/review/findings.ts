@@ -465,6 +465,11 @@ export function rowPath(path: string): string {
   return path.trim().replace(/^\.\//, "")
 }
 
+export function rowsWithin(rows: readonly WalkthroughInput[], files: readonly ChangedFile[]): WalkthroughInput[] {
+  const reviewable = new Set(files.map((file) => file.filename))
+  return rows.map((row) => ({ ...row, path: rowPath(row.path) })).filter((row) => reviewable.has(row.path))
+}
+
 export const SEVERITY_LABEL = {
   blocking: "🔴 Blocking",
   major: "🟠 Major",

@@ -19,6 +19,7 @@ import {
   Severity,
   Walkthrough,
   walkthroughPaths,
+  rowsWithin,
   type FindingInput,
   type MergeDangerInput,
   type Rejected,
@@ -150,6 +151,7 @@ export interface NextReviewedInput {
   submission: ReviewSubmissionInput
   resolved: number
   omitted: readonly OmittedRequirementInput[]
+  files: readonly ChangedFile[]
 }
 
 export interface DeltaScope {
@@ -530,7 +532,8 @@ export function findingRecords(
 }
 
 export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
-  const { previous, scope, headSha, baseRef, at, submission, resolved, omitted } = input
+  const { previous, scope, headSha, baseRef, at, submission, resolved, omitted, files } = input
+  const rows = rowsWithin(submission.walkthrough, reviewableFiles(files, scope.pathFilters ?? []))
   if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {
     return {
       headSha,
@@ -538,7 +541,7 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
       at,
       mode: scope.mode,
       summary: submission.summary,
-      walkthrough: submission.walkthrough,
+      walkthrough: rows,
       merge_danger: submission.merge_danger,
       omitted: [...omitted],
     }
@@ -551,7 +554,7 @@ export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
     at,
     mode: "incremental",
     summary: previous.summary,
-    walkthrough: mergeWalkthrough(previous.walkthrough, submission.walkthrough, rowsTaken),
+    walkthrough: mergeWalkthrough(previous.walkthrough, rows, rowsTaken),
     merge_danger: mergeDangerAfterPush(previous.merge_danger, submission.merge_danger),
     since: {
       from: scope.from,

@@ -175,6 +175,7 @@ import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
   missingWalkthrough,
+  rowsWithin,
   parseWrittenReview,
   toReviewComment,
   validateFindings,
@@ -408,6 +409,7 @@ interface Attribution {
 
 interface CheckedSubmission {
   scope: ReviewScope
+  files: ChangedFile[]
   validated: ValidatedReview
   scoped: ScopedReview
   missing: string[]
@@ -994,7 +996,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reasonsRejected: reasons.rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    return { scope, validated, scoped, missing, reasons }
+    return { scope, files, validated, scoped, missing, reasons }
   }
 
   private async endIncomplete(
@@ -1206,6 +1208,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       submission,
       resolved: resolved.length,
       omitted: omittedIn(reasons),
+      files: publication.checked.files,
     })
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
@@ -2623,7 +2626,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     answer: SummarySubmissionInput,
     files: readonly ChangedFile[],
   ): Promise<SummarySubmissionInput> {
-    if (reviewed === undefined) return answer
+    if (reviewed === undefined) return { ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }
     const record = summarizedRecord(reviewed, answer, files)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", record)
     return {

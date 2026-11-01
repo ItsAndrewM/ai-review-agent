@@ -2,7 +2,7 @@
 name: review
 description: Review a pull request's diff for defects, spec, standards, tests and docs, then submit it with submit_review. Use for every review request.
 metadata:
-  version: "12"
+  version: "13"
 ---
 
 The references are below in your instructions, each in a `skill_resource` element with its path, such as `references/smells.md`. Use each one when its step says to.
@@ -23,7 +23,7 @@ Take the files in the diff's order and read every hunk. Call `read_file` when a 
 - **Tests**: new behaviour has a test that fails without it. When a hunk adds behaviour or a test, judge the test by `references/tests.md`, below. A finding about a missing or a bad test takes the `test` kind.
 - **Docs**: for each file under `## Docs under review`, check every claim its changed lines make about the code against the code, with `read_file` and `grep`; for each line under `## Docs mentioning the change`, read the paragraph around it and check what it says about the changed file against the hunks. A claim the code contradicts is a `docs` finding: its basis names the doc's `path:line` and the claim, and the code `path:line` that contradicts it. A doc the pull request adds under `docs/superpowers/` is checked only for what it says this pull request does; a modified one there is history and is not checked.
 
-Note the file's walkthrough row for `submit_review`, then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.
+Note the file's walkthrough row for `submit_review`: one sentence on what changed in the file, never what the review did or saw there; then take the next file. Every changed file gets a row; in an incremental review, every file under `## Changes since your last review`.
 
 ## 3. Record findings
 

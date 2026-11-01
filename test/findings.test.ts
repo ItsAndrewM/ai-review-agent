@@ -1,12 +1,13 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { commentableLines } from "../src/github/diff.ts"
+import { commentableLines, type ChangedFile } from "../src/github/diff.ts"
 import type { BasisContext } from "../src/review/basis.ts"
 import { budgetNote } from "../src/review/budget.ts"
 import type { ReviewSpend } from "../src/review/cost.ts"
 import {
   MAX_FINDINGS,
   missingWalkthrough,
+  rowsWithin,
   parseWrittenReview,
   ReviewSubmission,
   toReviewComment,
@@ -589,6 +590,23 @@ describe("basis", () => {
     expect(comment.body).toBe(
       "**🔴 Blocking: b changed**\n\nWhy did b change?\n\n_Basis (defect): with an empty cart the total is NaN_\n\n```suggestion\nconst b = 4;\n```",
     )
+  })
+})
+
+describe("rowsWithin", () => {
+  const file = (filename: string): ChangedFile => ({ filename, status: "modified", additions: 1, deletions: 0 })
+
+  it("keeps, in order and with the path normalised, the rows whose file is reviewable, and drops the rest", () => {
+    const rows = [
+      { path: "vendor/x.js", summary: "generated" },
+      { path: "./src/a.ts", summary: "a" },
+      { path: "src/b.ts", summary: "b" },
+    ]
+    expect(rowsWithin(rows, [file("src/a.ts"), file("src/b.ts")])).toEqual([
+      { path: "src/a.ts", summary: "a" },
+      { path: "src/b.ts", summary: "b" },
+    ])
+    expect(rowsWithin(rows, [])).toEqual([])
   })
 })
 

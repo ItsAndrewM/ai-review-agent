@@ -7,6 +7,7 @@ import type { LastReview } from "./approval.ts"
 import {
   jsonIn,
   rowPath,
+  rowsWithin,
   SummarySubmission,
   type MergeDangerInput,
   type SummarySubmissionInput,
@@ -73,7 +74,7 @@ function summarizedRows(
   written: readonly WalkthroughInput[],
   files: readonly ChangedFile[],
 ): WalkthroughInput[] {
-  const rows = underRowPath(written)
+  const rows = rowsWithin(written, files)
   const answered = new Set(rows.map((row) => row.path))
   const changed = new Set(files.map((file) => file.filename))
   const kept = underRowPath(stored).filter((row) => changed.has(row.path) && !answered.has(row.path))

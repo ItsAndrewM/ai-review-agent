@@ -95,6 +95,11 @@ describe("summarizedRecord", () => {
     expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("omitted")
   })
 
+  it("drops a written row for a file outside the reviewable set, as the review does", () => {
+    const stray = { ...written, walkthrough: [...written.walkthrough, { path: "vendor/x.js", summary: "generated" }] }
+    expect(summarizedRecord(reviewed, stray, files).walkthrough.map((row) => row.path)).toEqual(["a.ts", "b.ts"])
+  })
+
   it("replaces the summary, walkthrough and merge danger, drops the since section and keeps the head", () => {
     expect(summarizedRecord(reviewed, written, files)).toStrictEqual({
       headSha: "abc",

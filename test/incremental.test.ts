@@ -864,7 +864,21 @@ describe("nextReviewed", () => {
       submission: pushed,
       resolved: 1,
       omitted,
+      files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
     })
+
+  it("drops a written row for a file outside the reviewable set, on a full and on an incremental review", () => {
+    const stray = {
+      ...submission,
+      walkthrough: [...submission.walkthrough, { path: "vendor/x.js", summary: "generated" }],
+    }
+    const full = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(reviewedAfter(previous, full, stray).walkthrough).toEqual([{ path: "a.ts", summary: "new a" }])
+    expect(reviewedAfter(previous, incremental, stray).walkthrough).toEqual([
+      { path: "a.ts", summary: "new a" },
+      { path: "b.ts", summary: "old b" },
+    ])
+  })
 
   it("keeps the omitted requirements this review accepted, on a full and on an incremental review", () => {
     const omitted = [{ issue: 121, requirement: "Unit tests cover the basis check" }]
@@ -968,6 +982,7 @@ describe("nextReviewed", () => {
       omitted: [],
       submission: withLogo,
       resolved: 0,
+      files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
     })
     expect(next.walkthrough).toEqual([
       { path: "a.ts", summary: "new a" },
