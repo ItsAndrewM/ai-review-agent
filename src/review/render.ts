@@ -3,6 +3,7 @@ import type { CheckRecord, SeverityCounts } from "../records.ts"
 import { CONFIG_FILE } from "../repository/config.ts"
 import { secondsText } from "../sandbox/checks.ts"
 import type { SandboxStatus } from "../sandbox/runs.ts"
+import { plural, were } from "./copy.ts"
 import { spendLine, type ReviewSpend } from "./cost.ts"
 import {
   checkLabel,
@@ -176,7 +177,8 @@ function statusLine(headSha: string, verdict: VerdictLine): string {
   const status = `**Head:** \`${headSha.slice(0, 7)}\` · **Verdict:** ${verdict.label}`
   const { counts } = verdict
   if (counts === undefined) return status
-  return `${status} · 🔴 ${counts.blocking} blocking · 🟠 ${counts.major ?? 0} major · 🟡 ${counts.suggestion} suggestions · ⚪ ${counts.nitpick} nitpicks`
+  const graded = `🟡 ${plural(counts.suggestion, "suggestion")} · ⚪ ${plural(counts.nitpick, "nitpick")}`
+  return `${status} · 🔴 ${counts.blocking} blocking · 🟠 ${counts.major ?? 0} major · ${graded}`
 }
 
 function walkthroughTable(rows: readonly WalkthroughInput[]): string {
@@ -190,7 +192,7 @@ function walkthroughTable(rows: readonly WalkthroughInput[]): string {
 
 function droppedLine(droppedCount: number): string {
   return droppedCount > 0
-    ? `\n\n<sub>${droppedCount} finding(s) were dropped because they failed the host's checks, even after a retry.</sub>`
+    ? `\n\n<sub>${plural(droppedCount, "finding")} ${were(droppedCount)} dropped because ${droppedCount === 1 ? "it" : "they"} failed the host's checks, even after a retry.</sub>`
     : ""
 }
 
@@ -214,7 +216,7 @@ function sinceLines(since: SinceSection | undefined): string[] {
     since.summary.trim(),
     ...pushDangerLines(since.merge_danger),
     "",
-    `Files: ${files}. Resolved ${since.resolved} thread(s).`,
+    `Files: ${files}. Resolved ${plural(since.resolved, "thread")}.`,
   ]
 }
 
@@ -470,15 +472,11 @@ function coverageLine(coverage: Coverage | undefined): string | undefined {
   return `<sub>Incremental review of \`${range}\`: ${plural(coverage.files, "file")}; ${plural(coverage.resolved, "thread")} resolved.</sub>`
 }
 
-function plural(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`
-}
-
 function heldBack(rejected: readonly Rejected[]): string | undefined {
   const blocking = rejected.filter(holdsApprovalBack)
   if (blocking.length === 0) return undefined
   return [
-    `${blocking.length} blocking finding(s) couldn't be posted inline and hold approval back:`,
+    `${plural(blocking.length, "blocking finding")} couldn't be posted inline and ${blocking.length === 1 ? "holds" : "hold"} approval back:`,
     ...blocking
       .slice(0, MOST_HELD_BACK_LISTED)
       .map(
@@ -517,10 +515,10 @@ function noFindings(event: Verdict): string {
 function countsLine(accepted: readonly FindingInput[]): string {
   const counts = countBySeverity(accepted)
   const parts: string[] = []
-  if (counts.blocking > 0) parts.push(`${counts.blocking} blocking finding(s) to address before approval`)
-  if (counts.major > 0) parts.push(`${counts.major} major finding(s) worth fixing`)
-  if (counts.suggestion > 0) parts.push(`${counts.suggestion} suggestion(s)`)
-  if (counts.nitpick > 0) parts.push(`${counts.nitpick} nitpick(s)`)
+  if (counts.blocking > 0) parts.push(`${plural(counts.blocking, "blocking finding")} to address before approval`)
+  if (counts.major > 0) parts.push(`${plural(counts.major, "major finding")} worth fixing`)
+  if (counts.suggestion > 0) parts.push(plural(counts.suggestion, "suggestion"))
+  if (counts.nitpick > 0) parts.push(plural(counts.nitpick, "nitpick"))
   return `${parts.join(", ")}. Blocking findings are marked 🔴 and gate approval; the others don't.`
 }
 

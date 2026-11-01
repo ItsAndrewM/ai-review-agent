@@ -150,6 +150,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
+import { plural, were } from "./review/copy.ts"
 import {
   neuronsSince,
   reviewSpend,
@@ -1276,10 +1277,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const dropped =
       scoped.rejected.length > 0
-        ? ` ${scoped.rejected.length} finding(s) that still failed the checks were dropped.`
+        ? ` ${plural(scoped.rejected.length, "finding")} that still failed the checks ${were(scoped.rejected.length)} dropped.`
         : ""
     return {
-      text: `Posted review ${review.id} (${event}) with ${scoped.accepted.length} inline comment(s).${dropped}`,
+      text: `Posted review ${review.id} (${event}) with ${plural(scoped.accepted.length, "inline comment")}.${dropped}`,
       done: true,
     }
   }
