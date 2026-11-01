@@ -18,6 +18,9 @@ import {
   coveredMap,
   findingRecords,
   nextReviewed,
+  threadLink,
+  linkThreads,
+  changesSinceMissing,
   nothingToReview,
   openBlockingAfter,
   openBotThreads,
@@ -865,7 +868,19 @@ describe("nextReviewed", () => {
       resolved: 1,
       omitted,
       files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
+      linkOf: (thread) => `https://example.test/#r${thread.firstCommentId}`,
     })
+
+  it("writes the Since text from changes_since with the listed threads linked, and falls back to the summary", () => {
+    const listed = { ...incremental, recheck: [open("T1", { title: "Null  total", firstCommentId: 5 })] }
+    const pushed = { ...submission, changes_since: "Fixes T1 and leaves T10 alone." }
+    expect(reviewedAfter(previous, listed, pushed).since?.summary).toBe(
+      "Fixes [Null total](https://example.test/#r5) and leaves T10 alone.",
+    )
+    expect(reviewedAfter(previous, listed, submission).since?.summary).toBe("This push fixes the total.")
+    const full = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(reviewedAfter(previous, full, pushed)).not.toHaveProperty("since")
+  })
 
   it("drops a written row for a file outside the reviewable set, on a full and on an incremental review", () => {
     const stray = {
@@ -983,12 +998,59 @@ describe("nextReviewed", () => {
       submission: withLogo,
       resolved: 0,
       files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
+      linkOf: (thread) => `https://example.test/#r${thread.firstCommentId}`,
     })
     expect(next.walkthrough).toEqual([
       { path: "a.ts", summary: "new a" },
       { path: "b.ts", summary: "old b" },
       { path: "logo.png", summary: "adds a logo" },
     ])
+  })
+})
+
+describe("changesSinceMissing", () => {
+  const scopeOf = (mode: "full" | "incremental") =>
+    buildScope({
+      deliveryId: "d",
+      mode,
+      from: mode === "incremental" ? "aaa" : undefined,
+      covered: new Map(),
+      threads: undefined,
+    })
+  const base: ReviewSubmissionInput = { summary: "s", walkthrough: [], findings: [], merge_danger: twoWay }
+
+  it("is true for an incremental review without the field or with a blank one, and never for a full review", () => {
+    expect(changesSinceMissing(base, scopeOf("incremental"))).toBe(true)
+    expect(changesSinceMissing({ ...base, changes_since: "  " }, scopeOf("incremental"))).toBe(true)
+    expect(changesSinceMissing({ ...base, changes_since: "Fixes it." }, scopeOf("incremental"))).toBe(false)
+    expect(changesSinceMissing(base, scopeOf("full"))).toBe(false)
+  })
+})
+
+describe("linkThreads", () => {
+  const linkOf = (thread: OpenThread): string => `https://example.test/#r${thread.firstCommentId}`
+  const threads = [
+    open("T1", { title: "Null total", firstCommentId: 5 }),
+    open("T2", { title: "A very long title ".repeat(8), firstCommentId: 6 }),
+  ]
+
+  it("links every whole-word handle of a listed thread and leaves the rest of the text alone", () => {
+    expect(linkThreads("Fixes T1 and T2; T10 and T1a stay, as does https://x/T1.", threads, linkOf)).toBe(
+      `Fixes [Null total](https://example.test/#r5) and [${"A very long title ".repeat(8).trim().slice(0, 80)}](https://example.test/#r6); T10 and T1a stay, as does https://x/T1.`,
+    )
+  })
+
+  it("leaves a handle that names no listed thread, and text without handles", () => {
+    expect(linkThreads("T3 was fine.", threads, linkOf)).toBe("T3 was fine.")
+    expect(linkThreads("No handles here.", [], linkOf)).toBe("No handles here.")
+  })
+})
+
+describe("threadLink", () => {
+  it("points at the thread's first comment on the pull request", () => {
+    expect(threadLink("ItsAndrewM/ai-review-agent", 84, open("T1", { firstCommentId: 4430959808 }))).toBe(
+      "https://github.com/ItsAndrewM/ai-review-agent/pull/84#discussion_r4430959808",
+    )
   })
 })
 

@@ -117,6 +117,12 @@ export const ReviewSubmission = Type.Object({
     description:
       "Two to five sentences on what the pull request does and how it does it, naming each linked-issue requirement the diff leaves out, in the issue's words. Markdown.",
   }),
+  changes_since: Type.Optional(
+    Type.String({
+      description:
+        "In an incremental review, two to five sentences on what the new commits since the last review do. Markdown.",
+    }),
+  ),
   walkthrough: Type.Array(Walkthrough, { minItems: 1 }),
   findings: Type.Array(Finding),
   omitted_requirements: Type.Optional(

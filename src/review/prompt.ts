@@ -36,6 +36,9 @@ const ANCHOR_LEGEND =
   "Each patch line starts with its anchor: R<n> is line n of the new file (side RIGHT), L<n> is line n of the old file (side LEFT)."
 const PUSH_DANGER_NOTE =
   "Judge `merge_danger` for these commits alone, not for the whole pull request; the summary comment keeps the pull request's."
+const CHANGES_SINCE_NOTE = "Put what the new commits do in `changes_since`; `summary` still describes the pull request."
+const CHANGES_SINCE_MISSING =
+  "An incremental review needs `changes_since`: two to five sentences on what the new commits since the last review do. Add it, then call submit_review again with the whole review."
 const MARK_LEGEND =
   "A `*` after an anchor marks a line changed since your last review. Comment only on marked lines, except for a blocking bug the new changes cause elsewhere in the diff."
 const THREADS_NOTE =
@@ -91,7 +94,7 @@ export function fullPrompt(
 
 export function incrementalPrompt(pr: PullRequestInfo, input: IncrementalPromptInput): string {
   return [
-    `Review the changes since your last review of this pull request, \`${shortSha(input.from)}..${shortSha(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE} ${PUSH_DANGER_NOTE}`,
+    `Review the changes since your last review of this pull request, \`${shortSha(input.from)}..${shortSha(pr.head.sha)}\`, and submit the review with submit_review. ${MATERIAL_NOTE} ${PUSH_DANGER_NOTE} ${CHANGES_SINCE_NOTE}`,
     MARK_LEGEND,
     dataBlock([
       pullRequestData(pr, input.issues),
@@ -269,11 +272,13 @@ export function problemsText(
   rejected: readonly Rejected[],
   missing: readonly string[],
   reasons: readonly string[] = [],
+  changesSinceMissing = false,
 ): string {
   const parts: string[] = []
   if (rejected.length > 0) parts.push(rejectionsText(rejected))
   if (missing.length > 0) parts.push(missingRowsText(missing))
   if (reasons.length > 0) parts.push(reasonsText(reasons))
+  if (changesSinceMissing) parts.push(CHANGES_SINCE_MISSING)
   return parts.join("\n\n")
 }
 

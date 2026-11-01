@@ -156,6 +156,14 @@ describe("incrementalPrompt", () => {
     expect(text).toContain("## Reasons to re-check\n(none)")
   })
 
+  it("asks for the new commits' description in changes_since, which the full prompt never does", () => {
+    const sentence = "Put what the new commits do in `changes_since`; `summary` still describes the pull request."
+    expect(blockOf(text).before).toContain(sentence)
+    expect(fullPrompt(pushed, [], { recheck: [], otherThreads: [], leftOut: 0 }, [], NO_DOCS)).not.toContain(
+      "changes_since",
+    )
+  })
+
   it("asks the model to judge the merge danger of these commits alone, which the full prompt never does", () => {
     const sentence =
       "Judge `merge_danger` for these commits alone, not for the whole pull request; the summary comment keeps the pull request's."
@@ -552,6 +560,14 @@ describe("problemsText", () => {
 
   it("lists every file without a walkthrough row and asks for one row each", () => {
     expect(problemsText([], ["logo.png", "src/b.ts"])).toBe(missingRows)
+  })
+
+  it("asks an incremental review for changes_since when it left the field out, after the rows", () => {
+    const asked =
+      "An incremental review needs `changes_since`: two to five sentences on what the new commits since the last review do. Add it, then call submit_review again with the whole review."
+    expect(problemsText([], [], [], true)).toBe(asked)
+    expect(problemsText([], ["logo.png", "src/b.ts"], [], true)).toBe(`${missingRows}\n\n${asked}`)
+    expect(problemsText([], [], [], false)).toBe("")
   })
 
   it("is the rejections alone when every file has a row", () => {

@@ -218,6 +218,8 @@ import {
   pathFiltersSkip,
   pathsChangedSince,
   pathsNeedingRows,
+  threadLink,
+  changesSinceMissing,
   planThreads,
   promptFiles,
   resolveThreads,
@@ -413,6 +415,7 @@ interface CheckedSubmission {
   validated: ValidatedReview
   scoped: ScopedReview
   missing: string[]
+  changesSinceMissing: boolean
   reasons: CheckedReasons
 }
 
@@ -942,10 +945,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const checked = await this.checkSubmission(submission, pr, pending)
     const returned = [...checked.scoped.rejected, ...checked.scoped.duplicates]
     const reasonsRejected = checked.reasons.rejected
-    const problems = returned.length > 0 || checked.missing.length > 0 || reasonsRejected.length > 0
+    const problems =
+      returned.length > 0 || checked.missing.length > 0 || reasonsRejected.length > 0 || checked.changesSinceMissing
     if (pending.rejectionsReturned !== true && problems) {
       await this.markRejectionsReturned(pending.deliveryId)
-      return { text: problemsText(returned, checked.missing, reasonsRejected), done: false }
+      return {
+        text: problemsText(returned, checked.missing, reasonsRejected, checked.changesSinceMissing),
+        done: false,
+      }
     }
     if (checked.missing.length > 0) return this.endIncomplete(pr, pending, checked.missing)
     return this.verifyAndPublish(pr, pending, submission, checked)
@@ -996,7 +1003,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       reasonsRejected: reasons.rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
     })
-    return { scope, files, validated, scoped, missing, reasons }
+    return {
+      scope,
+      files,
+      validated,
+      scoped,
+      missing,
+      changesSinceMissing: changesSinceMissing(submission, scope),
+      reasons,
+    }
   }
 
   private async endIncomplete(
@@ -1209,7 +1224,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       resolved: resolved.length,
       omitted: omittedIn(reasons),
       files: publication.checked.files,
+      linkOf: (thread) => threadLink(pr.base.repo.full_name, pr.number, thread),
     })
+    this.noteChangesSinceMissing(pr, publication.checked.changesSinceMissing)
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       headSha: pr.head.sha,
@@ -2987,6 +3004,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async failedRun(note: string): Promise<UpdateCheckRun> {
     return failedCheckRun(note, await this.summaryCommentUrl(), Date.now())
+  }
+
+  private noteChangesSinceMissing(pr: PullRequestInfo, missing: boolean): void {
+    if (missing) log("review.changes_since_missing", { number: pr.number, head: shortSha(pr.head.sha) })
   }
 
   private async completeAsPostedEarlier(deliveryId: string, posted: PostedReview): Promise<void> {

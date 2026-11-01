@@ -759,6 +759,12 @@ describe("the major grade", () => {
     expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows })).toBe(true)
   })
 
+  it("takes changes_since, the new commits' description for an incremental review, as an optional field", () => {
+    const rows = [{ path: "src/x.ts", summary: "s" }]
+    expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows, changes_since: "Fixes the total." })).toBe(true)
+    expect(Value.Check(ReviewSubmission, { ...base, walkthrough: rows, changes_since: 3 })).toBe(false)
+  })
+
   it("labels a major finding 🟠 Major", () => {
     expect(toReviewComment(finding({ severity: "major" })).body).toMatch(/^\*\*🟠 Major: b changed\*\*/)
   })
