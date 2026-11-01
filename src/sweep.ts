@@ -1,4 +1,4 @@
-import type { OpenPullRequest, RepoRef } from "./github/client.ts"
+import { GitHubClient, type OpenPullRequest, type RepoRef } from "./github/client.ts"
 import { errorText, log, logError } from "./log.ts"
 import type { PullRequestKey } from "./records.ts"
 import type { SweepIncoming, SweepOutcome } from "./review/sweep-decision.ts"
@@ -91,6 +91,27 @@ export function sweepIncoming(key: PullRequestKey, pull: OpenPullRequest): Sweep
     headSha: pull.headSha,
     full: false,
     sweep: { draft: pull.draft, baseRef: pull.baseRef, title: pull.title },
+  }
+}
+
+export function sweepGitHub(
+  appJwt: string,
+  token: (installationId: number) => Promise<string>,
+  apiBase?: string,
+): SweepGitHub {
+  const clients = new Map<number, Promise<GitHubClient>>()
+  const installation = (installationId: number): Promise<GitHubClient> => {
+    const known = clients.get(installationId)
+    if (known !== undefined) return known
+    const client = token(installationId).then((minted) => new GitHubClient(minted, apiBase))
+    clients.set(installationId, client)
+    return client
+  }
+  return {
+    installations: () => new GitHubClient(appJwt, apiBase).listInstallations(),
+    repositories: async (installationId) => (await installation(installationId)).listInstallationRepositories(),
+    openPullRequests: async (installationId, ref, since) =>
+      (await installation(installationId)).listOpenPullRequests(ref, since),
   }
 }
 

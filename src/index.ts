@@ -1,7 +1,10 @@
 import { Value } from "typebox/value"
+import { createAppJwt, fetchInstallationToken } from "./github/app-auth.ts"
 import { verifyWebhookSignature } from "./github/webhook.ts"
+import { errorText, logError } from "./log.ts"
 import { objectName, routeWebhook, WebhookPayload } from "./route.ts"
 import { serveProbe } from "./sandbox/probe.ts"
+import { runSweep, sweepGitHub } from "./sweep.ts"
 import { versionOf } from "./version.ts"
 
 export { PullRequest } from "./pull-request.ts"
@@ -20,7 +23,27 @@ export default {
     if (request.method !== "POST") return new Response("Method not allowed", { status: 405 })
     return receiveWebhook(request, env)
   },
+  async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
+    ctx.waitUntil(sweep(env))
+  },
 } satisfies ExportedHandler<Env>
+
+async function sweep(env: Env): Promise<void> {
+  let appJwt: string
+  try {
+    appJwt = await createAppJwt(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY)
+  } catch (cause) {
+    logError("sweep.failed", { error: errorText(cause) })
+    return
+  }
+  const version = versionOf(env.CF_VERSION_METADATA)
+  const token = async (installationId: number) => (await fetchInstallationToken(appJwt, installationId)).token
+  await runSweep(
+    sweepGitHub(appJwt, token),
+    (incoming) => env.PULL_REQUEST.getByName(objectName(incoming.key)).sweep(incoming, version),
+    Date.now(),
+  )
+}
 
 async function receiveWebhook(request: Request, env: Env): Promise<Response> {
   const body = await request.text()

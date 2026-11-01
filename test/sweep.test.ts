@@ -1,7 +1,15 @@
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
+import { createServer, type Server } from "node:http"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
 import type { OpenPullRequest, RepoRef } from "../src/github/client.ts"
 import type { SweepIncoming, SweepOutcome } from "../src/review/sweep-decision.ts"
-import { runSweep, SWEEP_FLOOR_MS, SWEEP_WINDOW_MS, sweepIncoming, type SweepGitHub } from "../src/sweep.ts"
+import {
+  runSweep,
+  SWEEP_FLOOR_MS,
+  SWEEP_WINDOW_MS,
+  sweepGitHub,
+  sweepIncoming,
+  type SweepGitHub,
+} from "../src/sweep.ts"
 
 const NOW = Date.parse("2026-11-01T12:00:00Z")
 const MINUTE = 60_000
@@ -228,5 +236,65 @@ describe("sweepIncoming", () => {
       full: false,
       sweep: { draft: true, baseRef: "main", title: "WIP" },
     })
+  })
+})
+
+describe("sweepGitHub", () => {
+  const seen: { path: string; authorization: string | undefined }[] = []
+  const bodies = new Map([
+    ["/app/installations", JSON.stringify([{ id: 5 }, { id: 6 }])],
+    ["/installation/repositories", JSON.stringify({ repositories: [repository("o", "a"), repository("o", "b")] })],
+    ["/repos/o/a/pulls", JSON.stringify([])],
+    ["/repos/o/b/pulls", JSON.stringify([])],
+  ])
+  let server: Server
+  let base = ""
+
+  function repository(owner: string, name: string) {
+    return { name, owner: { login: owner } }
+  }
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      const path = new URL(req.url ?? "/", "http://localhost").pathname
+      seen.push({ path, authorization: req.headers.authorization })
+      const body = bodies.get(path)
+      res.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" })
+      res.end(body ?? "{}")
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!(address instanceof Object)) throw new Error("the test server has no port")
+    base = `http://127.0.0.1:${address.port}`
+  })
+
+  afterAll(() => {
+    server.close()
+  })
+
+  it("lists installations with the App JWT, and each installation's repositories and pulls with its own token", async () => {
+    const tokens: number[] = []
+    const github = sweepGitHub(
+      "app-jwt",
+      async (installationId) => {
+        tokens.push(installationId)
+        return `token-${installationId}`
+      },
+      base,
+    )
+    expect(await github.installations()).toEqual([5, 6])
+    const repos = await github.repositories(5)
+    expect(repos).toEqual([
+      { owner: "o", repo: "a" },
+      { owner: "o", repo: "b" },
+    ])
+    for (const ref of repos) await github.openPullRequests(5, ref, 0)
+    expect(seen).toEqual([
+      { path: "/app/installations", authorization: "Bearer app-jwt" },
+      { path: "/installation/repositories", authorization: "Bearer token-5" },
+      { path: "/repos/o/a/pulls", authorization: "Bearer token-5" },
+      { path: "/repos/o/b/pulls", authorization: "Bearer token-5" },
+    ])
+    expect(tokens).toEqual([5])
   })
 })
