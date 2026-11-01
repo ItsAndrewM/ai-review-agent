@@ -315,7 +315,9 @@ import {
   decidedRecord,
   decideSweep,
   factsOf,
+  mayRecordDecided,
   restartedPending,
+  settledAtStart,
   startedMark,
   StoredDecided,
   type DecidedReason,
@@ -813,7 +815,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     previous: PendingReview,
     callerVersion: Version | undefined,
   ): Promise<SweepOutcome> {
-    const restarted = restartedPending(previous, incoming.headSha, Date.now())
+    const restarted = { ...restartedPending(previous, incoming.headSha, Date.now()), ...(await this.usageBaseline()) }
     log("review.restarted", {
       number: incoming.key.number,
       head: shortSha(incoming.headSha),
@@ -832,7 +834,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.completeCheckRun(previous.checkRunId, previous, update)
     }
     await this.releasePending(previous.deliveryId)
-    await this.recordDecided(incoming.headSha, "gave_up", incoming.sweep)
+    await this.recordDecided(incoming.headSha, "gave_up", incoming.sweep, previous.deliveryId)
     return { kind: "gave_up" }
   }
 
@@ -879,7 +881,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const created = await github.createCheckRun(key, start)
       await github.updateCheckRun(key, created.id, update)
     }
-    await this.recordDecided(incoming.headSha, "failed", undefined)
+    await this.recordDecided(incoming.headSha, "failed", undefined, incoming.deliveryId)
     await this.endOwnRun(incoming.deliveryId, update)
   }
 
@@ -1585,11 +1587,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     incoming: ReviewIncoming,
     read: ConfigRead,
   ): Promise<SettingsSkip | undefined> {
+    if (settledAtStart(await this.readPending(), incoming.deliveryId)) return undefined
     const decision = shouldReview(read.config, pullRequestFacts(pr), reviewTrigger(incoming))
     const reason = decision.review ? await this.filesSkip(read.config) : decision.reason
     if (reason !== undefined) {
       log("review.skip", { reason, head: shortSha(pr.head.sha), number: pr.number, config: configStatus(read) })
-      await this.recordDecided(pr.head.sha, reason, factsOf(pr))
+      await this.recordDecided(pr.head.sha, reason, factsOf(pr), incoming.deliveryId)
     }
     return reason
   }
@@ -1963,7 +1966,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.releasePending(run.deliveryId)
     } catch (error) {
       if (afterReviewThrow(errorOf(error)) === "release") {
-        await this.recordDecided(pr.head.sha, "failed", factsOf(pr))
+        await this.recordDecided(pr.head.sha, "failed", factsOf(pr), run.deliveryId)
         await this.endOwnRun(run.deliveryId, await this.failedRun(errorText(error)))
       }
       throw error
@@ -2076,7 +2079,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const reviewed = await this.readReviewed()
     if (reviewed)
       await this.ctx.storage.put<ReviewedRecord>("reviewed", { ...reviewed, headSha: pr.head.sha, at: Date.now() })
-    await this.recordDecided(pr.head.sha, "unchanged", factsOf(pr))
+    await this.recordDecided(pr.head.sha, "unchanged", factsOf(pr), run.deliveryId)
     await this.endOwnRun(run.deliveryId, unchangedCheckRun(since, Date.now()))
   }
 
@@ -2308,7 +2311,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.upsertSummary(
       renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
     )
-    await this.recordDecided(pr.head.sha, "failed", factsOf(pr))
+    await this.recordDecided(pr.head.sha, "failed", factsOf(pr), run.deliveryId)
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -2341,7 +2344,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.upsertSummary(
       renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
     )
-    await this.recordDecided(pr.head.sha, "unposted", factsOf(pr))
+    await this.recordDecided(pr.head.sha, "unposted", factsOf(pr), run.deliveryId)
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -3200,7 +3203,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return Value.Check(StoredDecided, stored) ? stored : undefined
   }
 
-  private async recordDecided(headSha: string, reason: DecidedReason, facts: SweepFacts | undefined): Promise<void> {
+  private async recordDecided(
+    headSha: string,
+    reason: DecidedReason,
+    facts: SweepFacts | undefined,
+    deliveryId: string,
+  ): Promise<void> {
+    if (!mayRecordDecided(await this.readPending(), headSha, deliveryId)) return
     await this.ctx.storage.put<StoredDecided>("decided", decidedRecord(headSha, reason, facts))
   }
 

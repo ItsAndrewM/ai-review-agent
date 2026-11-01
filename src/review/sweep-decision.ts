@@ -76,8 +76,9 @@ function decidePending({ pending, running, now }: SweepState, headSha: string): 
 }
 
 export function restartedPending(previous: PendingReview, headSha: string, now: number): PendingReview {
+  const { rejectionsReturned: _returned, activated: _activated, usageBefore: _usage, ...kept } = previous
   return {
-    ...previous,
+    ...kept,
     operationId: `review:sweep:${headSha}:restart`,
     deliveryId: `sweep:${headSha}:restart`,
     started: now,
@@ -86,8 +87,24 @@ export function restartedPending(previous: PendingReview, headSha: string, now: 
   }
 }
 
+const SETTINGS_REASONS: ReadonlySet<DecidedReason> = new Set([
+  "auto",
+  "draft",
+  "base_branch",
+  "title_keyword",
+  "path_filters",
+])
+
 export function decidedRecord(headSha: string, reason: DecidedReason, facts: SweepFacts | undefined): StoredDecided {
-  return facts === undefined ? { headSha, reason } : { headSha, reason, facts }
+  return facts === undefined || !SETTINGS_REASONS.has(reason) ? { headSha, reason } : { headSha, reason, facts }
+}
+
+export function mayRecordDecided(pending: PendingReview | undefined, headSha: string, deliveryId: string): boolean {
+  return pending === undefined || pending.headSha !== headSha || pending.deliveryId === deliveryId
+}
+
+export function settledAtStart(pending: PendingReview | undefined, deliveryId: string): boolean {
+  return pending?.deliveryId === deliveryId
 }
 
 export function factsOf(pr: Pick<PullRequestInfo, "title" | "draft" | "base">): SweepFacts {

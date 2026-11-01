@@ -5,7 +5,9 @@ import {
   decidedRecord,
   decideSweep,
   factsOf,
+  mayRecordDecided,
   restartedPending,
+  settledAtStart,
   startedMark,
   STUCK_MS,
   StoredDecided,
@@ -176,5 +178,71 @@ describe("startedMark", () => {
   it("leaves a webhook's review unmarked", () => {
     const { sweep: _sweep, ...webhook } = incoming
     expect(startedMark(webhook)).toEqual({})
+  })
+})
+
+describe("decidedRecord keeps facts for settings skips only", () => {
+  it.each(["auto", "draft", "base_branch", "title_keyword", "path_filters"] as const)(
+    "keeps the facts a %s skip decided on",
+    (reason) => {
+      expect(decidedRecord("abc", reason, facts)).toEqual({ headSha: "abc", reason, facts })
+    },
+  )
+
+  it.each(["failed", "unposted", "unchanged", "gave_up"] as const)(
+    "drops them for %s, so a title edit doesn't re-run a review that ran",
+    (reason) => {
+      expect(decidedRecord("abc", reason, facts)).toEqual({ headSha: "abc", reason })
+    },
+  )
+
+  it("answers a failed head whose title changed as known, on its sha alone", () => {
+    const decided = decidedRecord("abc", "failed", facts)
+    const retitled = { ...incoming, sweep: { ...facts, title: "Renamed" } }
+    expect(decideSweep({ ...nothing, decided }, retitled)).toEqual({ kind: "known", reason: "failed" })
+  })
+})
+
+describe("mayRecordDecided", () => {
+  it("lets an exit record its head when no review is pending", () => {
+    expect(mayRecordDecided(undefined, "abc", "d-1")).toBe(true)
+  })
+
+  it("lets the delivery that holds the pending record its head", () => {
+    expect(mayRecordDecided(pending({ deliveryId: "d-1" }), "abc", "d-1")).toBe(true)
+  })
+
+  it("lets an exit record its head while another head is pending", () => {
+    expect(mayRecordDecided(pending({ headSha: "new", deliveryId: "d-2" }), "abc", "d-1")).toBe(true)
+  })
+
+  it("refuses an exit whose head another delivery now reviews, so its record can't hide that review", () => {
+    expect(mayRecordDecided(pending({ deliveryId: "d-2" }), "abc", "d-1")).toBe(false)
+  })
+})
+
+describe("settledAtStart", () => {
+  it("skips the settings for the delivery that holds the pending, which passed them when it started", () => {
+    expect(settledAtStart(pending({ deliveryId: "sweep:abc:restart" }), "sweep:abc:restart")).toBe(true)
+  })
+
+  it("decides the settings for any other delivery", () => {
+    expect(settledAtStart(undefined, "d-1")).toBe(false)
+    expect(settledAtStart(pending({ deliveryId: "d-2" }), "d-1")).toBe(false)
+  })
+})
+
+describe("restartedPending starts the restart's own accounting", () => {
+  it("drops the dead run's returned rejections, activated skills and usage baseline", () => {
+    const previous = pending({
+      rejectionsReturned: true,
+      activated: ["no-tmp-names"],
+      usageBefore: { "@cf/zai-org/glm-5.3-flash": { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, usd: 0.01 } },
+    })
+    const restarted = restartedPending(previous, "abc", NOW)
+    expect(restarted).not.toHaveProperty("rejectionsReturned")
+    expect(restarted).not.toHaveProperty("activated")
+    expect(restarted).not.toHaveProperty("usageBefore")
+    expect(restarted.checkRunId).toBe(99)
   })
 })
