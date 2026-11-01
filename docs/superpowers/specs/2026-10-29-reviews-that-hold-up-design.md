@@ -401,3 +401,15 @@ Unit: `changes_since` required in incremental mode and ignored in full mode; `ne
 ### Left to the builder
 
 The helper's home for the shared plural function; how the refusal text for a missing `changes_since` reads beside the missing-rows text; whether the retitle reuses `completeCheckRun` or a plainer update, as long as a failure can't fail the approval; the exact log fields of `approval.check_run_failed`.
+
+
+### Rulings after the review
+
+The fresh review (opus, 1 Nov 2026) found no Critical, two Important and seven Minor. Fixed:
+
+- The approved title leaves the blocking and major counts out ("Approved: 1 suggestion"), since the evaluation approves only after the blocking threads resolve, so those counts are stale by construction; the spec's "with the review's counts" meant the advisory ones.
+- A handle written in backticks links without them, and a handle in a query string, after `=` or `&`, or inside `[…]` is left alone; the link's title is clipped as the held-back list clips (80 characters and an ellipsis) with `[`, `]` and `\` escaped.
+- `rowPath` strips a surrounding backtick pair, so a row written as `` `src/a.ts` `` is kept rather than dropped on the summary and counted as present on the review.
+- `docs/design.md` says only a failed retitle is logged and that `review.done` logs `seconds`; the `submit_review` description says a missing `changes_since` comes back once; `review.findings` logs `changesSinceMissing`.
+
+Left as they are, for a follow-up if they show: a later run on the same head that ends as posted-earlier before the approval keeps its own "waits for the checks" title, since the posted record holds the first run's id; the refuse-once flow and the retitle are tested through their pure helpers, not the object, as the repository tests everything else; `review.changes_since_missing` logs twice when a publish is retried; the approved summary's verdict line still shows the review's counts as they stood.
