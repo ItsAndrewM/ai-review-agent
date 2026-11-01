@@ -89,3 +89,25 @@ A review the sweep started or restarted carries one footer line in that run's su
 - The footer's wording states what is known ("no webhook reached andabot"), which follows from Andrew's ruling that pre-install pull requests are reviewed.
 - The restart's fresh operation id, so Pi Durable doesn't replay the dead submission.
 - A new `sweep` RPC on the object that answers its decision, since `accept` answers before deciding.
+
+### Rulings while building and after the review
+
+Built inline from `docs/superpowers/plans/2026-11-01-sweep.md`, then reviewed whole-branch on opus (with fixes: no Critical, three Important, nine Minor).
+
+- **The restart doesn't decide settings again.** It replays as a push, and `reviewTrigger` calls a replay with no `requestedBy` a push. So a commanded review on a draft, a "WIP" title or an `auto: false` repository would be settings-skipped on restart, and its run would stay in progress. A delivery that holds the `pending` passed the settings when it started, so `settledAtStart` skips `settingsSkip` for it. That covers #118's resumes too.
+- **A stale exit doesn't write `decided`.** An exit writes `decided` only when no `pending` exists for its head, or when its own delivery holds it (`mayRecordDecided`). Otherwise an abandoned #118 rung, or a replaced run's final error, could hide a newer review of the same head from the sweep.
+- **Only a settings skip keeps the facts.** `failed`, `unposted`, `unchanged` and `gave_up` match on the head alone. So a title edit doesn't re-run a review that ran, per the "left alone" ruling.
+- **A restart is accounted on its own.** It drops the dead run's `rejectionsReturned`, `activated` and `usageBefore`, and takes a fresh usage baseline. So its first flawed submission gets its round of feedback, and the dead run's spend isn't charged against `MAX_REVIEW_NEURONS`.
+- **A new review clears the record.** Any review that starts a new `pending` deletes `decided`, not only `full review`. So a dead `@andabot review` retry of a failed head is restarted.
+- **The started line names the deploy's login.** It names `BOT_LOGIN`, as the commands line and the give-up run do.
+- **`reviewed` at hand-off.** The RPC answers `reviewed` once the review is handed to `waitUntil`, since awaiting it would hold the cron. A never-seen head that `.andabot.yaml` skips is logged once as `sweep.found` `unreviewed`. After that, `decided` answers for it.
+- **The check run's summary is the comment.** The posted check run's summary is the summary comment, so it carries the sweep line with no separate append.
+- **Before the deploy there's no `decided`.** In the first day after the deploy, a head whose review failed, ended unposted or ended unchanged before it, and was updated that day, is reviewed once more, with the started footer. This is documented in `docs/design.md`, not coded.
+- **Deferred minors:**
+  - The ids `sweep:<sha>` and `review:sweep:<sha>:restart` aren't unique per attempt.
+  - Unposted and failed runs don't carry the sweep line.
+  - One App JWT mints every installation's token lazily.
+  - Suspended installations log `sweep.failed` every sweep.
+  - "For this push" is loose for a facts-changed re-review.
+  - A never-seen head that settings skip counts once in `found`.
+  - Every sweep rewrites `key`.
