@@ -319,6 +319,7 @@ import {
   restartedPending,
   settledAtStart,
   startedMark,
+  stillDead,
   StoredDecided,
   type DecidedReason,
   type SweepIncoming,
@@ -816,6 +817,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     callerVersion: Version | undefined,
   ): Promise<SweepOutcome> {
     const restarted = { ...restartedPending(previous, incoming.headSha, Date.now()), ...(await this.usageBaseline()) }
+    if (!stillDead(await this.readPending(), previous)) return { kind: "known", reason: "in_progress" }
     log("review.restarted", {
       number: incoming.key.number,
       head: shortSha(incoming.headSha),
@@ -829,6 +831,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   async #giveUpSwept(incoming: SweepIncoming, previous: PendingReview): Promise<SweepOutcome> {
+    if (!stillDead(await this.readPending(), previous)) return { kind: "known", reason: "in_progress" }
     if (previous.checkRunId !== undefined) {
       const update = gaveUpCheckRun(incoming.headSha, this.botLogin(), Date.now())
       await this.completeCheckRun(previous.checkRunId, previous, update)

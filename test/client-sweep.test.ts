@@ -147,3 +147,41 @@ describe("sweep listings on a GitHub error", () => {
     expect(failure instanceof GitHubError ? failure.status : undefined).toBe(500)
   })
 })
+
+describe("sweep listings stop at a page cap", () => {
+  function endless(page: () => Json): FakeGitHub {
+    const urls: string[] = []
+    const fetchImpl: typeof fetch = async (input) => {
+      const url = new URL(String(input))
+      urls.push(`${url.pathname}${url.search}`)
+      return new Response(JSON.stringify(page()), { status: 200 })
+    }
+    return { client: new GitHubClient("t", "https://api.test", fetchImpl), urls, authorizations: [] }
+  }
+
+  const full = <Item extends Json>(item: (index: number) => Item): Item[] =>
+    Array.from({ length: 100 }, (_, index) => item(index))
+
+  it("refuses more than 10 pages of installations rather than paging forever", async () => {
+    const { client, urls } = endless(() => full((index) => installation(index + 1)))
+    await expect(client.listInstallations()).rejects.toThrow("more than 1000 installations")
+    expect(urls).toHaveLength(10)
+  })
+
+  it("refuses more than 10 pages of repositories rather than paging forever", async () => {
+    const { client, urls } = endless(() => ({
+      total_count: 5000,
+      repositories: full((index) => repository("o", `r${index}`)),
+    }))
+    await expect(client.listInstallationRepositories()).rejects.toThrow("more than 1000 repositories")
+    expect(urls).toHaveLength(10)
+  })
+
+  it("refuses more than 10 pages of recently updated pull requests rather than paging forever", async () => {
+    const { client, urls } = endless(() => full((index) => pull(index + 1, now - HOUR)))
+    await expect(client.listOpenPullRequests({ owner: "o", repo: "r" }, now - 24 * HOUR)).rejects.toThrow(
+      "more than 1000 open pull requests updated since",
+    )
+    expect(urls).toHaveLength(10)
+  })
+})

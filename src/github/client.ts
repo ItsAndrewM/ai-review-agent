@@ -333,6 +333,7 @@ const MOST_COMMENT_PAGES = 10
 const MOST_THREAD_PAGES = 5
 const BLOBS_PER_QUERY = 50
 const MOST_CHECK_RUN_PAGES = 10
+const MOST_SWEEP_PAGES = 10
 
 export class GitHubClient {
   constructor(
@@ -538,16 +539,17 @@ export class GitHubClient {
 
   async listInstallations(): Promise<number[]> {
     const ids: number[] = []
-    for (let page = 1; ; page++) {
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
       const batch = await this.json(Installations, `/app/installations?per_page=${PER_PAGE}&page=${page}`)
       ids.push(...batch.map(({ id }) => id))
       if (batch.length < PER_PAGE) return ids
     }
+    throw new Error(`GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} installations`)
   }
 
   async listInstallationRepositories(): Promise<RepoRef[]> {
     const repos: RepoRef[] = []
-    for (let page = 1; ; page++) {
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
       const { repositories } = await this.json(
         InstallationRepositories,
         `/installation/repositories?per_page=${PER_PAGE}&page=${page}`,
@@ -555,11 +557,12 @@ export class GitHubClient {
       repos.push(...repositories.map(({ name, owner }) => ({ owner: owner.login, repo: name })))
       if (repositories.length < PER_PAGE) return repos
     }
+    throw new Error(`GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} repositories in the installation`)
   }
 
   async listOpenPullRequests(ref: RepoRef, since: number): Promise<OpenPullRequest[]> {
     const pulls: OpenPullRequest[] = []
-    for (let page = 1; ; page++) {
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
       const batch = (
         await this.json(
           OpenPullRequests,
@@ -570,6 +573,9 @@ export class GitHubClient {
       pulls.push(...recent)
       if (recent.length < PER_PAGE) return pulls
     }
+    throw new Error(
+      `GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} open pull requests updated since ${new Date(since).toISOString()} on ${ref.owner}/${ref.repo}`,
+    )
   }
 
   async getCollaboratorPermission(ref: RepoRef, username: string): Promise<string> {

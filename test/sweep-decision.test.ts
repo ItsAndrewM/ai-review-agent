@@ -9,6 +9,7 @@ import {
   restartedPending,
   settledAtStart,
   startedMark,
+  stillDead,
   STUCK_MS,
   StoredDecided,
   type SweepIncoming,
@@ -244,5 +245,25 @@ describe("restartedPending starts the restart's own accounting", () => {
     expect(restarted).not.toHaveProperty("activated")
     expect(restarted).not.toHaveProperty("usageBefore")
     expect(restarted.checkRunId).toBe(99)
+  })
+})
+
+describe("stillDead", () => {
+  const dead = pending({ started: NOW - STUCK_MS })
+
+  it("lets the sweep act while the stored pending is the dead one it decided on", () => {
+    expect(stillDead(dead, { ...dead })).toBe(true)
+  })
+
+  it("holds off once the dead review's pending is gone", () => {
+    expect(stillDead(undefined, dead)).toBe(false)
+  })
+
+  it("holds off when a webhook's review for a newer head took the pending since the decision", () => {
+    expect(stillDead(pending({ headSha: "new", deliveryId: "d-2", started: NOW }), dead)).toBe(false)
+  })
+
+  it("holds off when the dead review's own delivery resumed since the decision", () => {
+    expect(stillDead({ ...dead, started: NOW }, dead)).toBe(false)
   })
 })

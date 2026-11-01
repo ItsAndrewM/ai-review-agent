@@ -75,6 +75,10 @@ function decidePending({ pending, running, now }: SweepState, headSha: string): 
   return { kind: "restart", previous: pending }
 }
 
+export function stillDead(stored: PendingReview | undefined, decidedOn: PendingReview): boolean {
+  return stored?.deliveryId === decidedOn.deliveryId && stored.started === decidedOn.started
+}
+
 export function restartedPending(previous: PendingReview, headSha: string, now: number): PendingReview {
   const { rejectionsReturned: _returned, activated: _activated, usageBefore: _usage, ...kept } = previous
   return {
