@@ -133,6 +133,13 @@ describe("approvedCheckRun", () => {
     })
   })
 
+  it("leaves the blocking and major counts out of the approved title, since approval means their threads are resolved", () => {
+    expect(approvedCheckRun({ counts: countOf(["blocking", "major", "suggestion"]) }, undefined, at).output.title).toBe(
+      "Approved: 1 suggestion",
+    )
+    expect(approvedCheckRun({ counts: countOf(["blocking"]) }, undefined, at).output.title).toBe("Approved")
+  })
+
   it("titles a record without counts Approved alone, and keeps the unverified mark", () => {
     expect(approvedCheckRun({}, undefined, at).output.title).toBe("Approved")
     expect(approvedCheckRun({ counts: countOf([]), unverified: true }, undefined, at).output.title).toBe(

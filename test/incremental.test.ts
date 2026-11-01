@@ -1045,10 +1045,21 @@ describe("linkThreads", () => {
     open("T2", { title: "A very long title ".repeat(8), firstCommentId: 6 }),
   ]
 
-  it("links every whole-word handle of a listed thread and leaves the rest of the text alone", () => {
+  it("links every whole-word handle of a listed thread, clipping a long title, and leaves the rest of the text alone", () => {
     expect(linkThreads("Fixes T1 and T2; T10 and T1a stay, as does https://x/T1.", threads, linkOf)).toBe(
-      `Fixes [Null total](https://example.test/#r5) and [${"A very long title ".repeat(8).trim().slice(0, 80)}](https://example.test/#r6); T10 and T1a stay, as does https://x/T1.`,
+      `Fixes [Null total](https://example.test/#r5) and [${"A very long title ".repeat(8).trim().slice(0, 80)}…](https://example.test/#r6); T10 and T1a stay, as does https://x/T1.`,
     )
+  })
+
+  it("links a handle written in backticks without leaving the backticks, and leaves one in a query, a key or a link", () => {
+    expect(linkThreads("Fixes `T1`.", threads, linkOf)).toBe("Fixes [Null total](https://example.test/#r5).")
+    const left = "see https://x.test/p?t=T1 and x=T1 and [T1](u) and a&T1"
+    expect(linkThreads(left, threads, linkOf)).toBe(left)
+  })
+
+  it("escapes the brackets and backslashes of a title so the link survives", () => {
+    const odd = [open("T4", { title: "a [b] c\\", firstCommentId: 7 })]
+    expect(linkThreads("T4", odd, linkOf)).toBe("[a \\[b\\] c\\\\](https://example.test/#r7)")
   })
 
   it("leaves a handle that names no listed thread, and text without handles", () => {

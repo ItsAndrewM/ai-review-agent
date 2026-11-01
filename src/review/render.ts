@@ -489,7 +489,7 @@ function heldBack(rejected: readonly Rejected[]): string | undefined {
   ].join("\n")
 }
 
-function clipped(text: string, most: number): string {
+export function clipped(text: string, most: number): string {
   return cut(oneLine(text), most)
 }
 

@@ -608,6 +608,12 @@ describe("rowsWithin", () => {
     ])
     expect(rowsWithin(rows, [])).toEqual([])
   })
+
+  it("reads a path written in backticks, as models write them, so the row is kept rather than dropped", () => {
+    expect(rowsWithin([{ path: "`./src/a.ts`", summary: "a" }], [file("src/a.ts")])).toEqual([
+      { path: "src/a.ts", summary: "a" },
+    ])
+  })
 })
 
 describe("missingWalkthrough", () => {

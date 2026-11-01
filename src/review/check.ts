@@ -66,7 +66,8 @@ export function approvedCheckRun(
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  const title = markedUnverified(checkRunTitle("APPROVE", posted.counts ?? NO_COUNTS), posted.unverified === true)
+  const advisory = { ...(posted.counts ?? NO_COUNTS), blocking: 0, major: 0 }
+  const title = markedUnverified(checkRunTitle("APPROVE", advisory), posted.unverified === true)
   return completedCheckRun("success", checkOutput(title, APPROVED_SUMMARY), detailsUrl, completedAt)
 }
 

@@ -27,7 +27,7 @@ import {
   type ValidatedReview,
 } from "./findings.ts"
 import { OmittedRequirement, type OmittedRequirementInput } from "./reasons.ts"
-import { mergeWalkthrough } from "./render.ts"
+import { clipped, mergeWalkthrough } from "./render.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
 
@@ -577,7 +577,7 @@ function reviewedWithoutTiming(input: NextReviewedInput): ReviewedRecord {
   }
 }
 
-const HANDLE = /(?<![\w/#.:-])T\d+\b/g
+const HANDLE = /`(T\d+)`|(?<![\w/#.:=?&[-])(T\d+)\b/g
 const MOST_LINK_TITLE_CHARS = 80
 
 export function changesSinceMissing(submission: ReviewSubmissionInput, scope: ReviewScope): boolean {
@@ -596,14 +596,14 @@ export function linkThreads(
   linkOf: (thread: OpenThread) => string,
 ): string {
   const byHandle = new Map(threads.map((thread) => [thread.handle, thread]))
-  return text.replace(HANDLE, (handle) => {
-    const thread = byHandle.get(handle)
-    return thread === undefined ? handle : `[${linkTitle(thread.title)}](${linkOf(thread)})`
+  return text.replace(HANDLE, (written, inTicks: string | undefined, bare: string | undefined) => {
+    const thread = byHandle.get(inTicks ?? bare ?? "")
+    return thread === undefined ? written : `[${linkTitle(thread.title)}](${linkOf(thread)})`
   })
 }
 
 function linkTitle(title: string): string {
-  return title.replace(/\s+/g, " ").trim().slice(0, MOST_LINK_TITLE_CHARS).replace(/\]/g, "\\]")
+  return clipped(title, MOST_LINK_TITLE_CHARS).replace(/[\\[\]]/g, (character) => `\\${character}`)
 }
 
 export function threadLink(repo: string, number: number, thread: OpenThread): string {

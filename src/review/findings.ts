@@ -468,7 +468,11 @@ export function missingWalkthrough(submission: ReviewSubmissionInput, needed: re
 }
 
 export function rowPath(path: string): string {
-  return path.trim().replace(/^\.\//, "")
+  return path
+    .trim()
+    .replace(/^`(.*)`$/, "$1")
+    .trim()
+    .replace(/^\.\//, "")
 }
 
 export function rowsWithin(rows: readonly WalkthroughInput[], files: readonly ChangedFile[]): WalkthroughInput[] {

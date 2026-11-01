@@ -988,6 +988,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     )
     const scoped = applyDeltaPolicy(validated, deltaScopeOf(scope))
     const missing = missingWalkthrough(submission, pathsNeedingRows(scope, files))
+    const missingChangesSince = changesSinceMissing(submission, scope)
     const reasons = checkReasons(submission, {
       linkedIssues: pending.linkedIssues ?? [],
       title: pr.title,
@@ -1003,6 +1004,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       rejected: scoped.rejected.length,
       duplicates: scoped.duplicates.length,
       missingRows: missing.length,
+      changesSinceMissing: missingChangesSince,
       reasons: reasons.accepted.length,
       reasonsRejected: reasons.rejected.length,
       rejectionsReturned: pending.rejectionsReturned === true,
@@ -1013,7 +1015,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       validated,
       scoped,
       missing,
-      changesSinceMissing: changesSinceMissing(submission, scope),
+      changesSinceMissing: missingChangesSince,
       reasons,
     }
   }
