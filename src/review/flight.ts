@@ -11,6 +11,7 @@ export const StoredPending = Type.Object({
   deliveryId: Type.String(),
   operationId: Type.Optional(Type.String()),
   started: Type.Optional(Type.Integer()),
+  openedAt: Type.Optional(Type.Integer()),
   checkRunId: Type.Optional(Type.Integer()),
   model: Type.Optional(Type.String()),
   fingerprint: Type.Optional(Type.String()),
@@ -65,6 +66,10 @@ export function decideFlight(
 
 export function resumedPending(previous: PendingReview, now: number): PendingReview {
   return { ...previous, started: now }
+}
+
+export function elapsedSeconds(from: number, now: number): number {
+  return Math.round((now - from) / 100) / 10
 }
 
 export function afterReviewThrow(error: Error): "keep" | "release" {

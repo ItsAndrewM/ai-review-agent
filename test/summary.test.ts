@@ -95,6 +95,11 @@ describe("summarizedRecord", () => {
     expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("omitted")
   })
 
+  it("keeps how long the last review took, so the rewritten footer still says it", () => {
+    expect(summarizedRecord({ ...reviewed, seconds: 12.5 }, written, files).seconds).toBe(12.5)
+    expect(summarizedRecord(reviewed, written, files)).not.toHaveProperty("seconds")
+  })
+
   it("drops a written row for a file outside the reviewable set, as the review does", () => {
     const stray = { ...written, walkthrough: [...written.walkthrough, { path: "vendor/x.js", summary: "generated" }] }
     expect(summarizedRecord(reviewed, stray, files).walkthrough.map((row) => row.path)).toEqual(["a.ts", "b.ts"])

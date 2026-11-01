@@ -188,6 +188,7 @@ import {
 import {
   afterReviewThrow,
   decideFlight,
+  elapsedSeconds,
   resumedPending,
   migratePending,
   ownsOperation,
@@ -459,6 +460,7 @@ interface ReviewRun {
   operationId: string
   deliveryId: string
   started: number
+  openedAt: number
   checkRunId?: number
   staleBuild: boolean
   callerBuild: string | undefined
@@ -1225,10 +1227,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       omitted: omittedIn(reasons),
       files: publication.checked.files,
       linkOf: (thread) => threadLink(pr.base.repo.full_name, pr.number, thread),
+      seconds: elapsedSeconds(openedAt(pending), Date.now()),
     })
     this.noteChangesSinceMissing(pr, publication.checked.changesSinceMissing)
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
+      seconds: reviewed.seconds,
       headSha: pr.head.sha,
       event: verdict,
       submission: submissionFromRecord(submission, reviewed),
@@ -1441,16 +1445,19 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         operationId: previous.operationId,
         deliveryId: previous.deliveryId,
         started: previous.started,
+        openedAt: openedAt(previous),
         ...settings,
       }
       if (previous.checkRunId !== undefined) resumed.checkRunId = previous.checkRunId
       await this.runReview(pr, incoming, resumed)
       return undefined
     }
+    const started = Date.now()
     const run = {
       operationId: `review:${incoming.deliveryId}`,
       deliveryId: incoming.deliveryId,
-      started: Date.now(),
+      started,
+      openedAt: started,
       ...settings,
     }
     await this.ctx.storage.put<PendingReview>("pending", {
@@ -1458,6 +1465,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       deliveryId: incoming.deliveryId,
       operationId: run.operationId,
       started: run.started,
+      openedAt: run.openedAt,
       model: this.env.REVIEW_MODEL,
       fingerprint: skillsFingerprint,
       ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
@@ -1861,7 +1869,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
           outcome: "posted",
           source,
           skills: `review@${run.skillsFingerprint.slice(0, 8)}`,
-          ms: Date.now() - run.started,
+          seconds: elapsedSeconds(run.openedAt, Date.now()),
           ...this.#runs.usage(),
           ...sandboxFields(await this.#sandbox.seconds()),
           checks: (await this.#sandbox.checks()).size,
@@ -3085,6 +3093,10 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function openedAt(pending: PendingReview): number {
+  return pending.openedAt ?? pending.started
+}
 
 function docsSearchOf(kind: SearchAccess["kind"]): DocsSearch {
   if (kind === "ready") return "ready"

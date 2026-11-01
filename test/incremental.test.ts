@@ -857,6 +857,7 @@ describe("nextReviewed", () => {
     scope: ReviewScope,
     pushed: ReviewSubmissionInput = submission,
     omitted: OmittedRequirementInput[] = [],
+    seconds: number | undefined = undefined,
   ) =>
     nextReviewed({
       previous: before,
@@ -869,7 +870,16 @@ describe("nextReviewed", () => {
       omitted,
       files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
       linkOf: (thread) => `https://example.test/#r${thread.firstCommentId}`,
+      seconds,
     })
+
+  it("keeps how long the review took on the record, in both modes, and leaves it out when unknown", () => {
+    const full = buildScope({ deliveryId: "d", mode: "full", from: undefined, covered: new Map(), threads: undefined })
+    expect(reviewedAfter(previous, full, submission, [], 34.8).seconds).toBe(34.8)
+    expect(reviewedAfter(previous, incremental, submission, [], 12).seconds).toBe(12)
+    expect(reviewedAfter(previous, incremental)).not.toHaveProperty("seconds")
+    expect(Value.Check(ReviewedRecord, reviewedAfter(previous, full, submission, [], 34.8))).toBe(true)
+  })
 
   it("writes the Since text from changes_since with the listed threads linked, and falls back to the summary", () => {
     const listed = { ...incremental, recheck: [open("T1", { title: "Null  total", firstCommentId: 5 })] }
@@ -999,6 +1009,7 @@ describe("nextReviewed", () => {
       resolved: 0,
       files: [changed("a.ts", ""), changed("b.ts", ""), changed("logo.png", "")],
       linkOf: (thread) => `https://example.test/#r${thread.firstCommentId}`,
+      seconds: undefined,
     })
     expect(next.walkthrough).toEqual([
       { path: "a.ts", summary: "new a" },

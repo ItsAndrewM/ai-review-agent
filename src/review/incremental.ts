@@ -56,6 +56,7 @@ export const ReviewedRecord = Type.Object({
   merge_danger: Type.Optional(MergeDanger),
   since: Type.Optional(SinceSection),
   omitted: Type.Optional(Type.Array(OmittedRequirement)),
+  seconds: Type.Optional(Type.Number()),
 })
 
 export type ReviewedRecord = Static<typeof ReviewedRecord>
@@ -153,6 +154,7 @@ export interface NextReviewedInput {
   omitted: readonly OmittedRequirementInput[]
   files: readonly ChangedFile[]
   linkOf: (thread: OpenThread) => string
+  seconds: number | undefined
 }
 
 export interface DeltaScope {
@@ -533,6 +535,12 @@ export function findingRecords(
 }
 
 export function nextReviewed(input: NextReviewedInput): ReviewedRecord {
+  const record = reviewedWithoutTiming(input)
+  if (input.seconds !== undefined) record.seconds = input.seconds
+  return record
+}
+
+function reviewedWithoutTiming(input: NextReviewedInput): ReviewedRecord {
   const { previous, scope, headSha, baseRef, at, submission, resolved, omitted, files, linkOf } = input
   const rows = rowsWithin(submission.walkthrough, reviewableFiles(files, scope.pathFilters ?? []))
   if (scope.mode !== "incremental" || previous === undefined || scope.from === undefined) {

@@ -1242,6 +1242,7 @@ describe("renderSummaryComment", () => {
     configError?: string
     verify?: VerifyDisplay
     checks?: ChecksDisplay
+    seconds?: number
   }) =>
     renderSummaryComment({
       botLogin: "andabot",
@@ -1272,6 +1273,23 @@ describe("renderSummaryComment", () => {
 
   it("puts the merge danger on the line under the verdict, before the summary", () => {
     expect(summaryWith({})).toContain("⚪ 0 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary")
+  })
+
+  it("ends the footer's first line with how long the review took, when the record knows it", () => {
+    const timed = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      seconds: 34.8,
+    })
+    expect(timed).toContain(
+      "<sub>Reviewed by `@cf/zai-org/glm-5.3-flash` with skills `review@89abcdef` in 34.8 s.</sub>",
+    )
+    const whole = summaryWith({
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      seconds: 35,
+    })
+    expect(whole).toContain("with skills `review@89abcdef` in 35 s.</sub>")
   })
 
   it("flattens a multi-line blast radius onto the merge-danger line", () => {

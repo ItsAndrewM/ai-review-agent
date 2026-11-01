@@ -4,6 +4,7 @@ import { GitHubError } from "../src/github/errors.ts"
 import {
   afterReviewThrow,
   decideFlight,
+  elapsedSeconds,
   resumedPending,
   GRACE_MS,
   migratePending,
@@ -79,7 +80,21 @@ describe("decideFlight for the delivery that holds the pending", () => {
   })
 })
 
+describe("elapsedSeconds", () => {
+  it("counts the time since a start to one decimal, and prints a whole number without a trailing zero", () => {
+    expect(elapsedSeconds(0, 34_760)).toBe(34.8)
+    expect(elapsedSeconds(1_000, 36_040)).toBe(35)
+    expect(elapsedSeconds(0, 40)).toBe(0)
+  })
+})
+
 describe("resumedPending", () => {
+  it("keeps the time the review opened while it starts the grace afresh", () => {
+    const resumed = resumedPending({ ...pending, openedAt: 1 }, afterGrace)
+    expect(resumed).toEqual({ ...pending, openedAt: 1, started: afterGrace })
+    expect(Value.Check(StoredPending, resumed)).toBe(true)
+  })
+
   it("starts the grace afresh, so another delivery meanwhile skips rather than replacing the resumed review as dead", () => {
     const resumed = resumedPending(pending, afterGrace)
     expect(resumed).toEqual({ ...pending, started: afterGrace })

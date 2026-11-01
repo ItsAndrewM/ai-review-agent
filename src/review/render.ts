@@ -87,6 +87,7 @@ export function renderSummaryComment(input: {
   configError?: string | undefined
   checks?: ChecksDisplay | undefined
   sandboxSeconds?: number | undefined
+  seconds?: number | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
@@ -99,7 +100,7 @@ export function renderSummaryComment(input: {
       ...sinceLines(input.since),
     ],
     footer: [
-      ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify),
+      ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify, input.seconds),
       ...unverifiedLines(input.verify),
       ...spendLines(input.spend, input.sandboxSeconds),
       ...budgetNoteLines(input.budgetNote),
@@ -340,12 +341,14 @@ function reviewedBy(
   skillsFingerprint: string | undefined,
   repoSkillsFingerprint: string | undefined,
   verify: VerifyDisplay | undefined,
+  seconds: number | undefined,
 ): string[] {
   if (model === undefined || skillsFingerprint === undefined) return []
   const repo = repoSkillsFingerprint === undefined ? [] : [`repo@${repoSkillsFingerprint.slice(0, 8)}`]
   const skills = [`review@${skillsFingerprint.slice(0, 8)}`, ...repo].map((skill) => `\`${skill}\``).join(", ")
   const verifier = verify?.kind === "verified" ? ` · verified by \`${verify.model}\`` : ""
-  return [`<sub>Reviewed by \`${model}\`${verifier} with skills ${skills}.</sub>`]
+  const took = seconds === undefined ? "" : ` in ${seconds} s`
+  return [`<sub>Reviewed by \`${model}\`${verifier} with skills ${skills}${took}.</sub>`]
 }
 
 function unverifiedLines(verify: VerifyDisplay | undefined): string[] {

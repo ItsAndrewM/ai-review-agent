@@ -66,6 +66,7 @@ export function summarizedRecord(
     merge_danger: summary.merge_danger,
   }
   if (reviewed.omitted !== undefined) record.omitted = reviewed.omitted
+  if (reviewed.seconds !== undefined) record.seconds = reviewed.seconds
   return record
 }
 
