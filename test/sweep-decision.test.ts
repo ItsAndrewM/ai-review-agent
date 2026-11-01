@@ -6,6 +6,7 @@ import {
   decideSweep,
   factsOf,
   restartedPending,
+  startedMark,
   STUCK_MS,
   StoredDecided,
   type SweepIncoming,
@@ -164,5 +165,16 @@ describe("factsOf", () => {
   it("reads a missing draft as not a draft, as the listing does", () => {
     const { draft: _draft, ...undrafted } = pr
     expect(factsOf(undrafted).draft).toBe(false)
+  })
+})
+
+describe("startedMark", () => {
+  it("marks a review the sweep starts, so its footer says so", () => {
+    expect(startedMark(incoming)).toEqual({ sweep: "started" })
+  })
+
+  it("leaves a webhook's review unmarked", () => {
+    const { sweep: _sweep, ...webhook } = incoming
+    expect(startedMark(webhook)).toEqual({})
   })
 })

@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox"
 import type { PullRequestInfo } from "../github/client.ts"
 import { SweepFacts, type ReviewIncoming } from "./delivery.ts"
-import type { PendingReview } from "./flight.ts"
+import type { PendingReview, StoredPending } from "./flight.ts"
 
 export const STUCK_MS = 1_800_000
 
@@ -92,4 +92,8 @@ export function decidedRecord(headSha: string, reason: DecidedReason, facts: Swe
 
 export function factsOf(pr: Pick<PullRequestInfo, "title" | "draft" | "base">): SweepFacts {
   return { draft: pr.draft ?? false, baseRef: pr.base.ref, title: pr.title }
+}
+
+export function startedMark(incoming: ReviewIncoming): Pick<StoredPending, "sweep"> {
+  return incoming.sweep === undefined ? {} : { sweep: "started" }
 }

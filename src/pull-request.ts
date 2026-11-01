@@ -143,6 +143,7 @@ import {
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
+  gaveUpCheckRun,
   postedCheckRun,
   approvedCheckRun,
   postedEarlierCheckRun,
@@ -310,7 +311,18 @@ import {
   type SummaryOutcome,
   type WrittenSummary,
 } from "./review/summary.ts"
-import { decidedRecord, factsOf, type DecidedReason, type StoredDecided } from "./review/sweep-decision.ts"
+import {
+  decidedRecord,
+  decideSweep,
+  factsOf,
+  restartedPending,
+  startedMark,
+  StoredDecided,
+  type DecidedReason,
+  type SweepIncoming,
+  type SweepOutcome,
+  type SweepState,
+} from "./review/sweep-decision.ts"
 import { commandInThread, threadIgnoreReason, threadOf } from "./review/thread-question.ts"
 import {
   answeringFor,
@@ -766,6 +778,62 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.ctx.storage.put("key", incoming.key)
     this.ctx.waitUntil(this.#deliveries.accept(incoming, (replay) => this.handle(replay, callerVersion)))
     return "accepted"
+  }
+
+  async sweep(incoming: SweepIncoming, callerVersion?: Version): Promise<SweepOutcome> {
+    await this.ctx.storage.put("key", incoming.key)
+    const decision = decideSweep(await this.#sweepState(incoming.headSha), incoming)
+    switch (decision.kind) {
+      case "known":
+        return decision
+      case "review":
+        this.ctx.waitUntil(this.#deliveries.accept(incoming, (replay) => this.handle(replay, callerVersion)))
+        return { kind: "reviewed" }
+      case "restart":
+        return this.#restartSwept(incoming, decision.previous, callerVersion)
+      case "give_up":
+        return this.#giveUpSwept(incoming, decision.previous)
+    }
+  }
+
+  async #sweepState(headSha: string): Promise<SweepState> {
+    const pending = await this.readPending()
+    return {
+      paused: await this.isPaused(),
+      posted: (await this.ctx.storage.get(`posted:${headSha}`)) !== undefined,
+      decided: await this.readDecided(),
+      pending,
+      running: (await this.operationsOf(pending)).length > 0,
+      now: Date.now(),
+    }
+  }
+
+  async #restartSwept(
+    incoming: SweepIncoming,
+    previous: PendingReview,
+    callerVersion: Version | undefined,
+  ): Promise<SweepOutcome> {
+    const restarted = restartedPending(previous, incoming.headSha, Date.now())
+    log("review.restarted", {
+      number: incoming.key.number,
+      head: shortSha(incoming.headSha),
+      previous: previous.deliveryId,
+      delivery: restarted.deliveryId,
+    })
+    await this.ctx.storage.put<PendingReview>("pending", restarted)
+    const replay: SweepIncoming = { ...incoming, deliveryId: restarted.deliveryId }
+    this.ctx.waitUntil(this.#deliveries.accept(replay, (again) => this.handle(again, callerVersion)))
+    return { kind: "restarted" }
+  }
+
+  async #giveUpSwept(incoming: SweepIncoming, previous: PendingReview): Promise<SweepOutcome> {
+    if (previous.checkRunId !== undefined) {
+      const update = gaveUpCheckRun(incoming.headSha, this.botLogin(), Date.now())
+      await this.completeCheckRun(previous.checkRunId, previous, update)
+    }
+    await this.releasePending(previous.deliveryId)
+    await this.recordDecided(incoming.headSha, "gave_up", incoming.sweep)
+    return { kind: "gave_up" }
   }
 
   async onJob({ job }: LifecycleJobContext): Promise<LifecycleJobOutcome> {
@@ -1261,6 +1329,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       configError: pending.configError,
       checks,
       sandboxSeconds,
+      sweep: pending.sweep,
     })
     await this.upsertSummary(summary)
     const review = await github.createReview(key, key.number, {
@@ -1483,6 +1552,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       fingerprint: skillsFingerprint,
       ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
       ...(await this.usageBaseline()),
+      ...startedMark(incoming),
     })
     await this.runReview(pr, incoming, run)
     return undefined
@@ -3123,6 +3193,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   private async ownsPending(deliveryId: string): Promise<boolean> {
     return (await this.pendingFor(deliveryId)) !== undefined
+  }
+
+  private async readDecided(): Promise<StoredDecided | undefined> {
+    const stored = await this.ctx.storage.get("decided")
+    return Value.Check(StoredDecided, stored) ? stored : undefined
   }
 
   private async recordDecided(headSha: string, reason: DecidedReason, facts: SweepFacts | undefined): Promise<void> {
