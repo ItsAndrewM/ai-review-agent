@@ -26,7 +26,7 @@ function github(...replies: Reply[]): FakeGitHub {
     if (reply === undefined) return new Response("{}", { status: 500 })
     return new Response(JSON.stringify(reply.body), { status: reply.status })
   }
-  return { client: new GitHubClient("t", "https://api.test", fetchImpl), urls, authorizations }
+  return { client: new GitHubClient("t", "andabot", "https://api.test", fetchImpl), urls, authorizations }
 }
 
 const ok = (body: Json): Reply => ({ status: 200, body })
@@ -156,7 +156,7 @@ describe("sweep listings stop at a page cap", () => {
       urls.push(`${url.pathname}${url.search}`)
       return new Response(JSON.stringify(page()), { status: 200 })
     }
-    return { client: new GitHubClient("t", "https://api.test", fetchImpl), urls, authorizations: [] }
+    return { client: new GitHubClient("t", "andabot", "https://api.test", fetchImpl), urls, authorizations: [] }
   }
 
   const full = <Item extends Json>(item: (index: number) => Item): Item[] =>
