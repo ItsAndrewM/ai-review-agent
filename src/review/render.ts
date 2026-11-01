@@ -493,6 +493,10 @@ export function clipped(text: string, most: number): string {
   return cut(oneLine(text), most)
 }
 
+export function clippedPlain(text: string, most: number): string {
+  return cut(flattened(text), most)
+}
+
 function cut(text: string, most: number): string {
   return text.length > most ? `${text.slice(0, most)}…` : text
 }

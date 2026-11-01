@@ -407,8 +407,11 @@ The helper's home for the shared plural function; how the refusal text for a mis
 
 The fresh review (opus, 1 Nov 2026) found no Critical, two Important and seven Minor. Fixed:
 
-- The approved title leaves the blocking and major counts out ("Approved: 1 suggestion"), since the evaluation approves only after the blocking threads resolve, so those counts are stale by construction; the spec's "with the review's counts" meant the advisory ones.
-- A handle written in backticks links without them, and a handle in a query string, after `=` or `&`, or inside `[…]` is left alone; the link's title is clipped as the held-back list clips (80 characters and an ellipsis) with `[`, `]` and `\` escaped.
+- The approved title leaves the blocking count out ("Approved: 1 major, 1 suggestion"), since the evaluation approves only after the blocking threads resolve, so that count is stale by construction; the major, suggestion and nitpick counts stay, as a fresh approving review's title shows them. A later run of an approved head titles itself the same way through the marked posted record.
+- A handle written in backticks links without them, and a handle in a query string, after `=` or `&`, inside `[…]` or beside a letter outside ASCII is left alone; the link's title is flattened and clipped to 80 characters with an ellipsis, then `[`, `]` and `\` are escaped (a `|` stays as written, since the Since text is not a table).
+- The posted-record mark is idempotent, and an evaluation that stops because the head is approved reconciles it, so a failed write after the approval is made good by the next evaluation; a failed check-run update is still logged and not retried.
+- The summary's no-record path is a pure helper (`unrecordedSummary`) with its own test.
+- Acknowledged, not changed: a missing `changes_since` shares the one resubmission round with rejected findings, missing rows and unchecked reasons, so a second submission that drops the field after a first one refused for something else posts with the summary as the Since text, as a second submission still missing rows ends the review; one round bounds the model's calls, and the fallback is the text before this slice.
 - `rowPath` strips a surrounding backtick pair, so a row written as `` `src/a.ts` `` is kept rather than dropped on the summary and counted as present on the review.
 - `docs/design.md` says only a failed retitle is logged and that `review.done` logs `seconds`; the `submit_review` description says a missing `changes_since` comes back once; `review.findings` logs `changesSinceMissing`.
 

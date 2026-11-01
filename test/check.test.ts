@@ -133,11 +133,25 @@ describe("approvedCheckRun", () => {
     })
   })
 
-  it("leaves the blocking and major counts out of the approved title, since approval means their threads are resolved", () => {
+  it("leaves the blocking count out of the approved title, since approval means its threads are resolved, and keeps the advisory ones", () => {
     expect(approvedCheckRun({ counts: countOf(["blocking", "major", "suggestion"]) }, undefined, at).output.title).toBe(
-      "Approved: 1 suggestion",
+      "Approved: 1 major, 1 suggestion",
     )
     expect(approvedCheckRun({ counts: countOf(["blocking"]) }, undefined, at).output.title).toBe("Approved")
+  })
+
+  it("titles a later run of an approved head without the stale blocking count either", () => {
+    const posted = {
+      reviewId: 9,
+      event: "REQUEST_CHANGES" as const,
+      shown: "APPROVE" as const,
+      counts: countOf(["blocking", "suggestion"]),
+    }
+    expect(postedEarlierCheckRun(posted, undefined, at).output.title).toBe("Approved: 1 suggestion")
+    const requested = { ...posted, shown: "REQUEST_CHANGES" as const }
+    expect(postedEarlierCheckRun(requested, undefined, at).output.title).toBe(
+      "Changes requested: 1 blocking, 1 suggestion",
+    )
   })
 
   it("titles a record without counts Approved alone, and keeps the unverified mark", () => {

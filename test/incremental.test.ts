@@ -1057,6 +1057,15 @@ describe("linkThreads", () => {
     expect(linkThreads(left, threads, linkOf)).toBe(left)
   })
 
+  it("leaves a handle that touches a letter outside ASCII, as it leaves one inside a word", () => {
+    expect(linkThreads("préT1 and T1é stay.", threads, linkOf)).toBe("préT1 and T1é stay.")
+  })
+
+  it("keeps a pipe in a title as written, without a doubled backslash", () => {
+    const piped = [open("T5", { title: "a | b", firstCommentId: 8 })]
+    expect(linkThreads("T5", piped, linkOf)).toBe("[a | b](https://example.test/#r8)")
+  })
+
   it("escapes the brackets and backslashes of a title so the link survives", () => {
     const odd = [open("T4", { title: "a [b] c\\", firstCommentId: 7 })]
     expect(linkThreads("T4", odd, linkOf)).toBe("[a \\[b\\] c\\\\](https://example.test/#r7)")

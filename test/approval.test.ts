@@ -5,6 +5,7 @@ import { PostedReview } from "../src/records.ts"
 import { DEFAULT_CONFIG, parseConfig, type ConfigRead } from "../src/repository/config.ts"
 import {
   approvedPosted,
+  approvedPostedIfNeeded,
   approvalRecord,
   awaitsApproval,
   checksState,
@@ -57,6 +58,12 @@ describe("approvedPosted", () => {
     const posted: PostedReview = { reviewId: 9, event: "COMMENT", shown: "AWAITING_CHECKS", at: 5, checkRunId: 12 }
     expect(approvedPosted(posted)).toEqual({ ...posted, shown: "APPROVE" })
     expect(Value.Check(PostedReview, approvedPosted(posted))).toBe(true)
+  })
+
+  it("answers nothing for a record already shown approved, so a later evaluation reconciles once and then leaves it", () => {
+    const posted: PostedReview = { reviewId: 9, event: "COMMENT", shown: "APPROVE", at: 5, checkRunId: 12 }
+    expect(approvedPostedIfNeeded(posted)).toBeUndefined()
+    expect(approvedPostedIfNeeded({ ...posted, shown: "AWAITING_CHECKS" })).toEqual(posted)
   })
 })
 

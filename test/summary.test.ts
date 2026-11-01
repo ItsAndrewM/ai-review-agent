@@ -12,6 +12,7 @@ import {
   recordedVerdict,
   Summarizing,
   summarizedRecord,
+  unrecordedSummary,
   summaryLive,
   summaryReply,
 } from "../src/review/summary.ts"
@@ -60,6 +61,24 @@ describe("parseWrittenSummary", () => {
     expect(parseWrittenSummary(JSON.stringify({ ...answer, merge_danger: undefined }))).toEqual({
       kind: "unusable",
       reason: expect.stringMatching(/^the model's answer didn't fit: \/: .*merge_danger/),
+    })
+  })
+})
+
+describe("unrecordedSummary", () => {
+  it("drops a written row for a file outside the reviewable set when there is no reviewed record", () => {
+    const changed = (filename: string): ChangedFile => ({ filename, status: "modified", additions: 1, deletions: 0 })
+    const answer = {
+      summary: "new",
+      walkthrough: [
+        { path: "./a.ts", summary: "new a" },
+        { path: "vendor/x.js", summary: "generated" },
+      ],
+      merge_danger: { door: "two-way", blast_radius: "one module" },
+    } satisfies SummarySubmissionInput
+    expect(unrecordedSummary(answer, [changed("a.ts")])).toEqual({
+      ...answer,
+      walkthrough: [{ path: "a.ts", summary: "new a" }],
     })
   })
 })

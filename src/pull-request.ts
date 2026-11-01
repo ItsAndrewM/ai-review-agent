@@ -109,7 +109,7 @@ import type { SnapshotFiles } from "./repository/snapshot.ts"
 import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   approvalRecord,
-  approvedPosted,
+  approvedPostedIfNeeded,
   checksState,
   decideApproval,
   evaluatesAfterReview,
@@ -177,7 +177,6 @@ import { describeFailure } from "./review/failure.ts"
 import {
   countBySeverity,
   missingWalkthrough,
-  rowsWithin,
   parseWrittenReview,
   toReviewComment,
   validateFindings,
@@ -303,6 +302,7 @@ import {
   recordedVerdict,
   Summarizing,
   summarizedRecord,
+  unrecordedSummary,
   summaryLive,
   summaryReply,
   type SummaryOutcome,
@@ -2654,7 +2654,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     answer: SummarySubmissionInput,
     files: readonly ChangedFile[],
   ): Promise<SummarySubmissionInput> {
-    if (reviewed === undefined) return { ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }
+    if (reviewed === undefined) return unrecordedSummary(answer, files)
     const record = summarizedRecord(reviewed, answer, files)
     await this.ctx.storage.put<ReviewedRecord>("reviewed", record)
     return {
@@ -2711,6 +2711,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const pr = await this.currentPullRequest()
       const decision = decideApproval(await this.approvalState(pr, resolved))
       const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
+      if (decision.kind === "wait" && decision.reason === "approved") await this.reconcileApproval()
       if (decision.kind === "wait") return waited(context, decision.reason)
       return await this.approve(pr.head.sha, context)
     } catch (error) {
@@ -2794,10 +2795,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return { kind: "approved", head }
   }
 
+  private async reconcileApproval(): Promise<void> {
+    const last = await this.readLastReview()
+    if (last?.event === "APPROVE") await this.markPostedApproved(last.headSha)
+  }
+
   private async markPostedApproved(head: string): Promise<void> {
     const stored = await this.ctx.storage.get(`posted:${head}`)
     if (!Value.Check(PostedReview, stored)) return
-    const posted = approvedPosted(stored)
+    const posted = approvedPostedIfNeeded(stored)
+    if (posted === undefined) return
     await this.ctx.storage.put<PostedReview>(`posted:${head}`, posted)
     if (posted.checkRunId === undefined) return
     try {

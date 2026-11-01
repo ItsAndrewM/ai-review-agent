@@ -49,6 +49,13 @@ export function parseWrittenSummary(text: string): WrittenSummary {
   return { kind: "unusable", reason: `the model's answer didn't fit: ${first?.instancePath || "/"}: ${first?.message}` }
 }
 
+export function unrecordedSummary(
+  answer: SummarySubmissionInput,
+  files: readonly ChangedFile[],
+): SummarySubmissionInput {
+  return { ...answer, walkthrough: rowsWithin(answer.walkthrough, files) }
+}
+
 export type SummarizedRecord = ReviewedRecord & { merge_danger: MergeDangerInput }
 
 export function summarizedRecord(

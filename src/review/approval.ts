@@ -181,6 +181,10 @@ export function approvedPosted(posted: PostedReview): PostedReview {
   return { ...posted, shown: "APPROVE" }
 }
 
+export function approvedPostedIfNeeded(posted: PostedReview): PostedReview | undefined {
+  return posted.shown === "APPROVE" ? undefined : approvedPosted(posted)
+}
+
 export function approvalRecord(
   previous: LastReview | undefined,
   reviewId: number,

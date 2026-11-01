@@ -51,7 +51,8 @@ export function postedEarlierCheckRun(
   completedAt: number,
 ): UpdateCheckRun {
   const shown = posted.shown ?? posted.event
-  const verdictTitle = posted.counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, posted.counts)
+  const counts = shown === "APPROVE" && posted.counts !== undefined ? approvedCounts(posted.counts) : posted.counts
+  const verdictTitle = counts === undefined ? VERDICT_LABEL[shown] : checkRunTitle(shown, counts)
   const title = markedUnverified(verdictTitle, posted.unverified === true)
   const earlier = `Review ${posted.reviewId} was posted by an earlier run of this head.`
   const summary = detailsUrl === undefined ? earlier : `${earlier} Details opens its summary comment.`
@@ -59,6 +60,10 @@ export function postedEarlierCheckRun(
 }
 
 const NO_COUNTS = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 }
+
+function approvedCounts(counts: SeverityCounts): SeverityCounts {
+  return { ...counts, blocking: 0 }
+}
 const APPROVED_SUMMARY = "Approved once the checks passed; the summary comment has the review."
 
 export function approvedCheckRun(
@@ -66,8 +71,10 @@ export function approvedCheckRun(
   detailsUrl: string | undefined,
   completedAt: number,
 ): UpdateCheckRun {
-  const advisory = { ...(posted.counts ?? NO_COUNTS), blocking: 0, major: 0 }
-  const title = markedUnverified(checkRunTitle("APPROVE", advisory), posted.unverified === true)
+  const title = markedUnverified(
+    checkRunTitle("APPROVE", approvedCounts(posted.counts ?? NO_COUNTS)),
+    posted.unverified === true,
+  )
   return completedCheckRun("success", checkOutput(title, APPROVED_SUMMARY), detailsUrl, completedAt)
 }
 

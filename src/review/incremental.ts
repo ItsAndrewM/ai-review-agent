@@ -27,7 +27,7 @@ import {
   type ValidatedReview,
 } from "./findings.ts"
 import { OmittedRequirement, type OmittedRequirementInput } from "./reasons.ts"
-import { clipped, mergeWalkthrough } from "./render.ts"
+import { clippedPlain, mergeWalkthrough } from "./render.ts"
 
 export type ReviewMode = "fresh" | "full" | "incremental"
 
@@ -577,7 +577,7 @@ function reviewedWithoutTiming(input: NextReviewedInput): ReviewedRecord {
   }
 }
 
-const HANDLE = /`(T\d+)`|(?<![\w/#.:=?&[-])(T\d+)\b/g
+const HANDLE = /`(T\d+)`|(?<![\p{L}\p{N}_/#.:=?&[-])(T\d+)(?![\p{L}\p{N}_])/gu
 const MOST_LINK_TITLE_CHARS = 80
 
 export function changesSinceMissing(submission: ReviewSubmissionInput, scope: ReviewScope): boolean {
@@ -603,7 +603,7 @@ export function linkThreads(
 }
 
 function linkTitle(title: string): string {
-  return clipped(title, MOST_LINK_TITLE_CHARS).replace(/[\\[\]]/g, (character) => `\\${character}`)
+  return clippedPlain(title, MOST_LINK_TITLE_CHARS).replace(/[\\[\]]/g, (character) => `\\${character}`)
 }
 
 export function threadLink(repo: string, number: number, thread: OpenThread): string {
