@@ -16,6 +16,11 @@
   // The running build's id and timestamp, so an object can tell it is older
   // than the Worker that called it during the eventually-consistent rollout.
   "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  // Every 15 minutes the sweep (#189) hands each open pull request head
+  // updated in the last day to its object, so a push whose webhook GitHub
+  // never delivered is still reviewed, and a review that died is restarted
+  // once.
+  "triggers": { "crons": ["*/15 * * * *"] },
   "vars": {
     // The GitHub App's login, without the [bot] suffix. People tag @andabot.
     "BOT_LOGIN": "andabot",

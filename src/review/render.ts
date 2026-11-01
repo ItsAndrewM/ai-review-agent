@@ -89,6 +89,7 @@ export function renderSummaryComment(input: {
   sandboxSeconds?: number | undefined
   seconds?: number | undefined
   closes?: readonly string[] | undefined
+  sweep?: "started" | "restarted" | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
@@ -102,6 +103,7 @@ export function renderSummaryComment(input: {
     ],
     footer: [
       ...closesLines(input.closes),
+      ...sweepLines(input.sweep, input.botLogin),
       ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify, input.seconds),
       ...unverifiedLines(input.verify),
       ...spendLines(input.spend, input.sandboxSeconds),
@@ -404,6 +406,15 @@ export function renderUnpostedSummary(input: {
     input.note,
     ...(closes.length === 0 ? [] : ["", ...closes]),
   ].join("\n")
+}
+
+export function sweepLines(sweep: "started" | "restarted" | undefined, botLogin: string): string[] {
+  if (sweep === undefined) return []
+  const line =
+    sweep === "started"
+      ? `Started by the 15-minute sweep: no webhook reached ${botLogin} for this push.`
+      : "Restarted by the 15-minute sweep: the earlier review stopped without finishing."
+  return [`<sub>${line}</sub>`]
 }
 
 function closesLines(closes: readonly string[] | undefined): readonly string[] {

@@ -25,6 +25,8 @@ export const StoredPending = Type.Object({
   verifyModel: Type.Optional(Type.String()),
   activated: Type.Optional(Type.Array(Type.String())),
   docs: Type.Optional(Type.Array(Type.String())),
+  sweepRestarted: Type.Optional(Type.Boolean()),
+  sweep: Type.Optional(Type.Union([Type.Literal("started"), Type.Literal("restarted")])),
 })
 
 export type StoredPending = Static<typeof StoredPending>

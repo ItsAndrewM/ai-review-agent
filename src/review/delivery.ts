@@ -40,6 +40,10 @@ export const WebhookTrigger = Type.Union([
   Type.Literal("checks_completed"),
 ])
 
+export const SweepFacts = Type.Object({ draft: Type.Boolean(), baseRef: Type.String(), title: Type.String() })
+
+export type SweepFacts = Static<typeof SweepFacts>
+
 export const StoredIncoming = Type.Union([
   Type.Object({
     kind: Type.Literal("review"),
@@ -48,6 +52,7 @@ export const StoredIncoming = Type.Union([
     headSha: Type.String(),
     full: Type.Boolean(),
     requestedBy: Type.Optional(Type.String()),
+    sweep: Type.Optional(SweepFacts),
   }),
   Type.Object({
     kind: Type.Literal("comment"),
@@ -75,6 +80,8 @@ export const StoredIncoming = Type.Union([
 ])
 
 export type Incoming = Static<typeof StoredIncoming>
+
+export type ReviewIncoming = Extract<Incoming, { kind: "review" }>
 
 export const StoredDelivery = Type.Object({ incoming: StoredIncoming, firstAt: Type.Integer() })
 
