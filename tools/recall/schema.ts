@@ -50,7 +50,6 @@ export const HeadCase = Type.Object({
   labels: Type.Array(Type.String()),
   issues: Type.Array(FrozenIssue),
   expects: Type.Array(ExpectedFinding),
-  verdict: Verdict,
   summary: Type.Optional(Text),
   allowed: Type.Array(KnownFinding),
   knownFalse: Type.Array(KnownFinding),

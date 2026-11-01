@@ -17,7 +17,7 @@
     "expected": 31,
     "falseCount": 0,
     "severityMatched": 11,
-    "verdictMatched": 8,
+    "verdictMatched": 19,
     "heads": [
       {
         "head": "046afadb037b16aba4b098170b3c80afcc9f2fc2",
@@ -32,6 +32,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -51,10 +52,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -70,10 +72,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -89,10 +92,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -115,10 +119,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -134,10 +139,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -153,10 +159,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -179,10 +186,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -212,10 +220,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -238,10 +247,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -251,16 +261,17 @@
             "id": "57-k1",
             "found": true,
             "foundIn": 2,
-            "severityMatched": true,
+            "severityMatched": false,
             "runs": 3
           }
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -276,10 +287,11 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
-        "verdictMatched": false,
+        "verdictMatched": true,
         "notPosted": 0
       },
       {
@@ -323,6 +335,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -342,6 +355,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -362,12 +376,13 @@
             "id": "54-2",
             "found": true,
             "foundIn": 3,
-            "severityMatched": false,
+            "severityMatched": true,
             "runs": 3
           }
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -388,6 +403,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -407,6 +423,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -418,6 +435,7 @@
         "expects": [],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -437,6 +455,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -456,6 +475,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -475,6 +495,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },
@@ -494,6 +515,7 @@
         ],
         "falseBySeverity": {
           "blocking": 0,
+          "major": 0,
           "suggestion": 0,
           "nitpick": 0
         },

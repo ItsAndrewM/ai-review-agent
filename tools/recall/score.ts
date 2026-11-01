@@ -42,6 +42,10 @@ export interface RunScore {
 
 const VERDICT_OF_EVENT = { APPROVE: "approve", COMMENT: "comment", REQUEST_CHANGES: "request_changes" } as const
 
+export function expectedVerdict(head: HeadCase): Verdict {
+  return head.expects.some((expected) => expected.severity === "blocking") ? "request_changes" : "approve"
+}
+
 export function verdictOf(head: HeadCase, posted: PostedReview): Verdict {
   const sources = { linkedIssues: head.issues.map((issue) => issue.number), title: head.title, body: head.body }
   const reasons = checkReasons(posted.submission, sources).accepted
@@ -61,6 +65,7 @@ export type ExpectedScore = Static<typeof ExpectedScore>
 
 export const FalseCounts = Type.Object({
   blocking: Type.Integer(),
+  major: Type.Integer(),
   suggestion: Type.Integer(),
   nitpick: Type.Integer(),
 })
@@ -98,7 +103,7 @@ export interface BarVerdict {
   reasons: string[]
 }
 
-const SEVERITIES = ["blocking", "suggestion", "nitpick"] as const
+const SEVERITIES = ["blocking", "major", "suggestion", "nitpick"] as const
 
 function describes(pattern: string, finding: FindingInput): boolean {
   const regex = regexOf(pattern)
@@ -155,6 +160,11 @@ export function scoreRun(head: HeadCase, run: number, answer: ReviewAnswer): Run
   return { head: head.head, run, answer, ...matchFindings(head, accepted), verdict, summaryMatched }
 }
 
+function blockingLineMatched(head: HeadCase, run: RunScore): boolean {
+  if (run.verdict === undefined) return false
+  return (run.verdict === "request_changes") === (expectedVerdict(head) === "request_changes")
+}
+
 function majority(count: number, runs: number): boolean {
   return count * 2 > runs
 }
@@ -178,7 +188,7 @@ function median(counts: readonly number[]): number {
 }
 
 function falseBySeverity(runs: readonly RunScore[]): FalseCounts {
-  const counts: FalseCounts = { blocking: 0, suggestion: 0, nitpick: 0 }
+  const counts: FalseCounts = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 }
   for (const severity of SEVERITIES) {
     counts[severity] = median(
       runs.map(
@@ -196,7 +206,7 @@ function majorityOf(values: readonly (boolean | undefined)[]): boolean | undefin
 }
 
 function headScore(head: HeadCase, runs: readonly RunScore[]): HeadScore {
-  const verdicts = runs.filter((run) => run.verdict === head.verdict).length
+  const verdicts = runs.filter((run) => blockingLineMatched(head, run)).length
   const score: HeadScore = {
     head: head.head,
     expects: head.expects.map((expected) => expectedScore(expected, runs)),

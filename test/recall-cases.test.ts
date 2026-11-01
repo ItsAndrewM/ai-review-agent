@@ -1,12 +1,39 @@
+import { readFileSync } from "node:fs"
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { cases } from "../tools/recall/cases.ts"
-import { regexOf } from "../tools/recall/schema.ts"
+import { RecallSet, regexOf } from "../tools/recall/schema.ts"
 
 function pattern(id: string): RegExp {
   const expected = cases.flatMap(({ expects }) => expects).find((candidate) => candidate.id === id)
   if (expected === undefined) throw new Error(`No case ${id}`)
   return regexOf(expected.pattern)
 }
+
+describe("case labels", () => {
+  const all = cases.flatMap(({ expects }) => expects)
+  const label = (expected: { id: string; severity: string }): string => `${expected.id}:${expected.severity}`
+
+  it("pairs every expected finding's severity with its basis kind as the review's rule does", () => {
+    const offending = all.filter((expected) =>
+      expected.basis_kind === "defect" || expected.basis_kind === "spec"
+        ? expected.severity !== "blocking" && expected.severity !== "major"
+        : expected.severity === "blocking" || expected.severity === "major",
+    )
+    expect(offending.map(({ id }) => id)).toEqual([])
+  })
+
+  it("labels #112's two docs-against-code cases with the docs basis", () => {
+    expect(all.filter(({ id }) => id.startsWith("112-")).map(({ basis_kind }) => basis_kind)).toEqual(["docs", "docs"])
+  })
+
+  it("freezes the set without a hand-written verdict and with the cases' labels, so the expected event is derived", () => {
+    const parsed: unknown = JSON.parse(readFileSync(new URL("../tools/recall/set.json", import.meta.url), "utf8"))
+    if (!Value.Check(RecallSet, parsed)) throw new Error("set.json is not a recall set")
+    expect(parsed.heads.filter((head) => "verdict" in head)).toEqual([])
+    expect(parsed.heads.flatMap((head) => head.expects).map(label)).toEqual(all.map(label))
+  })
+})
 
 describe("case patterns", () => {
   it.each([

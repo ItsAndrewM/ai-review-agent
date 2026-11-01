@@ -27,7 +27,7 @@ import { promptFor, reviewSkill, systemFor, type ReviewSkill } from "./prompt.ts
 import { compareTable, resultsFileName, resultsTable } from "./report.ts"
 import { parseResults, rescore, rescoreRuns } from "./rescore.ts"
 import { parseSet, setProblems, type HeadCase, type RecallSet } from "./schema.ts"
-import { barVerdict, scoreRun, scoreSet, SetScore, type RunScore } from "./score.ts"
+import { barVerdict, expectedVerdict, scoreRun, scoreSet, SetScore, type RunScore } from "./score.ts"
 import { standardsAt } from "./standards.ts"
 import { RecallTools, type RecallSource } from "./tools.ts"
 
@@ -234,7 +234,7 @@ async function inspect(set: RecallSet): Promise<void> {
   for (const head of set.heads) {
     const note = head.note === undefined ? "" : ` (${head.note})`
     console.log(
-      `- #${head.pr} ${head.head.slice(0, 7)}: ${head.expects.length} expected, verdict ${head.verdict}${note}`,
+      `- #${head.pr} ${head.head.slice(0, 7)}: ${head.expects.length} expected, verdict ${expectedVerdict(head)}${note}`,
     )
   }
 }

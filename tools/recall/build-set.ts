@@ -107,7 +107,6 @@ async function freeze(item: Case): Promise<HeadCase> {
     labels: pr.labels.map(({ name }) => name),
     issues: await frozenIssues(body, pr.head.ref),
     expects: item.expects,
-    verdict: item.verdict,
     allowed: item.allowed,
     knownFalse: item.knownFalse,
     stats: await stats(base, item.head),
