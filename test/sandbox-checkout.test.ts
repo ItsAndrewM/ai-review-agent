@@ -25,7 +25,7 @@ describe("repositoryUrl", () => {
 
 describe("checkoutArgv", () => {
   it("fetches the sha itself, shallow, into the repository directory, and checks HEAD against it", () => {
-    const argv = checkoutArgv("https://github.com/o/r.git", "abc123")
+    const argv = checkoutArgv("https://github.com/o/r.git", "abc123", "andabot")
     expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(argv.slice(3)).toEqual(["andabot-checkout", "https://github.com/o/r.git", "abc123"])
     const script = argv[2] ?? ""
@@ -33,6 +33,12 @@ describe("checkoutArgv", () => {
     expect(script).toContain('git fetch -q --depth 1 "$1" "$2"')
     expect(script).toContain('[ "$(git rev-parse HEAD)" = "$2" ]')
     expect(script).toContain("kib=$(du -sk")
+  })
+
+  it("names each script after the deploy's login", () => {
+    expect(checkoutArgv("https://github.com/o/r.git", "abc123", "andabot-staging")[3]).toBe("andabot-staging-checkout")
+    expect(overcommitArgv("andabot-staging")[3]).toBe("andabot-staging-overcommit")
+    expect(detectArgv("andabot-staging")[3]).toBe("andabot-staging-detect")
   })
 })
 
@@ -63,7 +69,7 @@ describe("parseCheckout", () => {
 
 describe("overcommitArgv", () => {
   it("asks the kernel to always overcommit, since oxlint's JS-plugin allocator reserves 6 GiB that heuristic overcommit refuses on a 4 GiB instance", () => {
-    const argv = overcommitArgv()
+    const argv = overcommitArgv("andabot")
     expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(argv[2]).toContain("echo 1 > /proc/sys/vm/overcommit_memory")
     expect(argv[3]).toBe("andabot-overcommit")
@@ -72,7 +78,7 @@ describe("overcommitArgv", () => {
 
 describe("detectArgv and parseManager", () => {
   it("prints the manager the lockfile names, pnpm before npm", () => {
-    const script = detectArgv()[2] ?? ""
+    const script = detectArgv("andabot")[2] ?? ""
     expect(script).toContain("pnpm-lock.yaml")
     expect(script).toContain("package-lock.json")
     expect(script.indexOf("pnpm-lock.yaml")).toBeLessThan(script.indexOf("package-lock.json"))

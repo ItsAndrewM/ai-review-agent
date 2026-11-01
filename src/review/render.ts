@@ -1,6 +1,6 @@
-import type { ReviewEvent } from "../github/client.ts"
+import type { IssueComment, ReviewEvent } from "../github/client.ts"
+import { configFileOf, summaryMarkerOf } from "../names.ts"
 import type { CheckRecord, SeverityCounts } from "../records.ts"
-import { CONFIG_FILE } from "../repository/config.ts"
 import { secondsText } from "../sandbox/checks.ts"
 import type { SandboxStatus } from "../sandbox/runs.ts"
 import { plural, were } from "./copy.ts"
@@ -28,8 +28,6 @@ export interface Coverage {
   files: number
   resolved: number
 }
-
-export const SUMMARY_MARKER = "<!-- andabot:summary -->"
 
 const MOST_HELD_BACK_LISTED = 5
 const MOST_MISSING_LISTED = 10
@@ -63,8 +61,8 @@ export function approvalBody(headSha: string): string {
   return `Approved at \`${headSha.slice(0, 7)}\`: none of my blocking threads is open, and the checks pass. A human review is still required to merge.`
 }
 
-export function withApprovedVerdict(body: string, headSha: string): string | undefined {
-  if (!body.startsWith(SUMMARY_MARKER) || !VERDICT_SEGMENT.test(body)) return undefined
+export function withApprovedVerdict(body: string, headSha: string, botLogin: string): string | undefined {
+  if (!body.startsWith(summaryMarkerOf(botLogin)) || !VERDICT_SEGMENT.test(body)) return undefined
   return body.replace(VERDICT_SEGMENT, `**Verdict:** Approved at \`${headSha.slice(0, 7)}\``)
 }
 
@@ -111,7 +109,7 @@ export function renderSummaryComment(input: {
       linkedIssuesLine(input.linkedIssues),
       standardsLine(input.instructionFiles),
       commandsLine(input.botLogin),
-      ...configNoteLines(input.configError),
+      ...configNoteLines(input.configError, input.botLogin),
     ],
   })
 }
@@ -144,7 +142,7 @@ export function renderSummaryRun(input: SummaryRunInput): string {
       summarizedBy(input.model, input.skillsFingerprint),
       linkedIssuesLine(input.linkedIssues),
       commandsLine(input.botLogin),
-      ...configNoteLines(input.configError),
+      ...configNoteLines(input.configError, input.botLogin),
     ],
   })
 }
@@ -160,7 +158,7 @@ interface SummaryLayout {
 function summaryLayout(layout: SummaryLayout): string {
   const { door, blast_radius } = layout.content.merge_danger
   return [
-    SUMMARY_MARKER,
+    summaryMarkerOf(layout.botLogin),
     `## ${layout.botLogin} review`,
     "",
     layout.status,
@@ -207,10 +205,10 @@ function commandsLine(botLogin: string): string {
   return `<sub>Commands: \`@${botLogin} review\`, \`@${botLogin} full review\`, \`@${botLogin} help\`. Ask a question with \`@${botLogin} <question>\`.</sub>`
 }
 
-function configNoteLines(error: string | undefined): string[] {
+function configNoteLines(error: string | undefined, botLogin: string): string[] {
   if (error === undefined) return []
   const problem = codeSpan(cut(flattened(error), MOST_CONFIG_ERROR_CHARS))
-  return ["", `_${CONFIG_FILE} was ignored: ${problem}; the defaults applied._`]
+  return ["", `_${configFileOf(botLogin)} was ignored: ${problem}; the defaults applied._`]
 }
 
 function sinceLines(since: SinceSection | undefined): string[] {
@@ -386,6 +384,11 @@ function standardsLine(paths: readonly string[]): string {
   return `<sub>Standards: ${listed}</sub>`
 }
 
+export function summaryCommentId(comments: readonly IssueComment[], botLogin: string): number | undefined {
+  const marker = summaryMarkerOf(botLogin)
+  return comments.find((comment) => comment.body?.startsWith(marker))?.id
+}
+
 export function codeSpan(text: string): string {
   return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
 }
@@ -398,7 +401,7 @@ export function renderUnpostedSummary(input: {
 }): string {
   const closes = closesLines(input.closes)
   return [
-    SUMMARY_MARKER,
+    summaryMarkerOf(input.botLogin),
     `## ${input.botLogin} review`,
     "",
     `**Head:** \`${input.headSha.slice(0, 7)}\``,

@@ -7,6 +7,7 @@ interface Received {
   method: string | undefined
   url: string | undefined
   authorization: string | undefined
+  userAgent: string | undefined
   body: string
 }
 
@@ -23,7 +24,13 @@ beforeAll(async () => {
       body += chunk.toString()
     })
     req.on("end", () => {
-      received.push({ method: req.method, url: req.url, authorization: req.headers.authorization, body })
+      received.push({
+        method: req.method,
+        url: req.url,
+        authorization: req.headers.authorization,
+        userAgent: req.headers["user-agent"],
+        body,
+      })
       res.writeHead(status, { "content-type": "application/json" })
       res.end(
         status < 300
@@ -61,7 +68,7 @@ const update: UpdateCheckRun = {
 describe("GitHubClient check runs", () => {
   it("creates a run with a POST to the repository's check-runs and keeps only the id", async () => {
     status = 201
-    const created = await new GitHubClient("tok", base).createCheckRun(ref, create)
+    const created = await new GitHubClient("tok", "andabot", base).createCheckRun(ref, create)
     expect(created).toEqual({ id: 42 })
     const last = received.at(-1)
     expect(last?.method).toBe("POST")
@@ -71,9 +78,17 @@ describe("GitHubClient check runs", () => {
     expect(body).toEqual(create)
   })
 
+  it("names itself by the deploy's login in the user-agent", async () => {
+    status = 201
+    await new GitHubClient("tok", "andabot-staging", base).createCheckRun(ref, create)
+    expect(received.at(-1)?.userAgent).toBe("andabot-staging")
+    await new GitHubClient("tok", "andabot", base).createCheckRun(ref, create)
+    expect(received.at(-1)?.userAgent).toBe("andabot")
+  })
+
   it("updates a run with a PATCH to its id", async () => {
     status = 200
-    const updated = await new GitHubClient("tok", base).updateCheckRun(ref, 42, update)
+    const updated = await new GitHubClient("tok", "andabot", base).updateCheckRun(ref, 42, update)
     expect(updated).toEqual({ id: 42 })
     const last = received.at(-1)
     expect(last?.method).toBe("PATCH")
@@ -84,7 +99,7 @@ describe("GitHubClient check runs", () => {
 
   it("throws with the status and body when GitHub refuses", async () => {
     status = 403
-    await expect(new GitHubClient("tok", base).updateCheckRun(ref, 42, update)).rejects.toThrow(
+    await expect(new GitHubClient("tok", "andabot", base).updateCheckRun(ref, 42, update)).rejects.toThrow(
       /GitHub 403 .*Resource not accessible by integration/,
     )
   })
@@ -94,7 +109,7 @@ const respond = (status: number, body: string) => async () => new Response(body,
 
 describe("GitHubClient failures", () => {
   it("throws a GitHubError carrying the status and the path when GitHub answers 522", async () => {
-    const failing = new GitHubClient("t", "https://api", respond(522, "origin unreachable"))
+    const failing = new GitHubClient("t", "andabot", "https://api", respond(522, "origin unreachable"))
     const error = await failing.getPullRequest({ owner: "o", repo: "r" }, 4).catch((cause: GitHubError) => cause)
     expect(error).toBeInstanceOf(GitHubError)
     expect(error).toMatchObject({ status: 522, path: "/repos/o/r/pulls/4" })
@@ -102,7 +117,7 @@ describe("GitHubClient failures", () => {
   })
 
   it("throws a GitHubError with no status when the fetch itself rejects", async () => {
-    const failing = new GitHubClient("t", "https://api", async () => {
+    const failing = new GitHubClient("t", "andabot", "https://api", async () => {
       throw new TypeError("fetch failed")
     })
     const error = await failing.getPullRequest({ owner: "o", repo: "r" }, 4).catch((cause: GitHubError) => cause)
@@ -114,6 +129,7 @@ describe("GitHubClient failures", () => {
   it("gives a 200 GraphQL body with errors the status 200, which is final", async () => {
     const failing = new GitHubClient(
       "t",
+      "andabot",
       "https://api",
       respond(200, JSON.stringify({ errors: [{ message: "nope" }] })),
     )
@@ -127,6 +143,7 @@ describe("getIssue", () => {
   it("parses an issue, returns undefined for a missing one, and keeps a pull request's marker", async () => {
     const found = new GitHubClient(
       "t",
+      "andabot",
       "https://api",
       respond(200, JSON.stringify({ number: 4, title: "T", body: null, state: "open" })),
     )
@@ -136,10 +153,11 @@ describe("getIssue", () => {
       body: null,
       state: "open",
     })
-    const missing = new GitHubClient("t", "https://api", respond(404, "{}"))
+    const missing = new GitHubClient("t", "andabot", "https://api", respond(404, "{}"))
     expect(await missing.getIssue({ owner: "o", repo: "r" }, 4)).toBeUndefined()
     const pr = new GitHubClient(
       "t",
+      "andabot",
       "https://api",
       respond(200, JSON.stringify({ number: 5, title: "P", body: "", state: "open", pull_request: {} })),
     )
@@ -147,7 +165,7 @@ describe("getIssue", () => {
   })
 
   it("throws on any other refusal, as the other calls do", async () => {
-    const failing = new GitHubClient("t", "https://api", respond(500, "boom"))
+    const failing = new GitHubClient("t", "andabot", "https://api", respond(500, "boom"))
     await expect(failing.getIssue({ owner: "o", repo: "r" }, 4)).rejects.toThrow(/GitHub 500 .*boom/)
   })
 
@@ -157,7 +175,7 @@ describe("getIssue", () => {
       return Promise.resolve(new Response("{}", { status: 404 }))
     }
     expect(
-      await new GitHubClient("t", "https://api", workerdFetch).getIssue({ owner: "o", repo: "r" }, 4),
+      await new GitHubClient("t", "andabot", "https://api", workerdFetch).getIssue({ owner: "o", repo: "r" }, 4),
     ).toBeUndefined()
   })
 })
@@ -174,7 +192,7 @@ function recordingFetch(body: string) {
 
 describe("getTree", () => {
   const treeAt = (fetchImpl: typeof fetch) =>
-    new GitHubClient("t", "https://api.example", fetchImpl).getTree(ref, "abc")
+    new GitHubClient("t", "andabot", "https://api.example", fetchImpl).getTree(ref, "abc")
 
   it("lists the tree recursively at a sha and keeps the truncated flag", async () => {
     const { fetchImpl, calls } = recordingFetch(

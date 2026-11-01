@@ -77,7 +77,7 @@ State in its SQLite, beside Pi's `pi_` tables:
 - `summarySession`: the id of the Pi session summaries run in, created by the first `summary` and reset before each run.
 - `verifySession`: the id of the Pi session verify runs in, created by the first verify run and reset before each attempt and when a review starts.
 - `context:<baseSha>`: the repository at a pull request's base commit, as the review's standards and skills read it: the trees listing, kept to the blobs that may be instruction files and those under `.github/skills/`, `.agents/skills/` and `.claude/skills/`, each with its size and mode, and the instruction files and skill files loaded so far, a file missing at that commit as an empty body. A new base replaces it, and a record that fails its schema is deleted and fetched again, which is how its format changes: a record from before the sizes were kept is fetched again, while one from before the modes were kept still reads, its modes unknown.
-- `config:<baseSha>`: the `.andabot.yaml` at a pull request's base commit as it was read: its settings with the defaults filled in, whether a file was there, and the error that made it ignored. A file GitHub failed to serve is never stored, so the next review reads it again. A new base replaces the record, and a record that fails its schema is deleted and read again.
+- `config:<baseSha>`: the `.<BOT_LOGIN>.yaml` at a pull request's base commit as it was read: its settings with the defaults filled in, whether a file was there, the error that made it ignored, and the file name and `AUTO_REVIEW` it was read under, so a record read under another login or another `AUTO_REVIEW` is read again. A file GitHub failed to serve is never stored, so the next review reads it again. A new base replaces the record, and a record that fails its schema is deleted and read again.
 
 Methods, each an idempotent Pi submission:
 
@@ -297,7 +297,7 @@ A summary that lands while a review is publishing can be overwritten though its 
 
 ### Configuration file
 
-`.andabot.yaml` is optional and is read at the pull request's base commit, like the instruction files, so a pull request cannot change the rules it is reviewed by: one that turns `auto` off, adds a title keyword or filters out its own files is still reviewed under the base's settings, and its change applies once it is on the base branch. The object reads it on its own, not with the tree, so a tree GitHub fails to serve leaves the settings in force. `docs/setup.md` lists every setting with its default.
+The file is named after the deploy's login, `.<BOT_LOGIN>.yaml`, so `.andabot.yaml` for andabot, and a deploy reads only its own (#177): a second deploy, such as staging, gets settings of its own and can't pick up another bot's. Where a file leaves `reviews.auto` unset, is missing or can't be read, the Worker's `AUTO_REVIEW` decides it, which is how staging stays quiet until it is tagged. `.andabot.yaml` is optional and is read at the pull request's base commit, like the instruction files, so a pull request cannot change the rules it is reviewed by: one that turns `auto` off, adds a title keyword or filters out its own files is still reviewed under the base's settings, and its change applies once it is on the base branch. The object reads it on its own, not with the tree, so a tree GitHub fails to serve leaves the settings in force. `docs/setup.md` lists every setting with its default.
 
 ```yaml
 reviews:

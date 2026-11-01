@@ -3,7 +3,6 @@ import { Type } from "typebox"
 import { Value } from "typebox/value"
 import { parse } from "yaml"
 import type { TreeEntry } from "../github/client.ts"
-import { CONFIG_FILE } from "./config.ts"
 
 export type StandardSource = "path_instructions" | "instructions" | "nested" | "root"
 
@@ -180,11 +179,12 @@ export function orderedStandards(
   loaded: readonly { path: string; text: string }[],
   changed: readonly string[],
   pathInstructions: readonly PathInstruction[],
+  configFile: string,
 ): Standard[] {
   const configured = pathInstructions
     .filter(({ path }) => matchesAnyPath(path, changed))
     .map(({ path, instructions }): Standard => ({
-      path: `${CONFIG_FILE}: ${path}`,
+      path: `${configFile}: ${path}`,
       text: instructions,
       source: "path_instructions",
     }))

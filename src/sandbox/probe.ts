@@ -99,7 +99,7 @@ async function dispatchProbe(probe: ProbeRequest, env: Env): Promise<Response> {
 async function runProbe(probe: Static<typeof RunProbe>, env: Env): Promise<RunOutcome> {
   const sandbox = env.REVIEW_SANDBOX.getByName(objectName(probe.key))
   const jwt = await createAppJwt(env.GITHUB_APP_ID, env.GITHUB_PRIVATE_KEY)
-  const token = await fetchInstallationToken(jwt, probe.key.installationId, sandboxTokenScope(probe.key))
+  const token = await fetchInstallationToken(jwt, probe.key.installationId, env.BOT_LOGIN, sandboxTokenScope(probe.key))
   await sandbox.start(token.token)
   return sandbox.run(probe.command, {
     cwd: probe.cwd ?? "/workspace",

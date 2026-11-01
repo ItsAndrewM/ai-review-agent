@@ -36,6 +36,9 @@ describe("standardBasisProblem", () => {
 
   it("passes a path_instructions standard named by the config file", () => {
     expect(standardBasisProblem(".andabot.yaml: src/** forbids default exports", context)).toBeUndefined()
+    const staging = { ...context, instructionFiles: [".andabot-staging.yaml: src/**"] }
+    expect(standardBasisProblem(".andabot-staging.yaml: src/** forbids default exports", staging)).toBeUndefined()
+    expect(standardBasisProblem("the .andabot-staging.yaml rules forbid it", staging)).toBeUndefined()
   })
 
   it("passes a smell by name in any case", () => {

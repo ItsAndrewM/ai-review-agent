@@ -428,7 +428,10 @@ describe("evaluationWorkflow", () => {
     return { reader, reads }
   }
   const missing: ConfigRead = { config: structuredClone(DEFAULT_CONFIG), error: undefined, present: false }
-  const workflowOff: ConfigRead = { ...parseConfig("reviews:\n  request_changes_workflow: false\n"), present: true }
+  const workflowOff: ConfigRead = {
+    ...parseConfig("reviews:\n  request_changes_workflow: false\n", true),
+    present: true,
+  }
   const unreadable: ConfigRead = { ...missing, error: "Error: GitHub 502 : boom" }
   const invalid: ConfigRead = { ...missing, error: "/reviews/auto must be boolean", present: true }
 

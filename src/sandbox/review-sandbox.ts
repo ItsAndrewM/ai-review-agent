@@ -69,14 +69,14 @@ export class ReviewSandbox extends DurableObject<Env> {
     const began = Date.now()
     const dir = runDir(crypto.randomUUID())
     const tailBytes = tailBytesOf(options.tailBytes)
-    const process = await this.#container.exec(runArgv(dir, command), {
+    const process = await this.#container.exec(runArgv(dir, command, this.env.BOT_LOGIN), {
       cwd: options.cwd,
       env: { ...TRUST_ENV, ...options.env },
       stdout: "ignore",
       stderr: "ignore",
     })
     const finished = await this.#waitOrKill(process.exitCode, options.timeoutMs, dir)
-    const read = parseResult(await this.#stdout(resultArgv(dir, tailBytes)), tailBytes)
+    const read = parseResult(await this.#stdout(resultArgv(dir, tailBytes, this.env.BOT_LOGIN)), tailBytes)
     await this.#stdout(removeArgv(dir))
     const result: RunOutcome = finished ? read : { outcome: "timeout", tail: read.tail, cut: read.cut }
     log("sandbox.run", {
@@ -124,7 +124,7 @@ export class ReviewSandbox extends DurableObject<Env> {
   }
 
   async #kill(dir: string, signal: KillSignal): Promise<void> {
-    await this.#stdout(killArgv(dir, signal))
+    await this.#stdout(killArgv(dir, signal, this.env.BOT_LOGIN))
   }
 
   async #stdout(argv: string[]): Promise<Uint8Array> {

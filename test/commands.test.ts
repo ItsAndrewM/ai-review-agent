@@ -19,6 +19,9 @@ describe("skippedReviewText", () => {
   })
 
   it("says the path filters leave out every changed file, the one setting that can skip a command", () => {
+    expect(skippedReviewText("path_filters", "abc1234def5678", "andabot-staging")).toContain(
+      "`.andabot-staging.yaml`'s",
+    )
     expect(skippedReviewText("path_filters", "abc1234def5678", "andabot")).toBe(
       "Nothing to review: `.andabot.yaml`'s `path_filters` leave out every file this pull request changes.",
     )

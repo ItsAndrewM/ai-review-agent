@@ -24,6 +24,10 @@
   "vars": {
     // The GitHub App's login, without the [bot] suffix. People tag @andabot.
     "BOT_LOGIN": "andabot",
+    // The default for a repository's reviews.auto when its config file
+    // doesn't set it, or can't be read. "false" makes a deploy, such as
+    // staging, review only when tagged. Only "false" turns it off.
+    "AUTO_REVIEW": "true",
     // Workers AI model for the review. GLM-5.3 Flash caught all five of #9's
     // planted defects and posts through the tool, for under a cent a review
     // (#2). GLM 5.x, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid
@@ -104,4 +108,44 @@
       "images": { "review": { "dockerfile": "./container/Dockerfile", "build_context": "./container" } },
     },
   ],
+  // The staging bot, andabot-staging (#177): `wrangler deploy --env staging`.
+  // Its own App, Worker, objects and container. AUTO_REVIEW is "false", so it
+  // reviews only when tagged. Wrangler doesn't inherit vars or bindings into
+  // an environment, so every var is repeated here and must match the one
+  // above, BOT_LOGIN and AUTO_REVIEW aside; test/wrangler.test.ts checks.
+  "env": {
+    "staging": {
+      "name": "andabot-staging",
+      "ai": { "binding": "AI", "remote": true },
+      "version_metadata": { "binding": "CF_VERSION_METADATA" },
+      "vars": {
+        "BOT_LOGIN": "andabot-staging",
+        "AUTO_REVIEW": "false",
+        "REVIEW_MODEL": "@cf/zai-org/glm-5.3-flash",
+        "REVIEW_THINKING_LEVEL": "low",
+        "MAX_OUTPUT_TOKENS": "16000",
+        "MAX_REVIEW_NEURONS": "10000",
+        "SANDBOX": "true",
+        "MAX_SANDBOX_SECONDS": "900",
+        "SANDBOX_CHECK_TIMEOUT": "300000",
+        "REQUEST_CHANGES_WORKFLOW": "true",
+        "VERIFY_MODEL": "",
+        "SANDBOX_PROBE": "false",
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "PULL_REQUEST", "class_name": "PullRequest" },
+          { "name": "REVIEW_SANDBOX", "class_name": "ReviewSandbox" },
+          { "name": "SANDBOX_LEASES", "class_name": "SandboxLeases" },
+        ],
+      },
+      "containers": [
+        {
+          "class_name": "ReviewSandbox",
+          "scheduling_policy": "durable_object",
+          "images": { "review": { "dockerfile": "./container/Dockerfile", "build_context": "./container" } },
+        },
+      ],
+    },
+  },
 }

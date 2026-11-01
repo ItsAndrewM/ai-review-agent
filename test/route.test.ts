@@ -210,6 +210,13 @@ describe("routeWebhook", () => {
     ).toMatchObject({ reason: "comment without an author" })
   })
 
+  it("routes a tag of another deploy only to that deploy, even when its login starts with this one's", () => {
+    const comment = { id: 5, node_id: "IC_1", body: "@andabot-staging review", user: { login: "andrew", type: "User" } }
+    const payload = { ...base, action: "created", issue: { number: 3, pull_request: {} }, comment }
+    expect(routeWebhook("issue_comment", payload, "d", "andabot")).toMatchObject({ reason: "no mention" })
+    expect(routeWebhook("issue_comment", payload, "d", "andabot-staging")).toMatchObject({ kind: "handle" })
+  })
+
   it("names the object by installation, repo and number", () => {
     expect(objectName({ installationId: 99, owner: "a", repo: "b", number: 7 })).toBe("99/a/b#7")
   })

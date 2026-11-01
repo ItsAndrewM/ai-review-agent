@@ -85,7 +85,7 @@ function fakeGitHub(
     calls.push(`${pathname}${search}`)
     return answer(pathname)
   }
-  return { github: new GitHubClient("t", "https://api.example", fetchImpl), calls }
+  return { github: new GitHubClient("t", "andabot", "https://api.example", fetchImpl), calls }
 }
 
 function recorder() {
@@ -401,7 +401,11 @@ describe("loadRepositoryContext", () => {
     const first = await loadRepositoryContext(github, ref, BASE, changed, failOnUnreadable)
     expect(Object.keys(first.files)).toEqual(["CLAUDE.md", ...nested, ...rules.slice(0, 3)])
     expect(unloadedPaths(first, changed)).toEqual(rules.slice(3))
-    expect(standardsFor(first, changed, []).used).toEqual([...rules.slice(0, 3), ...nested, "CLAUDE.md"])
+    expect(standardsFor(first, changed, [], ".andabot.yaml").used).toEqual([
+      ...rules.slice(0, 3),
+      ...nested,
+      "CLAUDE.md",
+    ])
     const second = await loadRepositoryContext(github, ref, BASE, changed, failOnUnreadable, first)
     expect(unloadedPaths(second, changed)).toEqual([])
     expect(calls).toHaveLength(1 + 24 + 7)
@@ -417,7 +421,7 @@ describe("loadRepositoryContext", () => {
     const context = await loadRepositoryContext(github, ref, BASE, changed, failOnUnreadable)
     expect(Object.keys(context.files)).toEqual([...root, ...nested.slice(0, 19)])
     expect(unloadedPaths(context, changed)).toEqual(["pkg-19/CLAUDE.md"])
-    expect(standardsFor(context, changed, []).used).toEqual([...nested.slice(0, 19), ...root])
+    expect(standardsFor(context, changed, [], ".andabot.yaml").used).toEqual([...nested.slice(0, 19), ...root])
   })
 
   it("reads a truncated tree as listed", async () => {
@@ -443,7 +447,7 @@ describe("loadRepositoryContext", () => {
     expect(reported).toEqual([["apps/web/CLAUDE.md", "GitHubError: GitHub 502 : boom"]])
     expect(context.files).toEqual({ "CLAUDE.md": "Root rules.", "AGENTS.md": "" })
     expect(unloadedPaths(context, WEB)).toEqual(["apps/web/CLAUDE.md"])
-    expect(reviewStandards(context, WEB, [])).toEqual({
+    expect(reviewStandards(context, WEB, [], ".andabot.yaml")).toEqual({
       text: "## Repository standards\n\n### CLAUDE.md\n\nRoot rules.",
       used: ["CLAUDE.md"],
       cut: [],
@@ -460,21 +464,26 @@ describe("loadRepositoryContext", () => {
     const context = await loadRepositoryContext(github, ref, BASE, changed, report, cached)
     expect(context).toBe(cached)
     expect(reported).toEqual([["apps/api/CLAUDE.md", "GitHubError: GitHub 502 : boom"]])
-    expect(reviewStandards(context, changed, []).used).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md"])
+    expect(reviewStandards(context, changed, [], ".andabot.yaml").used).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md"])
   })
 })
 
 describe("readRepositoryContext", () => {
   it("reports a tree GitHub fails to serve and leaves the review without standards, rather than failing it", async () => {
     const reported: string[] = []
-    const failing = new GitHubClient("t", "https://api.example", async () => new Response("boom", { status: 500 }))
+    const failing = new GitHubClient(
+      "t",
+      "andabot",
+      "https://api.example",
+      async () => new Response("boom", { status: 500 }),
+    )
     const context = await readRepositoryContext(
       () => loadRepositoryContext(failing, ref, BASE, WEB, failOnUnreadable),
       (error) => reported.push(error),
     )
     expect(context).toBeUndefined()
     expect(reported).toEqual(["GitHubError: GitHub 500 : boom"])
-    expect(reviewStandards(context, WEB, [])).toEqual(NO_STANDARDS)
+    expect(reviewStandards(context, WEB, [], ".andabot.yaml")).toEqual(NO_STANDARDS)
   })
 
   it("passes a readable context through and reports nothing", async () => {
@@ -494,16 +503,16 @@ describe("reviewStandards", () => {
       ...contextOf(KEPT, { "CLAUDE.md": "Root rules." }),
       tree: { sha: TREE_SHA, truncated: true, entries: KEPT },
     }
-    expect(reviewStandards(context, WEB, [])).toEqual({
-      ...standardsFor(context, WEB, []),
+    expect(reviewStandards(context, WEB, [], ".andabot.yaml")).toEqual({
+      ...standardsFor(context, WEB, [], ".andabot.yaml"),
       loadsSkipped: 2,
       treeTruncated: true,
     })
-    expect(reviewStandards(context, WEB, []).used).toEqual(["CLAUDE.md"])
+    expect(reviewStandards(context, WEB, [], ".andabot.yaml").used).toEqual(["CLAUDE.md"])
   })
 
   it("is no standards at all for an unreadable context", () => {
-    expect(reviewStandards(undefined, WEB, [])).toEqual(NO_STANDARDS)
+    expect(reviewStandards(undefined, WEB, [], ".andabot.yaml")).toEqual(NO_STANDARDS)
   })
 
   it("keeps the matching path instructions for an unreadable context, since .andabot.yaml is read on its own", () => {
@@ -511,7 +520,7 @@ describe("reviewStandards", () => {
       { path: "docs/**", instructions: "Docs rule." },
       { path: "apps/web/**", instructions: "Web path rule." },
     ]
-    expect(reviewStandards(undefined, WEB, pathInstructions)).toEqual({
+    expect(reviewStandards(undefined, WEB, pathInstructions, ".andabot.yaml")).toEqual({
       text: "## Repository standards\n\n### .andabot.yaml: apps/web/**\n\nWeb path rule.",
       used: [".andabot.yaml: apps/web/**"],
       cut: [],
@@ -542,7 +551,7 @@ describe("standardsFor", () => {
       "apps/web/CLAUDE.md": "Web rules.",
       "CLAUDE.md": "Root rules.",
     })
-    expect(standardsFor(context, WEB, [])).toEqual({
+    expect(standardsFor(context, WEB, [], ".andabot.yaml")).toEqual({
       text: [
         "## Repository standards",
         "### .github/instructions/ts.instructions.md",
@@ -559,7 +568,7 @@ describe("standardsFor", () => {
 
   it("renders in candidate order, whatever order the bodies were cached in", () => {
     const context = contextOf(KEPT, { "CLAUDE.md": "Root rules.", "apps/web/CLAUDE.md": "Web rules." })
-    expect(standardsFor(context, WEB, []).used).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md"])
+    expect(standardsFor(context, WEB, [], ".andabot.yaml").used).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md"])
   })
 
   it("leaves out a file remembered as missing, one not loaded yet, and one cached for a path the pull request no longer changes", () => {
@@ -568,7 +577,7 @@ describe("standardsFor", () => {
       "apps/api/CLAUDE.md": "Api rules.",
       "CLAUDE.md": "Root rules.",
     })
-    const { text, used } = standardsFor(context, WEB, [])
+    const { text, used } = standardsFor(context, WEB, [], ".andabot.yaml")
     expect(used).toEqual(["CLAUDE.md"])
     expect(text).toBe("## Repository standards\n\n### CLAUDE.md\n\nRoot rules.")
   })
@@ -579,18 +588,21 @@ describe("standardsFor", () => {
       { path: "docs/**", instructions: "Docs rule." },
       { path: "apps/web/**", instructions: "Web path rule." },
     ]
-    expect(standardsFor(context, WEB, pathInstructions).used).toEqual([".andabot.yaml: apps/web/**", "CLAUDE.md"])
+    expect(standardsFor(context, WEB, pathInstructions, ".andabot.yaml").used).toEqual([
+      ".andabot.yaml: apps/web/**",
+      "CLAUDE.md",
+    ])
   })
 
   it("names what the cap cut", () => {
     const context = contextOf(KEPT, { "apps/web/CLAUDE.md": "w".repeat(11_000), "CLAUDE.md": "r".repeat(1_000) })
-    const { used, cut } = standardsFor(context, WEB, [])
+    const { used, cut } = standardsFor(context, WEB, [], ".andabot.yaml")
     expect(used).toEqual(["apps/web/CLAUDE.md"])
     expect(cut).toEqual(["CLAUDE.md"])
   })
 
   it("renders nothing when the base has no instruction file", () => {
-    expect(standardsFor(contextOf([], {}), WEB, [])).toEqual({ text: "", used: [], cut: [] })
+    expect(standardsFor(contextOf([], {}), WEB, [], ".andabot.yaml")).toEqual({ text: "", used: [], cut: [] })
   })
 })
 
@@ -622,7 +634,7 @@ describe("repositoryRecord", () => {
       "CLAUDE.md": "Root rules.",
       ".github/skills/lint/SKILL.md": skillMd,
     })
-    const repository = await reviewRepository(context, WEB, [])
+    const repository = await reviewRepository(context, WEB, [], ".andabot.yaml")
     expect(repositoryRecord(repository)).toEqual({
       instructionFiles: ["CLAUDE.md"],
       repoSkillsFingerprint: repository.skills.offered?.fingerprint,
@@ -631,9 +643,11 @@ describe("repositoryRecord", () => {
   })
 
   it("records no fingerprint when the review was offered no repository skill, so the footer claims none", async () => {
-    const repository = await reviewRepository(contextOf(KEPT, { "CLAUDE.md": "Root rules." }), WEB, [])
+    const repository = await reviewRepository(contextOf(KEPT, { "CLAUDE.md": "Root rules." }), WEB, [], ".andabot.yaml")
     expect(repositoryRecord(repository)).toEqual({ instructionFiles: ["CLAUDE.md"] })
-    expect(repositoryRecord(await reviewRepository(undefined, WEB, []))).toEqual({ instructionFiles: [] })
+    expect(repositoryRecord(await reviewRepository(undefined, WEB, [], ".andabot.yaml"))).toEqual({
+      instructionFiles: [],
+    })
   })
 })
 

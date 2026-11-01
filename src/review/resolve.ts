@@ -1,5 +1,5 @@
 import type { ReviewThread } from "../github/client.ts"
-import { CONFIG_FILE } from "../repository/config.ts"
+import { configFileOf } from "../names.ts"
 import { shortSha } from "../sha.ts"
 import type { ApprovalOutcome, LastReview, WaitReason } from "./approval.ts"
 import { openBotThreads, type OpenThread } from "./incremental.ts"
@@ -17,7 +17,7 @@ export type ResolveTargets =
 
 export type ResolveRefusal = Exclude<ResolveTargets["kind"], "resolve"> | "unreadable"
 
-type PlainWait = Exclude<WaitReason, "workflow_off" | "paused" | "review_stands">
+type PlainWait = Exclude<WaitReason, "workflow_off" | "paused" | "review_stands" | "workflow_unknown">
 
 const REFUSALS = {
   not_mine: "I only resolve my own threads, and this one isn't mine.",
@@ -27,7 +27,6 @@ const REFUSALS = {
 } satisfies Record<ResolveRefusal, string>
 
 const PLAIN_WAITS = {
-  workflow_unknown: `Approval waits: I couldn't read \`${CONFIG_FILE}\`.`,
   not_open: "Approval waits: the pull request is closed or a draft.",
   review_in_flight: "Approval waits for the review that's running.",
   not_reviewed: "Approval waits for my review of the current head.",
@@ -71,6 +70,7 @@ export function approvalNote(outcome: ApprovalOutcome, last: Standing, botLogin:
 function waitNote(reason: WaitReason, last: Standing, botLogin: string): string | undefined {
   if (reason === "workflow_off") return undefined
   if (reason === "paused") return `Approval waits until \`@${botLogin} resume\`.`
+  if (reason === "workflow_unknown") return `Approval waits: I couldn't read \`${configFileOf(botLogin)}\`.`
   if (reason === "review_stands") return reviewStandsNote(last)
   return PLAIN_WAITS[reason]
 }

@@ -1,11 +1,9 @@
 import { Type } from "typebox"
-import { CONFIG_FILE, type SkipReason } from "../repository/config.ts"
+import { configFileOf, pausedMarkerOf, summaryMarkerOf } from "../names.ts"
+import type { SkipReason } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
-import { SUMMARY_MARKER } from "./render.ts"
 
 export const PausedBy = Type.String()
-
-export const PAUSED_MARKER = "<!-- andabot:paused -->"
 
 const PAUSED_OPENING = "⏸️ Paused"
 
@@ -15,28 +13,29 @@ export function pausesReview(review: { requestedBy?: string }, paused: boolean):
 
 export function pausedLine(by: string | undefined, botLogin: string): string {
   const who = by === undefined ? "" : ` by @${by}`
-  return `${PAUSED_OPENING}${who}: pushes don't start reviews. \`@${botLogin} resume\` to resume. ${PAUSED_MARKER}`
+  return `${PAUSED_OPENING}${who}: pushes don't start reviews. \`@${botLogin} resume\` to resume. ${pausedMarkerOf(botLogin)}`
 }
 
-export function withPausedLine(body: string, line: string): string {
-  if (!body.startsWith(SUMMARY_MARKER)) return body
-  const lines = withoutPausedLine(body).split("\n")
+export function withPausedLine(body: string, line: string, botLogin: string): string {
+  if (!body.startsWith(summaryMarkerOf(botLogin))) return body
+  const lines = withoutPausedLine(body, botLogin).split("\n")
   const headerAt = lines.findIndex((text) => text.startsWith("## "))
   const insertAt = Math.max(headerAt, 0) + 1
   return [...lines.slice(0, insertAt), "", line, ...lines.slice(insertAt)].join("\n")
 }
 
-export function withoutPausedLine(body: string): string {
+export function withoutPausedLine(body: string, botLogin: string): string {
+  const marker = pausedMarkerOf(botLogin)
   const kept: string[] = []
   for (const text of body.split("\n")) {
-    if (!isPausedLine(text)) kept.push(text)
+    if (!isPausedLine(text, marker)) kept.push(text)
     else if (kept.at(-1) === "") kept.pop()
   }
   return kept.join("\n")
 }
 
-function isPausedLine(text: string): boolean {
-  return text.startsWith(PAUSED_OPENING) && text.trimEnd().endsWith(PAUSED_MARKER)
+function isPausedLine(text: string, marker: string): boolean {
+  return text.startsWith(PAUSED_OPENING) && text.trimEnd().endsWith(marker)
 }
 
 export function pauseReply(alreadyPaused: boolean, botLogin: string): string {
@@ -64,7 +63,7 @@ export function resumeStep(input: {
 
 export const NOT_PAUSED_REPLY = "Not paused."
 
-export function resumeReply(step: ResumeStep, headSha: string, botLogin: string): string {
+export function resumeReply(step: ResumeStep, headSha: string, botLogin: string, autoReview: boolean): string {
   const head = `\`${shortSha(headSha)}\``
   switch (step) {
     case "review":
@@ -76,21 +75,23 @@ export function resumeReply(step: ResumeStep, headSha: string, botLogin: string)
     case "closed":
       return "Resumed. The pull request is closed, so there's nothing to review."
     default:
-      return skippedResumeReply(step, botLogin)
+      return skippedResumeReply(step, botLogin, autoReview)
   }
 }
 
-function skippedResumeReply(reason: SkipReason, botLogin: string): string {
+function skippedResumeReply(reason: SkipReason, botLogin: string, autoReview: boolean): string {
   const onRequest = `so pushes aren't reviewed; \`@${botLogin} review\` reviews on request.`
   switch (reason) {
     case "draft":
       return "Resumed. It's a draft, so I'll review it once it's ready for review."
     case "auto":
-      return `Resumed. \`${CONFIG_FILE}\` turns automatic reviews off, ${onRequest}`
+      return autoReview
+        ? `Resumed. \`${configFileOf(botLogin)}\` turns automatic reviews off, ${onRequest}`
+        : `Resumed. Automatic reviews are off for this deploy, ${onRequest}`
     case "base_branch":
-      return `Resumed. \`${CONFIG_FILE}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
+      return `Resumed. \`${configFileOf(botLogin)}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
     case "title_keyword":
-      return `Resumed. This pull request's title holds one of \`${CONFIG_FILE}\`'s \`ignore_title_keywords\`, ${onRequest}`
+      return `Resumed. This pull request's title holds one of \`${configFileOf(botLogin)}\`'s \`ignore_title_keywords\`, ${onRequest}`
   }
 }
 

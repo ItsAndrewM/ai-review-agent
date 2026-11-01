@@ -240,7 +240,7 @@ describe("sweepIncoming", () => {
 })
 
 describe("sweepGitHub", () => {
-  const seen: { path: string; authorization: string | undefined }[] = []
+  const seen: { path: string; authorization: string | undefined; userAgent: string | undefined }[] = []
   const bodies = new Map([
     ["/app/installations", JSON.stringify([{ id: 5 }, { id: 6 }])],
     ["/installation/repositories", JSON.stringify({ repositories: [repository("o", "a"), repository("o", "b")] })],
@@ -257,7 +257,7 @@ describe("sweepGitHub", () => {
   beforeAll(async () => {
     server = createServer((req, res) => {
       const path = new URL(req.url ?? "/", "http://localhost").pathname
-      seen.push({ path, authorization: req.headers.authorization })
+      seen.push({ path, authorization: req.headers.authorization, userAgent: req.headers["user-agent"] })
       const body = bodies.get(path)
       res.writeHead(body === undefined ? 404 : 200, { "content-type": "application/json" })
       res.end(body ?? "{}")
@@ -272,7 +272,7 @@ describe("sweepGitHub", () => {
     server.close()
   })
 
-  it("lists installations with the App JWT, and each installation's repositories and pulls with its own token", async () => {
+  it("lists installations with the App JWT, and each installation's repositories and pulls with its own token, as the deploy's login", async () => {
     const tokens: number[] = []
     const github = sweepGitHub(
       "app-jwt",
@@ -280,6 +280,7 @@ describe("sweepGitHub", () => {
         tokens.push(installationId)
         return `token-${installationId}`
       },
+      "andabot-staging",
       base,
     )
     expect(await github.installations()).toEqual([5, 6])
@@ -290,10 +291,10 @@ describe("sweepGitHub", () => {
     ])
     for (const ref of repos) await github.openPullRequests(5, ref, 0)
     expect(seen).toEqual([
-      { path: "/app/installations", authorization: "Bearer app-jwt" },
-      { path: "/installation/repositories", authorization: "Bearer token-5" },
-      { path: "/repos/o/a/pulls", authorization: "Bearer token-5" },
-      { path: "/repos/o/b/pulls", authorization: "Bearer token-5" },
+      { path: "/app/installations", authorization: "Bearer app-jwt", userAgent: "andabot-staging" },
+      { path: "/installation/repositories", authorization: "Bearer token-5", userAgent: "andabot-staging" },
+      { path: "/repos/o/a/pulls", authorization: "Bearer token-5", userAgent: "andabot-staging" },
+      { path: "/repos/o/b/pulls", authorization: "Bearer token-5", userAgent: "andabot-staging" },
     ])
     expect(tokens).toEqual([5])
   })

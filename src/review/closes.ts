@@ -1,4 +1,5 @@
 import type { PullRequestInfo } from "../github/client.ts"
+import { closesMarkersOf } from "../names.ts"
 import { withoutCode } from "./code-blanking.ts"
 import { codeSpan } from "./render.ts"
 
@@ -127,19 +128,22 @@ function plainWord(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}'’]/gu, "")
 }
 
-export const CLOSES_START = "<!-- andabot:closes -->"
-export const CLOSES_END = "<!-- andabot:closes-end -->"
-
-export function closesBlockOf(pr: PullRequestInfo): string[] {
-  return closesBlockFor(pr, closesOf(pr.body, pr.base.repo.full_name))
+export function closesBlockOf(pr: PullRequestInfo, botLogin: string): string[] {
+  return closesBlockFor(pr, closesOf(pr.body, pr.base.repo.full_name), botLogin)
 }
 
-export function closesBlockFor(pr: PullRequestInfo, closes: Closes): string[] {
-  return closesBlock(closes, pr.base.ref, pr.base.repo.default_branch)
+export function closesBlockFor(pr: PullRequestInfo, closes: Closes, botLogin: string): string[] {
+  return closesBlock(closes, pr.base.ref, pr.base.repo.default_branch, botLogin)
 }
 
-export function closesBlock(closes: Closes, base: string, defaultBranch: string | undefined): string[] {
-  return [CLOSES_START, ...closesLines(closes, base, defaultBranch), CLOSES_END]
+export function closesBlock(
+  closes: Closes,
+  base: string,
+  defaultBranch: string | undefined,
+  botLogin: string,
+): string[] {
+  const { start, end } = closesMarkersOf(botLogin)
+  return [start, ...closesLines(closes, base, defaultBranch), end]
 }
 
 function closesLines(closes: Closes, base: string, defaultBranch: string | undefined): string[] {
@@ -201,11 +205,12 @@ function countedList(items: readonly string[], most: number): string {
   return `${items.slice(0, -1).join(", ")} and ${items.at(-1) ?? ""}`
 }
 
-export function withClosesBlock(body: string, block: readonly string[]): string | undefined {
-  const start = body.lastIndexOf(CLOSES_START)
-  const end = body.indexOf(CLOSES_END, start)
+export function withClosesBlock(body: string, block: readonly string[], botLogin: string): string | undefined {
+  const markers = closesMarkersOf(botLogin)
+  const start = body.lastIndexOf(markers.start)
+  const end = body.indexOf(markers.end, start)
   if (start < 0 || end < 0) return undefined
-  const rewritten = `${body.slice(0, start)}${block.join("\n")}${body.slice(end + CLOSES_END.length)}`
+  const rewritten = `${body.slice(0, start)}${block.join("\n")}${body.slice(end + markers.end.length)}`
   return rewritten === body ? undefined : rewritten
 }
 

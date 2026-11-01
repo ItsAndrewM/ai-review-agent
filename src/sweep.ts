@@ -97,18 +97,19 @@ export function sweepIncoming(key: PullRequestKey, pull: OpenPullRequest): Sweep
 export function sweepGitHub(
   appJwt: string,
   token: (installationId: number) => Promise<string>,
+  userAgent: string,
   apiBase?: string,
 ): SweepGitHub {
   const clients = new Map<number, Promise<GitHubClient>>()
   const installation = (installationId: number): Promise<GitHubClient> => {
     const known = clients.get(installationId)
     if (known !== undefined) return known
-    const client = token(installationId).then((minted) => new GitHubClient(minted, apiBase))
+    const client = token(installationId).then((minted) => new GitHubClient(minted, userAgent, apiBase))
     clients.set(installationId, client)
     return client
   }
   return {
-    installations: () => new GitHubClient(appJwt, apiBase).listInstallations(),
+    installations: () => new GitHubClient(appJwt, userAgent, apiBase).listInstallations(),
     repositories: async (installationId) => (await installation(installationId)).listInstallationRepositories(),
     openPullRequests: async (installationId, ref, since) =>
       (await installation(installationId)).listOpenPullRequests(ref, since),

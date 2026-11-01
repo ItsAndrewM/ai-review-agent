@@ -34,6 +34,7 @@ export function tokenRequestBody(scope: TokenScope | undefined): string | undefi
 export async function fetchInstallationToken(
   jwt: string,
   installationId: number,
+  userAgent: string,
   scope?: TokenScope,
   apiBase = "https://api.github.com",
 ): Promise<InstallationToken> {
@@ -46,7 +47,7 @@ export async function fetchInstallationToken(
       accept: "application/vnd.github+json",
       "content-type": "application/json",
       "x-github-api-version": "2022-11-28",
-      "user-agent": "andabot",
+      "user-agent": userAgent,
     },
     body: body ?? null,
   })

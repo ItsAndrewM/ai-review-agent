@@ -89,6 +89,15 @@ describe("approvalNote", () => {
     )
   })
 
+  it("names the deploy's own config file when it couldn't read it", () => {
+    expect(approvalNote({ kind: "wait", reason: "workflow_unknown" }, undefined, "andabot")).toBe(
+      "Approval waits: I couldn't read `.andabot.yaml`.",
+    )
+    expect(approvalNote({ kind: "wait", reason: "workflow_unknown" }, undefined, "andabot-staging")).toBe(
+      "Approval waits: I couldn't read `.andabot-staging.yaml`.",
+    )
+  })
+
   it("says the last review withheld approval, unless it also holds a finding back", () => {
     expect(waiting("review_stands", 0, 2)).toBe(
       "Approval waits for my next review, since my last one withheld it; its body says why.",

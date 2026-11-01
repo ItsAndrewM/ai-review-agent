@@ -37,9 +37,10 @@ async function sweep(env: Env): Promise<void> {
     return
   }
   const version = versionOf(env.CF_VERSION_METADATA)
-  const token = async (installationId: number) => (await fetchInstallationToken(appJwt, installationId)).token
+  const token = async (installationId: number) =>
+    (await fetchInstallationToken(appJwt, installationId, env.BOT_LOGIN)).token
   await runSweep(
-    sweepGitHub(appJwt, token),
+    sweepGitHub(appJwt, token, env.BOT_LOGIN),
     (incoming) => env.PULL_REQUEST.getByName(objectName(incoming.key)).sweep(incoming, version),
     Date.now(),
   )

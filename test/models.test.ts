@@ -16,9 +16,10 @@ import {
   withForcedJson,
   withOutputLimit,
 } from "../src/models.ts"
+import { budgetRefusalMarkerOf } from "../src/names.ts"
 import { BUDGET_REFUSAL } from "../src/review/budget.ts"
 import { ReviewSubmission, SummarySubmission } from "../src/review/findings.ts"
-import { answerPrompt, BUDGET_REFUSAL_MARKER, resubmitPrompt, summaryPrompt } from "../src/review/prompt.ts"
+import { answerPrompt, resubmitPrompt, summaryPrompt } from "../src/review/prompt.ts"
 
 const LIMIT = 16_000
 const GPT_OSS = { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000, maxTokens: 16_384 }
@@ -165,20 +166,20 @@ describe("withForcedJson", () => {
 describe("withBudgetRefusal", () => {
   async function answerTo(messages: Message[], options?: SimpleStreamOptions) {
     const { faux, seen } = recordingProvider(GPT_OSS)
-    const message = await withBudgetRefusal(faux.provider)
+    const message = await withBudgetRefusal(faux.provider, "andabot")
       .streamSimple(faux.getModel(), normalizeContext({ messages }), options)
       .result()
     return { faux, message, seen }
   }
 
   it("answers a request whose latest message is the marker with an error, and never calls the model", async () => {
-    const { faux, message } = await answerTo([reviewRequest, user(BUDGET_REFUSAL_MARKER)])
+    const { faux, message } = await answerTo([reviewRequest, user(budgetRefusalMarkerOf("andabot"))])
     expect(message).toMatchObject({ role: "assistant", content: [], stopReason: "error", errorMessage: BUDGET_REFUSAL })
     expect(faux.state.callCount).toBe(0)
   })
 
   it("names the model it refused for and charges it nothing", async () => {
-    const { faux, message } = await answerTo([user(BUDGET_REFUSAL_MARKER)])
+    const { faux, message } = await answerTo([user(budgetRefusalMarkerOf("andabot"))])
     const { api, provider, id } = faux.getModel()
     expect(message).toMatchObject({ api, provider, model: id, usage: { totalTokens: 0, cost: { total: 0 } } })
   })
@@ -192,16 +193,31 @@ describe("withBudgetRefusal", () => {
   })
 
   it.each([
-    { label: "a marker that isn't the latest message", messages: [user(BUDGET_REFUSAL_MARKER), reviewRequest] },
-    { label: "a prompt that only quotes the marker", messages: [user(`Say ${BUDGET_REFUSAL_MARKER}.`)] },
+    {
+      label: "a marker that isn't the latest message",
+      messages: [user(budgetRefusalMarkerOf("andabot")), reviewRequest],
+    },
+    { label: "a prompt that only quotes the marker", messages: [user(`Say ${budgetRefusalMarkerOf("andabot")}.`)] },
   ])("passes $label to the model", async ({ messages }) => {
     const { faux } = await answerTo(messages)
     expect(faux.state.callCount).toBe(1)
   })
 
+  it("refuses on its own deploy's marker only", async () => {
+    const { faux } = recordingProvider(GPT_OSS)
+    const staging = withBudgetRefusal(faux.provider, "andabot-staging")
+    const refused = await staging
+      .streamSimple(faux.getModel(), normalizeContext({ messages: [user(budgetRefusalMarkerOf("andabot-staging"))] }))
+      .result()
+    expect(refused.stopReason).toBe("error")
+    expect(faux.state.callCount).toBe(0)
+    const { faux: other } = await answerTo([user(budgetRefusalMarkerOf("andabot-staging"))])
+    expect(other.state.callCount).toBe(1)
+  })
+
   it("leaves the provider's other members in place", () => {
     const { faux } = recordingProvider(GPT_OSS)
-    const wrapped = withBudgetRefusal(faux.provider)
+    const wrapped = withBudgetRefusal(faux.provider, "andabot")
     expect(wrapped.id).toBe(faux.provider.id)
     expect(wrapped.getModels()).toEqual(faux.provider.getModels())
   })

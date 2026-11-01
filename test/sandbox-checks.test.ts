@@ -113,13 +113,17 @@ describe("checkKey, existsArgv and missingPath", () => {
   })
 
   it("probes the paths in the repository and reads back the first missing one", () => {
-    const argv = existsArgv(["a.ts", "b.ts"])
+    const argv = existsArgv(["a.ts", "b.ts"], "andabot")
     expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(argv.slice(3)).toEqual(["andabot-exists", "a.ts", "b.ts"])
     expect(argv[2]).toContain('[ -e "$p" ]')
     expect(missingPath(exited(1, "b.ts\n"))).toBe("b.ts")
     expect(missingPath(exited(0, ""))).toBeUndefined()
     expect(missingPath(timedOut)).toBeUndefined()
+  })
+
+  it("names the exists script after the deploy's login", () => {
+    expect(existsArgv(["a.ts"], "andabot-staging")[3]).toBe("andabot-staging-exists")
   })
 })
 
@@ -140,13 +144,20 @@ describe("checkText and refusalText", () => {
   })
 
   it("says why a check didn't run", () => {
-    expect(refusalText("test", { kind: "off" })).toBe("The sandbox is off for this repository, so test did not run.")
-    expect(refusalText("test", { kind: "spent", seconds: 900, budget: 900 })).toContain("900")
-    expect(refusalText("lint", { kind: "unavailable", reason: "install" })).toContain("install")
-    expect(refusalText("lint", { kind: "no_command" })).toContain("no lint command")
-    expect(refusalText("test", { kind: "bad_path", problem: "a b" })).toContain("a b")
-    expect(refusalText("test", { kind: "missing_path", path: "x.ts" })).toContain("x.ts")
-    expect(refusalText("test", { kind: "ended" })).toBe(
+    expect(refusalText("test", { kind: "off" }, "andabot")).toBe(
+      "The sandbox is off for this repository, so test did not run.",
+    )
+    expect(refusalText("test", { kind: "spent", seconds: 900, budget: 900 }, "andabot")).toContain("900")
+    expect(refusalText("lint", { kind: "unavailable", reason: "install" }, "andabot")).toContain("install")
+    expect(refusalText("lint", { kind: "no_command" }, "andabot")).toBe(
+      "This repository has no lint command: nothing in .andabot.yaml's checks and no runner package.json names.",
+    )
+    expect(refusalText("lint", { kind: "no_command" }, "andabot-staging")).toContain(
+      "nothing in .andabot-staging.yaml's checks",
+    )
+    expect(refusalText("test", { kind: "bad_path", problem: "a b" }, "andabot")).toContain("a b")
+    expect(refusalText("test", { kind: "missing_path", path: "x.ts" }, "andabot")).toContain("x.ts")
+    expect(refusalText("test", { kind: "ended" }, "andabot")).toBe(
       "No review is in flight for this pull request, so test did not run.",
     )
   })

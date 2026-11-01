@@ -415,7 +415,7 @@ describe("orderedStandards", () => {
       { path: "apps/web/**", instructions: "Web path rule." },
       { path: "**/*.ts", instructions: "Any TypeScript rule." },
     ]
-    expect(orderedStandards(loaded, amid("apps/web/src/a.ts"), pathInstructions)).toEqual([
+    expect(orderedStandards(loaded, amid("apps/web/src/a.ts"), pathInstructions, ".andabot.yaml")).toEqual([
       { path: ".andabot.yaml: apps/web/**", text: "Web path rule.", source: "path_instructions" },
       { path: ".andabot.yaml: **/*.ts", text: "Any TypeScript rule.", source: "path_instructions" },
       { path: ".github/instructions/ts.instructions.md", text: "Use strict mode.\n", source: "instructions" },
@@ -426,7 +426,7 @@ describe("orderedStandards", () => {
   })
 
   it("drops an instructions file whose applyTo matches no changed path and strips the frontmatter of the ones it keeps", () => {
-    const standards = orderedStandards(loaded, amid("lib/tool.py"), [])
+    const standards = orderedStandards(loaded, amid("lib/tool.py"), [], ".andabot.yaml")
     expect(standards.map(({ path }) => path)).toEqual([
       ".github/instructions/py.instructions.md",
       "apps/web/CLAUDE.md",
@@ -438,7 +438,7 @@ describe("orderedStandards", () => {
 
   it("matches a path_instructions glob against changed paths under a dot directory", () => {
     const pathInstructions = [{ path: "**/*.yml", instructions: "CI rule." }]
-    const standards = orderedStandards([], amid(".github/workflows/ci.yml"), pathInstructions)
+    const standards = orderedStandards([], amid(".github/workflows/ci.yml"), pathInstructions, ".andabot.yaml")
     expect(standards).toEqual([{ path: ".andabot.yaml: **/*.yml", text: "CI rule.", source: "path_instructions" }])
   })
 
@@ -451,7 +451,7 @@ describe("orderedStandards", () => {
       { path: "CLAUDE.md", text: root },
       { path: ".github/copilot-instructions.md", text: copilot },
     ]
-    expect(orderedStandards(files, ["a.ts"], [])).toEqual([
+    expect(orderedStandards(files, ["a.ts"], [], ".andabot.yaml")).toEqual([
       { path: "apps/web/AGENTS.md", text: nested, source: "nested" },
       { path: "CLAUDE.md", text: root, source: "root" },
       { path: ".github/copilot-instructions.md", text: copilot, source: "root" },
@@ -466,7 +466,7 @@ describe("orderedStandards", () => {
       { path: "AGENTS.md", text: "\nRoot rules.\n\n" },
       { path: "REVIEW.md", text: "Review rules." },
     ]
-    const standards = orderedStandards(files, amid("apps/web/a.ts"), [])
+    const standards = orderedStandards(files, amid("apps/web/a.ts"), [], ".andabot.yaml")
     expect(standards.map(({ path }) => path)).toEqual(["apps/web/CLAUDE.md", "CLAUDE.md", "REVIEW.md"])
     expect(standards.map(({ text }) => text)).toEqual(["Web rules.\n", "Root rules.", "Review rules."])
   })
@@ -476,7 +476,10 @@ describe("orderedStandards", () => {
       { path: "CLAUDE.md", text: "Use tabs." },
       { path: "AGENTS.md", text: "Use tabs. Use spaces." },
     ]
-    expect(orderedStandards(files, ["a.ts"], []).map(({ path }) => path)).toEqual(["CLAUDE.md", "AGENTS.md"])
+    expect(orderedStandards(files, ["a.ts"], [], ".andabot.yaml").map(({ path }) => path)).toEqual([
+      "CLAUDE.md",
+      "AGENTS.md",
+    ])
   })
 
   it("drops a repeat of an earlier standard whatever its source, comparing instructions files without their frontmatter", () => {
@@ -487,7 +490,7 @@ describe("orderedStandards", () => {
       { path: "CONTRIBUTING.md", text: "Web rules.\n" },
     ]
     const pathInstructions = [{ path: "apps/**", instructions: "Web rules." }]
-    const standards = orderedStandards(files, amid("apps/web/a.ts"), pathInstructions)
+    const standards = orderedStandards(files, amid("apps/web/a.ts"), pathInstructions, ".andabot.yaml")
     expect(standards.map(({ path }) => path)).toEqual([
       ".andabot.yaml: apps/**",
       ".github/instructions/tabs.instructions.md",
@@ -500,12 +503,19 @@ describe("orderedStandards", () => {
       { path: "CLAUDE.md", text: " \n" },
       { path: "REVIEW.md", text: "Review rules." },
     ]
-    const standards = orderedStandards(empty, ["a.ts"], [{ path: "**", instructions: "" }])
+    const standards = orderedStandards(empty, ["a.ts"], [{ path: "**", instructions: "" }], ".andabot.yaml")
     expect(standards.map(({ path }) => path)).toEqual(["REVIEW.md"])
   })
 
   it("returns nothing when nothing was loaded and no path instruction applies", () => {
-    expect(orderedStandards([], ["a.ts"], [{ path: "docs/**", instructions: "Docs rule." }])).toEqual([])
+    expect(orderedStandards([], ["a.ts"], [{ path: "docs/**", instructions: "Docs rule." }], ".andabot.yaml")).toEqual(
+      [],
+    )
+  })
+
+  it("labels path instructions with the deploy's own config file", () => {
+    const standards = orderedStandards([], ["a.ts"], [{ path: "**", instructions: "Rule." }], ".andabot-staging.yaml")
+    expect(standards.map(({ path }) => path)).toEqual([".andabot-staging.yaml: **"])
   })
 })
 

@@ -46,7 +46,8 @@ Variables in `wrangler.jsonc`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. |
+| `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. Every name the bot shows comes from it: the mention it answers to, its config file `.<BOT_LOGIN>.yaml`, the hidden markers in its comments, its user-agent and its sandbox script names. Two deploys with different logins can review the same pull request without touching each other's comments. |
+| `AUTO_REVIEW` | `true` | The default for a repository's `reviews.auto` when its config file doesn't set it, is missing, or can't be read. `false` makes the deploy review only when tagged, as staging does. Only `false` turns it off. |
 | `REVIEW_MODEL` | `@cf/zai-org/glm-5.3-flash` | Workers AI model. GLM 5.x, the default included, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash also run on Free. Workers AI's free 10,000 neurons a day cover about 15 to 28 reviews on GLM-5.3 Flash, as measured on #2. |
 | `MAX_OUTPUT_TOKENS` | `16000` | Most output tokens one model call may ask for, reasoning included; the model's own maximum and its context still cap it. Raise it, for example with `--var MAX_OUTPUT_TOKENS:32000` on deploy, when large pull requests get cut-off reviews. Anything but a positive whole number falls back to 16,000. `review.start` logs the value in effect as `maxOutputTokens`. |
 | `MAX_REVIEW_NEURONS` | `10000` | Neurons after which the model is told to submit; if it still hasn't three model requests later, the review fails. The request that crosses it and those three are spent past it. 10,000 is one day of Workers AI's free allowance. Anything but a positive whole number falls back to 10,000, and spend on a model without a price isn't counted. `review.budget_spent` and `review.budget_refused` log the two stops. |
@@ -58,6 +59,20 @@ Variables in `wrangler.jsonc`:
 | `SANDBOX_PROBE` | `false` | `true` turns on `POST /sandbox-probe`, which drives a pull request's sandbox by hand for #131's live check (section 3). The `false` in `wrangler.jsonc` is the default every deploy gets; turn it on for one deploy with `--var SANDBOX_PROBE:true`, or locally in `.dev.vars`, rather than editing the default. It goes once `run_check` (#133) uses the sandbox. |
 
 **What a pull request can cost in the sandbox.** Every pull request runs checks, a stranger's included, bounded by caps rather than by who opened it. Its test files run, so a hostile pull request can make a test sleep (one `SANDBOX_CHECK_TIMEOUT`, 300 s), call out (the allowlist answers 403 to every host but `github.com` and `registry.npmjs.org`) or add install scripts (the install runs none). One review spends at most about 1,200 s of `standard-1`, $0.025: checkout and install each stop at five minutes, checks run one at a time under the 300-second timeout while the sandbox's wall time is under `MAX_SANDBOX_SECONDS` (900 s), and a check that starts just under the budget runs to its own timeout. A review that dies without destroying its container is ended by a drop job at the budget plus two minutes, $0.021 at most, with the 30-minute inactivity backstop ($0.037) as the last resort (#140). Across pull requests the lease caps running sandboxes at three, each lease outliving its review by at most the budget plus two minutes, so the account runs at most three containers at once, $0.22 an hour and $5.33 a day with every slot busy around the clock. Measured on 29 Oct 2026 (#135), a review that asks for the sandbox costs $0.002 to $0.003 of container time.
+
+## Staging: `andabot-staging`
+
+A second deploy beside andabot, with its own GitHub App, Worker, Durable Objects and container, configured as `env.staging` in `wrangler.jsonc` (#177). It runs the same code under the login `andabot-staging`, so it reads `.andabot-staging.yaml`, writes its own hidden markers and never edits andabot's comments. Its `AUTO_REVIEW` is `false`: it reviews only after `@andabot-staging review` (or another command), on any base, whatever `.andabot.yaml` says. Only a `.andabot-staging.yaml` that sets `reviews.auto: true` turns its push reviews on. Use it to try a change on a real pull request before production runs it.
+
+```sh
+node scripts/register-app.mjs ~/andabot-staging-app.json andabot-staging https://andabot-staging.dinocode.workers.dev/webhook
+pnpm exec wrangler deploy --env staging
+scripts/set-secrets.sh ~/andabot-staging-app.json staging
+```
+
+Register it with the same permissions and events as andabot (the script's manifest has them), and install it on `ai-review-agent` only. `GET https://andabot-staging.dinocode.workers.dev/health` answers `{"name":"andabot-staging","ok":true}`. Its vars must match production's, `BOT_LOGIN` and `AUTO_REVIEW` aside; `test/wrangler.test.ts` fails when they drift apart.
+
+It shares the Cloudflare account with production: the same Workers AI neurons and the account's container limits. The lease cap of three running sandboxes is per deploy, so the two together can run six. Each bot's check run is just another check to the other, so a staging check that fails or hangs holds andabot's approval of that pull request, and the reverse. Until #182 deploys from CI, staging is deployed by hand, as above.
 
 ## 3. Local development
 
@@ -114,13 +129,13 @@ gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'JSON'
 JSON
 ```
 
-## 6. Per-repository settings: `.andabot.yaml`
+## 6. Per-repository settings: `.<BOT_LOGIN>.yaml`
 
-A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pull request's base commit, never the head, so a pull request cannot change the rules it is reviewed by: one that edits the file is reviewed under the base's version, and the edit applies once it is on the base branch. Every setting is optional, and a repository without the file gets the defaults.
+A repository can keep a config file at its root, named after the deploy's login: `.andabot.yaml` for andabot, `.andabot-staging.yaml` for staging. Each deploy reads only its own, and this section calls it `.andabot.yaml`. andabot reads it at the pull request's base commit, never the head, so a pull request cannot change the rules it is reviewed by: one that edits the file is reviewed under the base's version, and the edit applies once it is on the base branch. Every setting is optional, and a repository without the file gets the defaults.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `reviews.auto` | `true` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
+| `reviews.auto` | unset: the Worker's `AUTO_REVIEW` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
 | `reviews.drafts` | `false` | `false`: a draft waits until it is marked ready for review. `true`: a draft is reviewed on each push like any pull request, so its review can post before its checks finish; an approval waiting on them follows once the draft is marked ready for review. |
 | `reviews.base_branches` | `[]`: any base | Review only pull requests whose base branch is listed, by its exact name: `release/*` names a branch called `release/*`, not every release branch. |
 | `reviews.ignore_title_keywords` | `[]` | Skip a pull request whose title contains one of these anywhere, ignoring case. `WIP` also matches `Wipe`, so `WIP:` or `[WIP]` is more precise. A blank entry matches nothing. |

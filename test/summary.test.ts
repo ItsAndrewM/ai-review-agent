@@ -1,11 +1,12 @@
 import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import type { ChangedFile } from "../src/github/diff.ts"
+import { summaryMarkerOf } from "../src/names.ts"
 import { approvalRecord, type LastReview } from "../src/review/approval.ts"
 import type { SummarySubmissionInput } from "../src/review/findings.ts"
 import { GRACE_MS } from "../src/review/flight.ts"
 import type { ReviewedRecord } from "../src/review/incremental.ts"
-import { renderSummaryRun, SUMMARY_MARKER, withApprovedVerdict, type SummaryRunInput } from "../src/review/render.ts"
+import { renderSummaryRun, withApprovedVerdict, type SummaryRunInput } from "../src/review/render.ts"
 import {
   oneClause,
   parseWrittenSummary,
@@ -293,7 +294,7 @@ describe("renderSummaryRun", () => {
 
   it("shows the summarized head, the recorded verdict and the fresh summary, with no since section", () => {
     const text = renderSummaryRun(run)
-    expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
+    expect(text.startsWith(summaryMarkerOf("andabot"))).toBe(true)
     expect(text).toContain(
       "**Head:** `def5678` · **Verdict:** Changes requested at `abc1234` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n\n**Merge danger:** two-way door · one module\n\n### Summary\n\nnew",
     )
@@ -329,6 +330,11 @@ describe("renderSummaryRun", () => {
     expect(renderSummaryRun(run)).not.toContain("was ignored")
   })
 
+  it("names the deploy's own config file in the config note", () => {
+    const text = renderSummaryRun({ ...run, botLogin: "andabot-staging", configError: "invalid YAML: bad indent" })
+    expect(text).toContain("_.andabot-staging.yaml was ignored:")
+  })
+
   it("says none when no issue is linked, and names the bot by its login", () => {
     const text = renderSummaryRun({ ...run, botLogin: "reviewer-bot", linkedIssues: [] })
     expect(text).toContain("## reviewer-bot review\n")
@@ -347,11 +353,11 @@ describe("renderSummaryRun", () => {
   })
 
   it("can be rewritten as an approval later", () => {
-    expect(withApprovedVerdict(renderSummaryRun(run), "fedcba9876")).toContain(
+    expect(withApprovedVerdict(renderSummaryRun(run), "fedcba9876", "andabot")).toContain(
       "**Head:** `def5678` · **Verdict:** Approved at `fedcba9` · 🔴 1 blocking · 🟠 0 major · 🟡 0 suggestions · ⚪ 2 nitpicks\n",
     )
     const unreviewed = renderSummaryRun({ ...run, verdict: { label: "Not reviewed yet" } })
-    expect(withApprovedVerdict(unreviewed, "fedcba9876")).toContain("**Verdict:** Approved at `fedcba9`\n")
+    expect(withApprovedVerdict(unreviewed, "fedcba9876", "andabot")).toContain("**Verdict:** Approved at `fedcba9`\n")
   })
 })
 

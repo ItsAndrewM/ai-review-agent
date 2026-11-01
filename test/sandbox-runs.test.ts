@@ -145,7 +145,7 @@ const READY = { "andabot-checkout": ok("kib=100\n"), "andabot-detect": ok("pnpm\
 describe("SandboxRuns.access", () => {
   it("leases, starts with the scoped token, checks out and installs in that order, then answers ready", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     const access = await runs.access()
     expect(access).toEqual({ kind: "ready", sandbox: host.box, dir: "/workspace/repo", manager: "pnpm" })
     expect(host.box.calls).toEqual([
@@ -167,14 +167,14 @@ describe("SandboxRuns.access", () => {
       cut: false,
     }
     const host = new FakeHost({ ...READY, "andabot-overcommit": readOnly })
-    const access = await new SandboxRuns(host, 900).access()
+    const access = await new SandboxRuns(host, 900, "andabot").access()
     expect(access.kind).toBe("ready")
     expect(host.box.calls.slice(0, 3)).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout"])
   })
 
   it("saves the record at each step a teardown would have to undo: head read, leased, running, settled", async () => {
     const host = new FakeHost(READY)
-    await new SandboxRuns(host, 900).access()
+    await new SandboxRuns(host, 900, "andabot").access()
     expect(host.saved.map((record) => [record?.leased, record?.running, record?.settled?.kind])).toEqual([
       [false, false, undefined],
       [true, false, undefined],
@@ -190,7 +190,7 @@ describe("SandboxRuns.access", () => {
 
   it("answers from the memo without asking again whether the tier is on", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await runs.access()
     await runs.access()
@@ -200,7 +200,7 @@ describe("SandboxRuns.access", () => {
   it("answers off without touching anything when the tier is off", async () => {
     const host = new FakeHost(READY)
     host.on = false
-    const access = await new SandboxRuns(host, 900).access()
+    const access = await new SandboxRuns(host, 900, "andabot").access()
     expect(access).toEqual({ kind: "off" })
     expect(host.box.calls).toEqual([])
     expect(host.leases).toEqual([])
@@ -209,7 +209,7 @@ describe("SandboxRuns.access", () => {
   it("answers unavailable for the rest of the review when no lease is granted, and never starts", async () => {
     const host = new FakeHost(READY)
     host.grant = false
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "lease" })
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "lease" })
     expect(host.box.calls).toEqual([])
@@ -218,7 +218,7 @@ describe("SandboxRuns.access", () => {
 
   it("destroys, unleases and answers unavailable when the checkout is over the cap, with no second attempt", async () => {
     const host = new FakeHost({ ...READY, "andabot-checkout": ok(`kib=${MAX_CHECKOUT_KIB + 1}\n`) })
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
     expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "destroy"])
     expect(host.unleased).toBe(1)
@@ -228,7 +228,7 @@ describe("SandboxRuns.access", () => {
 
   it("skips the install and still answers ready when there is no lockfile", async () => {
     const host = new FakeHost({ ...READY, "andabot-detect": ok("none\n") })
-    const access = await new SandboxRuns(host, 900).access()
+    const access = await new SandboxRuns(host, 900, "andabot").access()
     expect(access.kind).toBe("ready")
     expect(access.kind === "ready" && access.manager).toBe("none")
     expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "run:andabot-detect"])
@@ -236,13 +236,13 @@ describe("SandboxRuns.access", () => {
 
   it("answers unavailable when the install fails", async () => {
     const host = new FakeHost({ ...READY, pnpm: { outcome: "exited", exitCode: 1, tail: "ERR_PNPM\n", cut: false } })
-    expect(await new SandboxRuns(host, 900).access()).toEqual({ kind: "unavailable", reason: "install" })
+    expect(await new SandboxRuns(host, 900, "andabot").access()).toEqual({ kind: "unavailable", reason: "install" })
     expect(host.box.calls.at(-1)).toBe("destroy")
   })
 
   it("shares one preparation between concurrent callers", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     const [first, second] = await Promise.all([runs.access(), runs.access()])
     expect(first.kind).toBe("ready")
     expect(second.kind).toBe("ready")
@@ -251,7 +251,7 @@ describe("SandboxRuns.access", () => {
 
   it("answers spent once the wall time since the first call reaches the budget", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 10)
+    const runs = new SandboxRuns(host, 10, "andabot")
     expect((await runs.access()).kind).toBe("ready")
     host.clock += 9_999
     expect((await runs.access()).kind).toBe("ready")
@@ -264,7 +264,7 @@ describe("SandboxRuns.access", () => {
 describe("SandboxRuns.end", () => {
   it("destroys and unleases once, then starts the next review clean", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await runs.end("review_end")
     expect(host.box.calls.at(-1)).toBe("destroy")
@@ -278,7 +278,7 @@ describe("SandboxRuns.end", () => {
 
   it("calls nothing when nothing was started", async () => {
     const host = new FakeHost(READY)
-    await new SandboxRuns(host, 900).end("review_end")
+    await new SandboxRuns(host, 900, "andabot").end("review_end")
     expect(host.box.calls).toEqual([])
     expect(host.unleased).toBe(0)
   })
@@ -286,7 +286,7 @@ describe("SandboxRuns.end", () => {
   it("never throws when destroy does, and still unleases", async () => {
     const host = new FakeHost(READY)
     host.box.destroyThrows = true
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await expect(runs.end("review_end")).resolves.toBeUndefined()
     expect(host.unleased).toBe(1)
@@ -296,7 +296,7 @@ describe("SandboxRuns.end", () => {
 describe("SandboxRuns.status", () => {
   it("says none before any call, then what the sandbox answered, and none again after end", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 10)
+    const runs = new SandboxRuns(host, 10, "andabot")
     expect(await runs.status()).toEqual({ kind: "none" })
     await runs.access()
     expect(await runs.status()).toEqual({ kind: "ready" })
@@ -310,12 +310,12 @@ describe("SandboxRuns.status", () => {
   it("says off after an off answer, and names the step after a failure", async () => {
     const off = new FakeHost(READY)
     off.on = false
-    const offRuns = new SandboxRuns(off, 900)
+    const offRuns = new SandboxRuns(off, 900, "andabot")
     await offRuns.access()
     expect(await offRuns.status()).toEqual({ kind: "off" })
     const failing = new FakeHost(READY)
     failing.grant = false
-    const failingRuns = new SandboxRuns(failing, 900)
+    const failingRuns = new SandboxRuns(failing, 900, "andabot")
     await failingRuns.access()
     expect(await failingRuns.status()).toEqual({ kind: "unavailable", reason: "lease" })
   })
@@ -341,7 +341,7 @@ describe("SandboxRuns when a step throws", () => {
   it("answers unavailable, destroys and unleases once, remembers it, and lets end resolve", async () => {
     const host = new FakeHost(READY)
     host.box.rejects = "andabot-checkout"
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     runs.start()
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "checkout" })
     expect(host.box.calls).toEqual(["start", "run:andabot-overcommit", "run:andabot-checkout", "destroy"])
@@ -355,7 +355,7 @@ describe("SandboxRuns when a step throws", () => {
   it("answers unavailable for a head it can't read, before any lease", async () => {
     const host = new FakeHost(READY)
     host.headThrows = true
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "head" })
     expect(host.leases).toEqual([])
     await expect(runs.end("review_end")).resolves.toBeUndefined()
@@ -365,7 +365,7 @@ describe("SandboxRuns when a step throws", () => {
     const host = new FakeHost(READY)
     host.unleaseThrows = true
     host.box.rejects = "andabot-checkout"
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect((await runs.access()).kind).toBe("unavailable")
     await expect(runs.end("review_end")).resolves.toBeUndefined()
   })
@@ -374,7 +374,7 @@ describe("SandboxRuns when a step throws", () => {
 describe("SandboxRuns across reviews", () => {
   it("keeps the sandbox for an active review when a closed event arrives, and ends it when nothing is active", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     runs.start()
     await runs.access()
     await runs.dropIdle("closed")
@@ -387,7 +387,7 @@ describe("SandboxRuns across reviews", () => {
 
   it("lets a replacing review keep the sandbox when the replaced one ends", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     runs.start()
     await runs.access()
     runs.start()
@@ -401,7 +401,7 @@ describe("SandboxRuns across reviews", () => {
 
   it("prepares afresh for a new head, ending the old head's sandbox first", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     runs.start()
     await runs.access()
     host.sha = "def456"
@@ -421,7 +421,7 @@ describe("SandboxRuns after a restart", () => {
   it("ends what an earlier instance started: end destroys, unleases and deletes the record", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
-    await new SandboxRuns(host, 900).end("review_end")
+    await new SandboxRuns(host, 900, "andabot").end("review_end")
     expect(host.box.calls).toEqual(["running", "destroy"])
     expect(host.unleased).toBe(1)
     expect(host.saved.at(-1)).toBeUndefined()
@@ -430,7 +430,7 @@ describe("SandboxRuns after a restart", () => {
   it("drops an idle restored sandbox on a closed event", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
-    await new SandboxRuns(host, 900).dropIdle("closed")
+    await new SandboxRuns(host, 900, "andabot").dropIdle("closed")
     expect(host.box.calls).toContain("destroy")
     expect(host.unleased).toBe(1)
   })
@@ -439,7 +439,7 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
     host.clock = 1_000_000
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     const access = await runs.access()
     expect(access).toEqual({ kind: "ready", sandbox: host.box, dir: "/workspace/repo", manager: "pnpm" })
     expect(host.box.calls).toEqual(["running"])
@@ -451,7 +451,7 @@ describe("SandboxRuns after a restart", () => {
   it("shares one restore between concurrent callers on a fresh instance, so neither prepares over the restored container", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     const [first, second] = await Promise.all([runs.access(), runs.access()])
     expect(first.kind).toBe("ready")
     expect(second.kind).toBe("ready")
@@ -462,7 +462,7 @@ describe("SandboxRuns after a restart", () => {
   it("tears down a record for another head on end, since the container is the pull request's one container", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord("old111")
-    await new SandboxRuns(host, 900).end("review_end")
+    await new SandboxRuns(host, 900, "andabot").end("review_end")
     expect(host.box.calls).toContain("destroy")
     expect(host.unleased).toBe(1)
   })
@@ -470,7 +470,7 @@ describe("SandboxRuns after a restart", () => {
   it("tears down a record for another head first, then prepares the current head", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord("old111")
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect((await runs.access()).kind).toBe("ready")
     const calls = host.box.calls
     expect(calls.indexOf("destroy")).toBeLessThan(calls.indexOf("start"))
@@ -483,7 +483,7 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
     host.box.alive = false
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect((await runs.access()).kind).toBe("ready")
     expect(host.box.calls).toEqual([
       "running",
@@ -502,7 +502,7 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
     host.sandboxThrowsOnce = true
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect((await runs.access()).kind).toBe("ready")
     expect(host.box.calls.filter((call) => call === "start")).toHaveLength(1)
     expect(host.unleased).toBe(1)
@@ -513,7 +513,7 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
     host.box.runningThrows = true
-    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect((await new SandboxRuns(host, 900, "andabot").access()).kind).toBe("ready")
     expect(host.box.calls.filter((call) => call === "start")).toHaveLength(1)
     expect(host.unleased).toBe(1)
   })
@@ -522,7 +522,7 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     const { settled: _settled, ...halfDone } = readyRecord()
     host.stored = halfDone
-    await new SandboxRuns(host, 900).end("review_end")
+    await new SandboxRuns(host, 900, "andabot").end("review_end")
     expect(host.box.calls).toContain("destroy")
     expect(host.unleased).toBe(1)
   })
@@ -535,7 +535,7 @@ describe("SandboxRuns after a restart", () => {
       running: false,
       settled: { kind: "unavailable", reason: "install" },
     }
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     expect(await runs.access()).toEqual({ kind: "unavailable", reason: "install" })
     expect(host.box.calls).toEqual([])
     expect(await runs.status()).toEqual({ kind: "unavailable", reason: "install" })
@@ -545,14 +545,14 @@ describe("SandboxRuns after a restart", () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
     host.loadThrows = true
-    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect((await new SandboxRuns(host, 900, "andabot").access()).kind).toBe("ready")
     expect(host.box.calls[0]).toBe("start")
   })
 
   it("never lets a throwing save out of access", async () => {
     const host = new FakeHost(READY)
     host.saveThrows = true
-    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect((await new SandboxRuns(host, 900, "andabot").access()).kind).toBe("ready")
   })
 })
 
@@ -566,7 +566,7 @@ const failedTest: CheckRun = {
 describe("SandboxRuns check cache", () => {
   it("remembers a run, answers it from checks, and saves it as a stored check", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await runs.remember(checkKey("abc123", "test", failedTest.paths), failedTest)
     expect((await runs.checks()).get(checkKey("abc123", "test", failedTest.paths))).toEqual(failedTest)
@@ -576,7 +576,7 @@ describe("SandboxRuns check cache", () => {
   it("answers a stored run after a restart, under the key a finding's check uses", async () => {
     const host = new FakeHost(READY)
     host.stored = { ...readyRecord(), checks: [storedCheckOf(failedTest)] }
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     const checks = await runs.checks()
     expect(checks.get(checkKey("abc123", "test", failedTest.paths))).toEqual(failedTest)
     expect(knownChecksOf(checks, "abc123")).toEqual(new Map([["test:test/a.test.ts", 1]]))
@@ -585,7 +585,7 @@ describe("SandboxRuns check cache", () => {
   it("lets a review that starts on a fresh instance inherit a same-head sandbox, with an empty cache of its own", async () => {
     const host = new FakeHost(READY)
     host.stored = { ...readyRecord(), checks: [storedCheckOf(failedTest)] }
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.start()
     expect((await runs.checks()).size).toBe(0)
     expect(host.saved.at(-1)?.checks).toEqual([])
@@ -595,7 +595,7 @@ describe("SandboxRuns check cache", () => {
 
   it("forgets the runs when the sandbox ends", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await runs.remember(checkKey("abc123", "test", []), failedTest)
     await runs.end("review_end")
@@ -606,20 +606,20 @@ describe("SandboxRuns check cache", () => {
 describe("SandboxRuns drop job", () => {
   it("schedules one drop at the budget plus the lease grace when a preparation starts", async () => {
     const host = new FakeHost(READY)
-    await new SandboxRuns(host, 900).access()
+    await new SandboxRuns(host, 900, "andabot").access()
     expect(host.drops).toEqual([1_000_000 + 900_000 + LEASE_GRACE_MS])
   })
 
   it("schedules the drop from the stored clock when a ready record is restored", async () => {
     const host = new FakeHost(READY)
     host.stored = readyRecord()
-    await new SandboxRuns(host, 900).access()
+    await new SandboxRuns(host, 900, "andabot").access()
     expect(host.drops).toEqual([900_000 + 900_000 + LEASE_GRACE_MS])
   })
 
   it("cancels the drop once when the sandbox ends", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.access()
     await runs.end("review_end")
     expect(host.cancels).toBe(1)
@@ -629,7 +629,7 @@ describe("SandboxRuns drop job", () => {
 
   it("drops nothing while a review is active and says so, so the job can come back for a review that dies later", async () => {
     const host = new FakeHost(READY)
-    const runs = new SandboxRuns(host, 900)
+    const runs = new SandboxRuns(host, 900, "andabot")
     await runs.start()
     await runs.access()
     expect(await runs.dropIdle("review_end")).toBe(true)
@@ -644,6 +644,6 @@ describe("SandboxRuns drop job", () => {
     host.scheduleDrop = async () => {
       throw new Error("jobs unavailable")
     }
-    expect((await new SandboxRuns(host, 900).access()).kind).toBe("ready")
+    expect((await new SandboxRuns(host, 900, "andabot").access()).kind).toBe("ready")
   })
 })

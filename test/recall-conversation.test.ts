@@ -7,9 +7,10 @@ import {
 } from "@earendil-works/pi-ai"
 import { describe, expect, it } from "vitest"
 import type { ChangedFile } from "../src/github/diff.ts"
+import { budgetRefusalMarkerOf } from "../src/names.ts"
 import { BUDGET_REFUSAL } from "../src/review/budget.ts"
 import type { ReviewSubmissionInput } from "../src/review/findings.ts"
-import { BUDGET_REFUSAL_MARKER, isResubmitPrompt } from "../src/review/prompt.ts"
+import { isResubmitPrompt } from "../src/review/prompt.ts"
 import { NeuronBudget } from "../tools/recall/budget.ts"
 import { attemptReview, replayReview } from "../tools/recall/conversation.ts"
 import { NO_BASIS, ReviewHost } from "../tools/recall/host.ts"
@@ -140,7 +141,7 @@ describe("replayReview", () => {
     expect(answer.reason).toBe("budget")
     expect(answer.posted).toBeUndefined()
     expect(seen.slice(1).every((text) => text.startsWith("Budget spent: this review has used"))).toBe(true)
-    expect(prompts.at(-1)).toBe(BUDGET_REFUSAL_MARKER)
+    expect(prompts.at(-1)).toBe(budgetRefusalMarkerOf("andabot"))
     expect([answer.calls, answer.usd]).toEqual([5, 0.2])
   })
 

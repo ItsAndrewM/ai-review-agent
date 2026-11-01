@@ -4,6 +4,7 @@ import { Value } from "typebox/value"
 import { parse } from "yaml"
 import type { GitHubClient, RepoRef } from "../github/client.ts"
 import { errorText } from "../log.ts"
+import { configFileOf } from "../names.ts"
 import { DEFAULT_DOC_GLOBS } from "./docs.ts"
 
 const PathInstructionEntry = Type.Object(
@@ -74,6 +75,8 @@ export const StoredConfig = Type.Object({
   config: AndabotConfig,
   error: Type.Optional(Type.String()),
   present: Type.Boolean(),
+  file: Type.String(),
+  autoReview: Type.Boolean(),
 })
 
 export type StoredConfig = Static<typeof StoredConfig>
@@ -127,7 +130,17 @@ export const DEFAULT_CONFIG: AndabotConfig = {
   },
 }
 
-export const CONFIG_FILE = ".andabot.yaml"
+export interface ConfigSource {
+  readonly file: string
+  readonly auto: boolean
+}
+
+export const autoReviewOf = (value: string | undefined): boolean => value !== "false"
+
+export const configSourceOf = (botLogin: string, autoReview: string | undefined): ConfigSource => ({
+  file: configFileOf(botLogin),
+  auto: autoReviewOf(autoReview),
+})
 
 export const CONFIG_PREFIX = "config:"
 
@@ -135,9 +148,13 @@ const LINE_BREAK = /\r?\n/
 
 const TRAILING_COLON = /:$/
 
-const defaults = (): AndabotConfig => structuredClone(DEFAULT_CONFIG)
+const defaults = (auto: boolean): AndabotConfig => {
+  const config = structuredClone(DEFAULT_CONFIG)
+  config.reviews.auto = auto
+  return config
+}
 
-const rejected = (error: string): ParsedConfig => ({ config: defaults(), error })
+const rejected = (error: string, auto: boolean): ParsedConfig => ({ config: defaults(auto), error })
 
 const firstLine = (text: string): string => (text.split(LINE_BREAK)[0] ?? "").replace(TRAILING_COLON, "")
 
@@ -147,23 +164,23 @@ const yamlProblem = (cause: unknown): string =>
 const schemaProblem = ([first]: readonly TLocalizedValidationError[]): string =>
   `${first?.instancePath || "/"} ${first?.message ?? "is invalid"}`
 
-const withDefaults = ({ reviews, model, checks }: AndabotConfigFile): AndabotConfig => {
-  const config: AndabotConfig = { reviews: { ...defaults().reviews, ...reviews } }
+const withDefaults = ({ reviews, model, checks }: AndabotConfigFile, auto: boolean): AndabotConfig => {
+  const config: AndabotConfig = { reviews: { ...defaults(auto).reviews, ...reviews } }
   if (model?.verify !== undefined) config.model = { verify: model.verify }
   if (checks !== undefined) config.checks = checks
   return config
 }
 
-export function parseConfig(text: string): ParsedConfig {
+export function parseConfig(text: string, auto: boolean): ParsedConfig {
   let document: unknown
   try {
     document = parse(text)
   } catch (cause) {
-    return rejected(yamlProblem(cause))
+    return rejected(yamlProblem(cause), auto)
   }
   const file = document ?? {}
-  if (!Value.Check(AndabotConfigFile, file)) return rejected(schemaProblem(Value.Errors(AndabotConfigFile, file)))
-  return { config: withDefaults(file), error: undefined }
+  if (!Value.Check(AndabotConfigFile, file)) return rejected(schemaProblem(Value.Errors(AndabotConfigFile, file)), auto)
+  return { config: withDefaults(file, auto), error: undefined }
 }
 
 export async function readConfig(
@@ -171,17 +188,18 @@ export async function readConfig(
   ref: RepoRef,
   baseSha: string,
   unreadable: ReportUnreadable,
+  source: ConfigSource,
 ): Promise<ConfigRead> {
   let text: string | undefined
   try {
-    text = await github.getFileContent(ref, CONFIG_FILE, baseSha)
+    text = await github.getFileContent(ref, source.file, baseSha)
   } catch (cause) {
     const error = errorText(cause)
     unreadable(error)
-    return { config: defaults(), error, present: false }
+    return { config: defaults(source.auto), error, present: false }
   }
-  if (text === undefined) return { config: defaults(), error: undefined, present: false }
-  return { ...parseConfig(text), present: true }
+  if (text === undefined) return { config: defaults(source.auto), error: undefined, present: false }
+  return { ...parseConfig(text, source.auto), present: true }
 }
 
 export function configStatus({ present, error }: ConfigRead): ConfigStatus {
@@ -198,12 +216,19 @@ export function staleConfigKeys(keys: readonly string[], baseSha: string): strin
   return keys.filter((key) => key.startsWith(CONFIG_PREFIX) && key !== current)
 }
 
-export function storedConfig(baseSha: string, { config, error, present }: ConfigRead): StoredConfig {
-  const record = { baseSha, config, present }
+export function storedConfig(
+  baseSha: string,
+  { config, error, present }: ConfigRead,
+  { file, auto }: ConfigSource,
+): StoredConfig {
+  const record = { baseSha, config, present, file, autoReview: auto }
   return error === undefined ? record : { ...record, error }
 }
 
 export const configReadOf = ({ config, error, present }: StoredConfig): ConfigRead => ({ config, error, present })
+
+export const cachedRead = (stored: StoredConfig, { file, auto }: ConfigSource): ConfigRead | undefined =>
+  stored.file === file && stored.autoReview === auto ? configReadOf(stored) : undefined
 
 export const pullRequestFacts = ({ draft, base, title }: PullRequestSource): PullRequestFacts => ({
   draft: draft === true,

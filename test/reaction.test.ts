@@ -13,7 +13,7 @@ function github(status: number, body: string): FakeGitHub {
     urls.push(new URL(String(input)).pathname)
     return new Response(body, { status })
   }
-  return { client: new GitHubClient("t", "https://api.test", fetchImpl), urls }
+  return { client: new GitHubClient("t", "andabot", "https://api.test", fetchImpl), urls }
 }
 
 const added = JSON.stringify({ data: { addReaction: { reaction: { content: "EYES" } } } })

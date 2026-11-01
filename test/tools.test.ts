@@ -10,11 +10,12 @@ import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import { GitHubClient, type PullRequestInfo } from "../src/github/client.ts"
 import { withBudgetRefusal } from "../src/models.ts"
+import { budgetRefusalMarkerOf } from "../src/names.ts"
 import { GrepWork, MAX_RUN_SEARCH_WORK } from "../src/repository/search.ts"
 import { SnapshotRuns } from "../src/repository/snapshot-host.ts"
 import { MemorySnapshotFiles, type SnapshotFiles } from "../src/repository/snapshot.ts"
 import { BUDGET_REFUSAL, budgetBlock } from "../src/review/budget.ts"
-import { BUDGET_REFUSAL_MARKER, SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
+import { SUBMIT_REVIEW_TOOL } from "../src/review/prompt.ts"
 import type { ResolveThreadArgs } from "../src/review/thread-resolution.ts"
 import {
   changedFilesText,
@@ -67,7 +68,7 @@ const fakeFetch = async (input: RequestInfo | URL) => {
 
 const host = {
   botLogin: () => "andabot",
-  github: async () => new GitHubClient("token", "https://api.example", fakeFetch),
+  github: async () => new GitHubClient("token", "andabot", "https://api.example", fakeFetch),
   pullRequest: async () => pr,
   changedFiles: async () => [],
   pathFilters: async () => [],
@@ -113,7 +114,7 @@ function hostWith(options: { snapshot?: SnapshotFiles; search?: SearchAccess }) 
   const searched: string[] = []
   const wired = {
     ...host,
-    github: async () => new GitHubClient("token", "https://api.example", recordingFetch),
+    github: async () => new GitHubClient("token", "andabot", "https://api.example", recordingFetch),
     loadedSnapshot: () => options.snapshot,
     repositorySearch: async (tool: "grep" | "tree"): Promise<SearchAccess> => {
       searched.push(tool)
@@ -184,6 +185,14 @@ describe("createReviewExtension", () => {
     expect(runCheck?.description).toContain("whole suite is CI's job")
   })
 
+  it("names the deploy's own config file in list_changed_files", () => {
+    const staging = { ...host, botLogin: () => "andabot-staging" }
+    const list = createReviewExtension(staging).tools?.find((tool) => tool.name === "list_changed_files")
+    expect(list?.description).toContain("repository's .andabot-staging.yaml path_filters")
+    const ours = createReviewExtension(host).tools?.find((tool) => tool.name === "list_changed_files")
+    expect(ours?.description).toContain("repository's .andabot.yaml path_filters")
+  })
+
   it("runs submit_review's round one call at a time, so two calls in one round can't post or verify at once", () => {
     const submit = createReviewExtension(host).tools?.find((tool) => tool.name === SUBMIT_REVIEW_TOOL)
     expect(submit?.executionMode).toBe("sequential")
@@ -249,7 +258,7 @@ describe("the budget hooks", () => {
   const toolTask = ToolTask.definition.name
   const generationTask = GenerationTask.definition.name
   const transcript: Message[] = [{ role: "user", content: "Review this pull request.", timestamp: 1 }]
-  const marker = { role: "user", content: BUDGET_REFUSAL_MARKER, timestamp: 0 }
+  const marker = { role: "user", content: budgetRefusalMarkerOf("andabot"), timestamp: 0 }
 
   it("hooks the tool task's beforeTool and the generation task's beforeRequest", () => {
     const extension = createReviewExtension(host)
@@ -332,7 +341,7 @@ describe("the budget hooks", () => {
     const { beforeRequest } = hooksOf(createReviewExtension(refusing), generationTask)
     const marked = await beforeRequest?.({ messages: transcript }, { conversationId: ROOT_CONVERSATION_ID })
     const faux = fauxProvider()
-    const answer = await withBudgetRefusal(faux.provider)
+    const answer = await withBudgetRefusal(faux.provider, "andabot")
       .streamSimple(faux.getModel(), normalizeContext({ messages: [...(marked?.messages ?? [])] }))
       .result()
     expect(answer).toMatchObject({ stopReason: "error", errorMessage: BUDGET_REFUSAL })
