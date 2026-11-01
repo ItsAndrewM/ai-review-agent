@@ -152,6 +152,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
+import { closesBlockOf } from "./review/closes.ts"
 import { plural, were } from "./review/copy.ts"
 import {
   neuronsSince,
@@ -1032,7 +1033,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ...spendFields(await this.spendOf(pending)),
     })
     const note = incompleteNote(missing)
-    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+    await this.upsertSummary(
+      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+    )
     this.#incompleteDelivery = pending.deliveryId
     await this.endOwnRun(pending.deliveryId, await this.failedRun(note))
     return { text: `Not posted: no walkthrough row for ${missing.join(", ")}. The review ends here.`, done: true }
@@ -1237,6 +1240,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const summary = renderSummaryComment({
       botLogin: this.botLogin(),
       seconds: reviewed.seconds,
+      closes: closesBlockOf(pr),
       headSha: pr.head.sha,
       event: verdict,
       submission: submissionFromRecord(submission, reviewed),
@@ -2222,7 +2226,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     if (await this.headMoved(pr, run)) return
     const note = `_The review did not complete: ${failure}._`
-    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+    await this.upsertSummary(
+      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+    )
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -2252,7 +2258,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       logError("review.failed", { ...fields, reason: failure, retry: true, staleBuild: run.staleBuild })
     }
     const note = renderUnpostedNote(written, retryOutcome(failure, retryRefusal))
-    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+    await this.upsertSummary(
+      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+    )
     await this.endOwnRun(run.deliveryId, await this.failedRun(note))
   }
 
@@ -2346,7 +2354,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async createPausedSummary(): Promise<void> {
     const pr = await this.currentPullRequest()
     const note = "_Not reviewed yet._"
-    await this.upsertSummary(renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note }))
+    await this.upsertSummary(
+      renderUnpostedSummary({ botLogin: this.botLogin(), headSha: pr.head.sha, note, closes: closesBlockOf(pr) }),
+    )
   }
 
   private async resume(call: CommandCall, callerVersion?: Version): Promise<void> {
@@ -2635,6 +2645,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
         skillsFingerprint: (await bundledSkills()).fingerprint,
         linkedIssues: issues.map(({ number }) => number),
         configError: read.error,
+        closes: closesBlockOf(pr),
       }),
     )
     log("summary.posted", {

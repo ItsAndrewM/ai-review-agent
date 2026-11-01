@@ -282,6 +282,15 @@ describe("renderSummaryRun", () => {
     linkedIssues: [27],
   } satisfies SummaryRunInput
 
+  it("puts the close block at the top of the footer, before Summarized by", () => {
+    const block = [
+      "<!-- andabot:closes -->",
+      "<sub>Merging closes #80 (from the description).</sub>",
+      "<!-- andabot:closes-end -->",
+    ]
+    expect(renderSummaryRun({ ...run, closes: block })).toContain(`${block.join("\n")}\n<sub>Summarized by`)
+  })
+
   it("shows the summarized head, the recorded verdict and the fresh summary, with no since section", () => {
     const text = renderSummaryRun(run)
     expect(text.startsWith(SUMMARY_MARKER)).toBe(true)
