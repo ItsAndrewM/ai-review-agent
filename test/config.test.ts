@@ -118,7 +118,7 @@ function fakeGitHub(respond: () => Response) {
     calls.push(`${pathname}${search}`)
     return respond()
   }
-  return { github: new GitHubClient("t", "https://api.example", fetchImpl), calls }
+  return { github: new GitHubClient("t", "andabot", "https://api.example", fetchImpl), calls }
 }
 
 function recorder() {

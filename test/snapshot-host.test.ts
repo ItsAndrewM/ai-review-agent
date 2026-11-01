@@ -68,7 +68,7 @@ describe("snapshotSource", () => {
       urls.push(new Request(input).url)
       return Response.json({ sha: "abc", truncated: false, tree: [] })
     }
-    const source = snapshotSource(new GitHubClient("token", "https://api.github.com", fetchImpl), {
+    const source = snapshotSource(new GitHubClient("token", "andabot", "https://api.github.com", fetchImpl), {
       owner: "acme",
       repo: "app",
     })

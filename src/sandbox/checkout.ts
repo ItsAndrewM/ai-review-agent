@@ -1,3 +1,4 @@
+import { scriptNameOf } from "../names.ts"
 import type { PullRequestKey } from "../records.ts"
 import type { RunOutcome } from "./run.ts"
 
@@ -17,16 +18,16 @@ if [ -f pnpm-lock.yaml ]; then echo pnpm; elif [ -f package-lock.json ]; then ec
 
 const OVERCOMMIT_SCRIPT = "echo 1 > /proc/sys/vm/overcommit_memory"
 
-export function overcommitArgv(): string[] {
-  return ["/bin/sh", "-c", OVERCOMMIT_SCRIPT, "andabot-overcommit"]
+export function overcommitArgv(botLogin: string): string[] {
+  return ["/bin/sh", "-c", OVERCOMMIT_SCRIPT, scriptNameOf(botLogin, "overcommit")]
 }
 
 export function repositoryUrl(key: PullRequestKey): string {
   return `https://github.com/${key.owner}/${key.repo}.git`
 }
 
-export function checkoutArgv(url: string, sha: string): string[] {
-  return ["/bin/sh", "-c", CHECKOUT_SCRIPT, "andabot-checkout", url, sha]
+export function checkoutArgv(url: string, sha: string, botLogin: string): string[] {
+  return ["/bin/sh", "-c", CHECKOUT_SCRIPT, scriptNameOf(botLogin, "checkout"), url, sha]
 }
 
 export type CheckoutResult =
@@ -54,8 +55,8 @@ export const MANAGERS = ["pnpm", "npm", "none"] as const
 
 export type Manager = (typeof MANAGERS)[number]
 
-export function detectArgv(): string[] {
-  return ["/bin/sh", "-c", DETECT_SCRIPT, "andabot-detect"]
+export function detectArgv(botLogin: string): string[] {
+  return ["/bin/sh", "-c", DETECT_SCRIPT, scriptNameOf(botLogin, "detect")]
 }
 
 export function parseManager(outcome: RunOutcome): Manager {

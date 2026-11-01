@@ -85,7 +85,7 @@ function fakeGitHub(
     calls.push(`${pathname}${search}`)
     return answer(pathname)
   }
-  return { github: new GitHubClient("t", "https://api.example", fetchImpl), calls }
+  return { github: new GitHubClient("t", "andabot", "https://api.example", fetchImpl), calls }
 }
 
 function recorder() {
@@ -471,7 +471,12 @@ describe("loadRepositoryContext", () => {
 describe("readRepositoryContext", () => {
   it("reports a tree GitHub fails to serve and leaves the review without standards, rather than failing it", async () => {
     const reported: string[] = []
-    const failing = new GitHubClient("t", "https://api.example", async () => new Response("boom", { status: 500 }))
+    const failing = new GitHubClient(
+      "t",
+      "andabot",
+      "https://api.example",
+      async () => new Response("boom", { status: 500 }),
+    )
     const context = await readRepositoryContext(
       () => loadRepositoryContext(failing, ref, BASE, WEB, failOnUnreadable),
       (error) => reported.push(error),

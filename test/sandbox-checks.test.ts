@@ -113,13 +113,17 @@ describe("checkKey, existsArgv and missingPath", () => {
   })
 
   it("probes the paths in the repository and reads back the first missing one", () => {
-    const argv = existsArgv(["a.ts", "b.ts"])
+    const argv = existsArgv(["a.ts", "b.ts"], "andabot")
     expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(argv.slice(3)).toEqual(["andabot-exists", "a.ts", "b.ts"])
     expect(argv[2]).toContain('[ -e "$p" ]')
     expect(missingPath(exited(1, "b.ts\n"))).toBe("b.ts")
     expect(missingPath(exited(0, ""))).toBeUndefined()
     expect(missingPath(timedOut)).toBeUndefined()
+  })
+
+  it("names the exists script after the deploy's login", () => {
+    expect(existsArgv(["a.ts"], "andabot-staging")[3]).toBe("andabot-staging-exists")
   })
 })
 

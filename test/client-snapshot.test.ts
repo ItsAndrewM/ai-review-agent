@@ -39,7 +39,7 @@ function recordingClient(answer: (recorded: Recorded) => Response): RecordingCli
     calls.push(recorded)
     return answer(recorded)
   }
-  return { client: new GitHubClient("tok", "https://api.example", fetchImpl), calls }
+  return { client: new GitHubClient("tok", "andabot", "https://api.example", fetchImpl), calls }
 }
 
 function graphqlRequest(recorded: Recorded): GraphQLRequest {

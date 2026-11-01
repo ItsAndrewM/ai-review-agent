@@ -68,7 +68,7 @@ const fakeFetch = async (input: RequestInfo | URL) => {
 
 const host = {
   botLogin: () => "andabot",
-  github: async () => new GitHubClient("token", "https://api.example", fakeFetch),
+  github: async () => new GitHubClient("token", "andabot", "https://api.example", fakeFetch),
   pullRequest: async () => pr,
   changedFiles: async () => [],
   pathFilters: async () => [],
@@ -114,7 +114,7 @@ function hostWith(options: { snapshot?: SnapshotFiles; search?: SearchAccess }) 
   const searched: string[] = []
   const wired = {
     ...host,
-    github: async () => new GitHubClient("token", "https://api.example", recordingFetch),
+    github: async () => new GitHubClient("token", "andabot", "https://api.example", recordingFetch),
     loadedSnapshot: () => options.snapshot,
     repositorySearch: async (tool: "grep" | "tree"): Promise<SearchAccess> => {
       searched.push(tool)

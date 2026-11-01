@@ -104,7 +104,7 @@ function fakeGitHub(
     const body = bodies.get(path)
     return body === undefined ? new Response("{}", { status: 404 }) : new Response(body, { status: 200 })
   }
-  return { github: new GitHubClient("t", "https://api.example", fetchImpl), calls }
+  return { github: new GitHubClient("t", "andabot", "https://api.example", fetchImpl), calls }
 }
 
 const fetchesOf = (calls: readonly string[], path: string): number =>

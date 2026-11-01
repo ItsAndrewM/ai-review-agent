@@ -541,7 +541,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     () => this.#snapshotFiles(),
     async (files, sha) => loadSnapshot(snapshotSource(await this.github(), await this.key()), files, sha),
   )
-  #sandbox = new SandboxRuns(this.#sandboxHost(), sandboxBudgetOf(this.env.MAX_SANDBOX_SECONDS))
+  #sandbox = new SandboxRuns(this.#sandboxHost(), sandboxBudgetOf(this.env.MAX_SANDBOX_SECONDS), this.env.BOT_LOGIN)
   #deliveries = new Deliveries(this.#deliveryHost())
 
   #deliveryHost(): DeliveryHost {
@@ -597,7 +597,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async sandboxToken(): Promise<string> {
     const key = await this.key()
     const jwt = await createAppJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_PRIVATE_KEY)
-    return (await fetchInstallationToken(jwt, key.installationId, sandboxTokenScope(key))).token
+    return (await fetchInstallationToken(jwt, key.installationId, this.botLogin(), sandboxTokenScope(key))).token
   }
 
   async prepareSandbox(key: PullRequestKey): Promise<AccessSummary> {
@@ -726,7 +726,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async #missingPath(access: Extract<SandboxAccess, { kind: "ready" }>, paths: readonly string[]) {
     if (paths.length === 0) return undefined
-    return missingPath(await access.sandbox.run(existsArgv(paths), { cwd: access.dir, timeoutMs: 60_000 }))
+    return missingPath(
+      await access.sandbox.run(existsArgv(paths, this.botLogin()), { cwd: access.dir, timeoutMs: 60_000 }),
+    )
   }
 
   async #checkArgv(pr: PullRequestInfo, name: CheckName, manager: Manager, paths: readonly string[]) {
@@ -836,12 +838,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     const cached = await this.ctx.storage.get("token")
     if (Value.Check(InstallationToken, cached) && cached.expiresAt - Date.now() > 5 * 60_000) {
-      return new GitHubClient(cached.token)
+      return new GitHubClient(cached.token, this.botLogin())
     }
     const jwt = await createAppJwt(this.env.GITHUB_APP_ID, this.env.GITHUB_PRIVATE_KEY)
-    const token = await fetchInstallationToken(jwt, key.installationId)
+    const token = await fetchInstallationToken(jwt, key.installationId, this.botLogin())
     await this.ctx.storage.put("token", token)
-    return new GitHubClient(token.token)
+    return new GitHubClient(token.token, this.botLogin())
   }
 
   async pullRequest(): Promise<PullRequestInfo> {

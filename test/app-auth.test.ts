@@ -95,6 +95,26 @@ describe("GitHub App JWT", () => {
 })
 
 describe("fetchInstallationToken failures", () => {
+  it("names itself by the deploy's login in the user-agent", async () => {
+    const agents: (string | undefined)[] = []
+    const server = createServer((req, res) => {
+      agents.push(req.headers["user-agent"])
+      res.writeHead(500)
+      res.end("{}")
+    })
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+    const address = server.address()
+    if (!(address instanceof Object)) throw new Error("the test server has no port")
+    try {
+      await fetchInstallationToken("jwt", 7, "andabot-staging", undefined, `http://127.0.0.1:${address.port}`).catch(
+        () => undefined,
+      )
+      expect(agents).toEqual(["andabot-staging"])
+    } finally {
+      server.close()
+    }
+  })
+
   it("throws a GitHubError carrying the status, so an outage on the token endpoint reads as transient", async () => {
     const server = createServer((_req, res) => {
       res.writeHead(525, { "content-type": "application/json" })
@@ -104,9 +124,13 @@ describe("fetchInstallationToken failures", () => {
     const address = server.address()
     if (!(address instanceof Object)) throw new Error("the test server has no port")
     try {
-      const error = await fetchInstallationToken("jwt", 7, undefined, `http://127.0.0.1:${address.port}`).catch(
-        (cause: GitHubError) => cause,
-      )
+      const error = await fetchInstallationToken(
+        "jwt",
+        7,
+        "andabot",
+        undefined,
+        `http://127.0.0.1:${address.port}`,
+      ).catch((cause: GitHubError) => cause)
       expect(error).toBeInstanceOf(GitHubError)
       expect(error).toMatchObject({ status: 525, path: "/app/installations/7/access_tokens" })
     } finally {

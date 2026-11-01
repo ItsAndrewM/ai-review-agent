@@ -19,7 +19,7 @@ function github(...bodies: Json[]): FakeGitHub {
     const body = queue.shift()
     return body === undefined ? new Response("{}", { status: 500 }) : new Response(body, { status: 200 })
   }
-  return { client: new GitHubClient("t", "https://api.test", fetchImpl), urls }
+  return { client: new GitHubClient("t", "andabot", "https://api.test", fetchImpl), urls }
 }
 
 function run(name: string, overrides: { [key: string]: Json } = {}) {

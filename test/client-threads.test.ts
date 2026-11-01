@@ -26,7 +26,7 @@ function reply(status: number, body: Json): void {
 }
 
 function client(): GitHubClient {
-  return new GitHubClient("tok", base)
+  return new GitHubClient("tok", "andabot", base)
 }
 
 function last(): Received {

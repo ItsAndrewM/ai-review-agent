@@ -1,3 +1,4 @@
+import { scriptNameOf } from "../names.ts"
 export const CA_PATH = "/etc/cloudflare/certs/cloudflare-containers-ca.crt"
 
 export const TRUST_ENV = {
@@ -31,16 +32,16 @@ export function runDir(id: string): string {
   return `${RUNS_DIR}/${id}`
 }
 
-export function runArgv(dir: string, command: readonly string[]): string[] {
-  return ["/bin/sh", "-c", RUN_SCRIPT, "andabot-run", dir, ...command]
+export function runArgv(dir: string, command: readonly string[], botLogin: string): string[] {
+  return ["/bin/sh", "-c", RUN_SCRIPT, scriptNameOf(botLogin, "run"), dir, ...command]
 }
 
-export function killArgv(dir: string, signal: KillSignal): string[] {
-  return ["/bin/sh", "-c", killScript(signal), "andabot-kill", dir]
+export function killArgv(dir: string, signal: KillSignal, botLogin: string): string[] {
+  return ["/bin/sh", "-c", killScript(signal), scriptNameOf(botLogin, "kill"), dir]
 }
 
-export function resultArgv(dir: string, tailBytes: number): string[] {
-  return ["/bin/sh", "-c", RESULT_SCRIPT, "andabot-result", dir, String(tailBytes)]
+export function resultArgv(dir: string, tailBytes: number, botLogin: string): string[] {
+  return ["/bin/sh", "-c", RESULT_SCRIPT, scriptNameOf(botLogin, "result"), dir, String(tailBytes)]
 }
 
 export function removeArgv(dir: string): string[] {

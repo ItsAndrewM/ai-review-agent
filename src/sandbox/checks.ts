@@ -1,6 +1,6 @@
 import { Type } from "typebox"
 import { Value } from "typebox/value"
-import { configFileOf } from "../names.ts"
+import { configFileOf, scriptNameOf } from "../names.ts"
 import type { CheckRecord } from "../records.ts"
 import type { Manager } from "./checkout.ts"
 import { lastLine } from "./checkout.ts"
@@ -117,8 +117,8 @@ export function accessRefusal(access: Exclude<SandboxAccess, { kind: "ready" }>)
   return access
 }
 
-export function existsArgv(paths: readonly string[]): string[] {
-  return ["/bin/sh", "-c", EXISTS_SCRIPT, "andabot-exists", ...paths]
+export function existsArgv(paths: readonly string[], botLogin: string): string[] {
+  return ["/bin/sh", "-c", EXISTS_SCRIPT, scriptNameOf(botLogin, "exists"), ...paths]
 }
 
 export function missingPath(outcome: RunOutcome): string | undefined {

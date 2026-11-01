@@ -309,6 +309,7 @@ const MOST_CHECK_RUN_PAGES = 10
 export class GitHubClient {
   constructor(
     private readonly token: string,
+    private readonly userAgent: string,
     private readonly apiBase = "https://api.github.com",
     private readonly fetchImpl: typeof fetch = fetch,
   ) {}
@@ -558,7 +559,7 @@ export class GitHubClient {
     headers.set("authorization", `Bearer ${this.token}`)
     if (!headers.has("accept")) headers.set("accept", "application/vnd.github+json")
     headers.set("x-github-api-version", "2022-11-28")
-    headers.set("user-agent", "andabot")
+    headers.set("user-agent", this.userAgent)
     if (init.body && !headers.has("content-type")) headers.set("content-type", "application/json")
     const { fetchImpl } = this
     try {

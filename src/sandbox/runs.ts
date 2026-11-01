@@ -109,6 +109,7 @@ export class SandboxRuns {
   constructor(
     private readonly host: SandboxHost,
     private readonly budgetSeconds: number,
+    private readonly botLogin: string,
   ) {}
 
   async start(): Promise<void> {
@@ -363,7 +364,7 @@ export class SandboxRuns {
 
   async #allowOvercommit(sandbox: SandboxCalls, head: SandboxHead): Promise<void> {
     try {
-      const outcome = await this.#run(sandbox, overcommitArgv(), "/workspace")
+      const outcome = await this.#run(sandbox, overcommitArgv(this.botLogin), "/workspace")
       const exitCode = outcome.outcome === "exited" ? outcome.exitCode : undefined
       log("sandbox.overcommit", {
         number: head.number,
@@ -378,7 +379,7 @@ export class SandboxRuns {
   async #checkout(sandbox: SandboxCalls, head: SandboxHead): Promise<void> {
     const began = this.host.now()
     const result = parseCheckout(
-      await this.#run(sandbox, checkoutArgv(repositoryUrl(head.key), head.sha), "/workspace"),
+      await this.#run(sandbox, checkoutArgv(repositoryUrl(head.key), head.sha, this.botLogin), "/workspace"),
     )
     if (result.kind === "failed") throw new StepFailure("checkout", result.reason)
     log("sandbox.checkout", {
@@ -391,7 +392,7 @@ export class SandboxRuns {
 
   async #install(sandbox: SandboxCalls, head: SandboxHead): Promise<Settled> {
     const began = this.host.now()
-    const manager = parseManager(await this.#run(sandbox, detectArgv(), REPO_DIR))
+    const manager = parseManager(await this.#run(sandbox, detectArgv(this.botLogin), REPO_DIR))
     if (manager === "none") {
       log("sandbox.install", { number: head.number, manager, ms: this.host.now() - began })
       return this.#ready(sandbox, manager)

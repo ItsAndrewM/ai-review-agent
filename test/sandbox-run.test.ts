@@ -1,17 +1,23 @@
 import { describe, expect, it } from "vitest"
-import { killArgv, parseResult, runArgv, tailBytesOf } from "../src/sandbox/run.ts"
+import { killArgv, parseResult, resultArgv, runArgv, tailBytesOf } from "../src/sandbox/run.ts"
 
 const bytes = (text: string) => new TextEncoder().encode(text)
 
 describe("runArgv", () => {
   it("runs the command under the wrapper with the dir first", () => {
-    const argv = runArgv("/workspace/runs/a", ["node", "--version"])
+    const argv = runArgv("/workspace/runs/a", ["node", "--version"], "andabot")
     expect(argv.slice(0, 2)).toEqual(["/bin/sh", "-c"])
     expect(argv.slice(3)).toEqual(["andabot-run", "/workspace/runs/a", "node", "--version"])
   })
 
+  it("names each script after the deploy's login", () => {
+    expect(runArgv("/workspace/runs/a", ["true"], "andabot-staging")[3]).toBe("andabot-staging-run")
+    expect(killArgv("/workspace/runs/a", "TERM", "andabot-staging")[3]).toBe("andabot-staging-kill")
+    expect(resultArgv("/workspace/runs/a", 10, "andabot-staging")[3]).toBe("andabot-staging-result")
+  })
+
   it("puts the command in its own process group and records the exit code atomically", () => {
-    const script = runArgv("/workspace/runs/a", ["true"])[2] ?? ""
+    const script = runArgv("/workspace/runs/a", ["true"], "andabot")[2] ?? ""
     expect(script).toContain("setsid")
     expect(script).toContain('"$dir/exit-code.tmp"')
     expect(script).toContain('mv "$dir/exit-code.tmp" "$dir/exit-code"')
@@ -99,10 +105,10 @@ describe("parseResult", () => {
 
 describe("killArgv", () => {
   it("sends the named signal to the run's process group in the -s form dash accepts before a negative pid, and nothing when the run never started", () => {
-    const term = killArgv("/workspace/runs/a", "TERM")[2] ?? ""
+    const term = killArgv("/workspace/runs/a", "TERM", "andabot")[2] ?? ""
     expect(term).toContain('kill -s TERM -- "-$pid"')
     expect(term).not.toContain("kill -TERM")
     expect(term).toContain('[ -f "$1/pid" ] || exit 0')
-    expect(killArgv("/workspace/runs/a", "KILL")[2]).toContain('kill -s KILL -- "-$pid"')
+    expect(killArgv("/workspace/runs/a", "KILL", "andabot")[2]).toContain('kill -s KILL -- "-$pid"')
   })
 })

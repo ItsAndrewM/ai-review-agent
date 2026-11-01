@@ -191,7 +191,7 @@ const notFetched = async (input: RequestInfo | URL) => new Response(`no answer f
 
 const reviewHost = {
   botLogin: () => "andabot",
-  github: async () => new GitHubClient("token", "https://api.example", notFetched),
+  github: async () => new GitHubClient("token", "andabot", "https://api.example", notFetched),
   pullRequest: async () => pr,
   changedFiles: async () => [],
   pathFilters: async () => [],
