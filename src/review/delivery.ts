@@ -71,6 +71,7 @@ export const StoredIncoming = Type.Union([
     trigger: WebhookTrigger,
   }),
   Type.Object({ kind: Type.Literal("closed"), key: PullRequestKey, deliveryId: Type.String() }),
+  Type.Object({ kind: Type.Literal("edited"), key: PullRequestKey, deliveryId: Type.String() }),
 ])
 
 export type Incoming = Static<typeof StoredIncoming>

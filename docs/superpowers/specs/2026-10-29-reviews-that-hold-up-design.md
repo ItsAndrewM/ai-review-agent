@@ -416,3 +416,86 @@ The fresh review (opus, 1 Nov 2026) found no Critical, two Important and seven M
 - `docs/design.md` says only a failed retitle is logged and that `review.done` logs `seconds`; the `submit_review` description says a missing `changes_since` comes back once; `review.findings` logs `changesSinceMissing`.
 
 Left as they are, for a follow-up if they show: a later run on the same head that ends as posted-earlier before the approval keeps its own "waits for the checks" title, since the posted record holds the first run's id; the refuse-once flow and the retitle are tested through their pure helpers, not the object, as the repository tests everything else; `review.changes_since_missing` logs twice when a publish is retried; the approved summary's verdict line still shows the review's counts as they stood.
+
+
+## Slice 8, #127: the summary says which issues the merge closes, and warns when the wording won't do what it says
+
+### Why
+
+GitHub closes an issue on merge when a closing keyword sits right before its reference, and it reads nothing around the keyword. Both directions bit this repository: #105's "Closes #80 and #100" closed #80 and left #100 open, though #105 shipped it; "Merging won't close #N" on #10, #12 and #16 closed #6, #4 and #8 on merge, before their live checks ran. andabot already reads closing keywords for the spec, so with no model call it can work out what the merge will close and say so where the author looks.
+
+GitHub's rules, from "Linking a pull request to an issue" (read 1 Nov 2026): the keywords are close, closes, closed, fix, fixes, fixed, resolve, resolves, resolved; they "can be followed by colons or in uppercase"; the reference is `#n` in the same repository or `owner/repo#n` in another; several issues need "the full syntax for each issue"; keywords count in the pull request's description and in commit messages, not its title; and keywords in a description "are interpreted only when the pull request targets the repository's default branch". Issues linked by hand in the Development sidebar also close.
+
+### Rulings (grill of 1 Nov 2026)
+
+- **andabot's own parser, following GitHub's rule.** The close list comes from the description, parsed on the host; GitHub's GraphQL `closingIssuesReferences` was rejected, as one more call per review, an answer the warnings would still have to explain from the text, and the parser tests the issue asks for. An issue linked by hand in the sidebar isn't in the list, and the line says the list is "from the description".
+- **Off the default branch, merging closes nothing.** When the pull request's base isn't the repository's default branch and the description has a closing keyword, the summary says "Merging into `staging` closes no issue: GitHub closes them only on a merge into `main`." and shows no list and no warnings; with no keyword it says nothing.
+- **The spec parser is unchanged.** `linkedIssueNumbers` keeps reading what the author linked, negated or not, and the recall set scores as before; the close list is a separate, display-only answer.
+- **A footer line, warnings in plain text, no effect on the verdict.** The summary gains "Merging closes #80 and #6 (from the description)." in its footer and, when the wording misleads, one normal-size warning line per problem; no warning withholds approval or touches the check run.
+- **An edit to the description refreshes the close lines.** `pull_request.edited` with a changed body is routed; the object reads the pull request fresh, recomputes the close list and rewrites only the close block of the summary comment in place, as the approval rewrites the verdict line. No model call, no review, no check run.
+- **Description only, every documented form.** The nine keywords, case-insensitive, an optional colon, then `#n` or `owner/repo#n` (a reference to the pull request's own repository written in full counts as `#n`). Commit messages are left out, since a squash merge's message isn't known before the merge. A full issue URL after a keyword (`Fixes https://github.com/o/r/issues/7`) counts as well: GitHub's docs don't list it, but GitHub links it (the probe below).
+- **A negated keyword is one with a negation in the three words before it**, in the same sentence: "not", "never", "no longer", "without" or any word ending in "n't" ("won't", "doesn't", "isn't"); "This doesn't fix the flake; closes #5" warns about nothing, since the semicolon ends the clause the negation is in.
+- **A listed reference** is one that follows a keyword's reference after "and", "&", "or", a comma or a comma and "and", with no keyword of its own: "Closes #80 and #100", "Fixes #1, #2 and #3".
+- **Live check: a fixture, then the next real pull request.** After the merge and the deploy, a throwaway pull request from `main-with-checks` (not the default branch) whose description says "Closes #X and #Y" and "won't close #Z" shows the off-default line; an edit to its description must change the summary with no new review. The first real pull request into `main` shows the close list and any warning. Results on #127.
+
+### The parser
+
+`src/review/closes.ts`: `closesOf(body: string | null, repo: string): Closes` with `Closes = { references: CloseReference[]; listed: IssueRef[]; negated: NegatedClose[] }`, where `IssueRef = { repo: string | undefined; number: number }` (`repo` set only for another repository) and a `CloseReference` is an `IssueRef` with the keyword as written. One pass over the description finds each keyword occurrence (`(?<![\p{L}\p{N}_])(close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?![\p{L}\p{N}_])`, case-insensitive), then an optional `:` and whitespace, then a reference; a keyword with no reference after it is not a close. From each reference, a run of `,`, `and`, `&`, `or` separators followed by bare references collects the listed ones. A close is negated when one of the three words before its keyword, in the same clause (no `.`, `!`, `?`, `;` or line break between), is a negation. References are de-duplicated, in the order written; the list is the close references, the listed ones never close.
+
+### The copy
+
+The block sits at the top of the footer, between `<!-- andabot:closes -->` and `<!-- andabot:closes-end -->`, so an edit can rewrite it; it is written even when empty. On the default branch, with closes:
+
+- one line per listed reference, normal size: `⚠️ #100 follows "and" after a keyword, so merging won't close it. Repeat the keyword for each issue: "Closes #80, closes #100".` (the separator as written, the suggestion built from the first keyword's form and every reference in the run);
+- one line per negated close: `⚠️ "won't close #6" still closes #6 on merge: GitHub ignores the "won't". Name it without a keyword to leave it open, such as "Part of #6".`;
+- then `<sub>Merging closes #80 and #6 (from the description).</sub>`, joined with commas and "and", another repository's as `octo/repo#100`.
+
+With only listed references and no close (impossible: a list starts after a close) there is nothing to add; with no keyword at all, the block is empty. Off the default branch with a keyword: `<sub>Merging into \`staging\` closes no issue: GitHub closes them only on a merge into \`main\`.</sub>` alone. The "Linked issues" line stays as it is.
+
+### The edit
+
+`src/route.ts` routes `pull_request` `edited` when `changes.body` or `changes.base` is present (a title-only edit is ignored) to the object as a new incoming kind, through `accept` like every delivery, with no 👀 reaction. The object skips it when the pull request isn't open or has no summary comment; otherwise it reads the pull request fresh, renders the block for the current body and base, and, when the comment's block differs, replaces the text between the markers and updates the comment; a comment without the markers, written before this slice, is left alone. It runs while paused, since it posts nothing new and only corrects the footer. It logs `closes.refreshed` with `number`, `closes`, `listed`, `negated` and `changed`. A review publishing at the same moment renders from the pull request it read at submit time, so a publish after the edit already has the new body; an edit between that read and the post is overwritten by the older body until the next edit or review, accepted as rare.
+
+### The base
+
+`PullRequestInfo.base.repo` gains `default_branch: Type.Optional(Type.String())`, which GitHub's pull request responses and webhook payloads carry; when it is absent the base is taken as the default branch, so the list shows.
+
+### Docs
+
+`docs/design.md`: the summary comment's footer (the close block, the warnings, the off-default line), the event list (`edited` with a body change), and a sentence beside the spec's linked-issue paragraph that the close list is separate and display-only. `docs/setup.md` is unchanged: the App's `Pull request` event already delivers `edited`.
+
+### Tests
+
+Unit: `closesOf` for each of the nine keyword forms, uppercase and a colon; `#n`, `owner/repo#n` for another repository and for this one, and a URL; a list after a single keyword joined by "and", "&", "or", commas and ", and"; a keyword with no reference; a negation in the three words before, one four words before, one in an earlier clause, and "n't" words; duplicates. The block for closes with each warning kind, for no keyword, and off the default branch; the rewrite between markers, and a comment without them left alone. The route for `edited` with and without `changes.body`. The live check as above.
+
+### Calls made after the builder check
+
+Andrew approved the spec ahead and was away; these are mine, to check.
+
+- **GitHub was asked, not guessed.** Draft pull request #201 into `main` (closed unmerged, branch `chore/probe-127-closing-keywords` kept) named a different closed issue in each form, and GitHub's `closingIssuesReferences` answered: linked for a plain keyword, a colon, uppercase, bold, a blockquote, a full issue URL, `owner/repo#n`, "won't close #n", and the first reference of "Closes #140 and #138" and "Fixes #135, #134"; not linked for the reference after "and" or a comma, a keyword in inline code, in a fenced code block or in an HTML comment, "fixes#119" with no space, and "prefixes #115". So the parser drops inline code spans, fenced code blocks and HTML comments before it reads the description, and needs whitespace after the keyword or its colon.
+- **A base change refreshes too.** `edited` is routed when `changes.body` or `changes.base` is present, since a retarget from `staging` to `main` changes what the merge closes and no review follows it; a title-only edit stays ignored.
+- **Every summary comment the bot writes carries the block,** the incomplete-review, failure and paused placeholders (`renderUnpostedSummary`) included, so an edit always finds the markers on a comment written after this slice; a pull request with no summary comment (skipped by its settings, or never reviewed) gets no warning, and `docs/design.md` says so.
+- A reference that is both listed after one keyword and closed by its own elsewhere ("Closes #1 and #2. Closes #2.") closes and gets no warning; an edit made by a bot is routed like any other, since the body is what counts.
+
+### Left to the builder
+
+The incoming kind's name and its place in `accept`; how the suggestion line quotes the separator; the exact clipping of a long reference run in a warning; where `Closes` is rendered (render.ts or closes.ts), as long as the same function serves the review, the `summary` command and the edit.
+
+### Rulings after the review
+
+The fresh review (opus, 1 Nov 2026) found one Critical, three Important and seven Minor. Fixed:
+
+- **The block is bounded.** A short description ("Fixes #1, …, #75", 370 characters) had pushed the summary past GitHub's 65,536-character comment limit, failing every summary write on that pull request. Now one warning per list ("#2 and #3 follow "Fixes #1" without a keyword of their own, …"), naming at most five later references and suggesting at most three ("Fixes #1, fixes #2, fixes #3, …"); at most five warnings, then "N more wording problems aren't listed."; at most ten issues in the close line, then "and N more"; the quoted phrase clipped to 60 characters and the negation word to 20. Measured on 64 KB adversarial descriptions: every block under 1 KB.
+- **The negation scan is linear.** It looks back at most 200 characters for the clause, so a 64 KB description parses in tens of milliseconds where it took seconds; an edit parses the description once.
+- **A list after a negated keyword gets only the negation warning,** so "won't close #80 and #100" never advises "close #80, close #100".
+- **A bot's edit is routed,** as the builder-check call says (the plan had it ignored); the refresh edits a comment, not the pull request, so it can't loop.
+- **The quoted phrase sits in a code span and is read from the code-stripped text,** so the author's markup or a mention never reaches andabot's comment and a negation inside an HTML comment doesn't count; the rewrite takes the last start marker, so marker text in the model's summary above the footer can't be cut into.
+
+Left as they are, for a follow-up if they show (each makes andabot under-report what GitHub closes, never over-report): a `` `<!--` `` inside a code span blanks the rest of the description, an inline code span can pair across a blank line, a fence opener with an info string inside an open fence closes it, a fence inside a blockquote isn't recognised, and "Fixes #1,#2" with no space gets no warning. Also left: a refresh landing between a review's read and write of the summary comment can write the older comment back, the same race the verdict rewrite and the paused line have; another repository's reference is de-duplicated case-sensitively; `refreshCloses`'s skips are tested only through the pure helpers, as the repository tests its object.
+
+### Rulings after the pull request's review (#202)
+
+A second probe, draft #203 (closed unmerged, branch `chore/probe-127-closing-keywords-2` kept), measured the forms the reviewers raised: indented code after a blank line (spaces or a tab) doesn't link, an indented paragraph inside a list item does; a fence line with an info string inside an open fence doesn't close it; a "code span" across a blank line is no span, so the keyword in it links; a keyword after `` `<!--` `` in a code span links; "Fixes:#135" doesn't link; "Fixes #134,#133" links #134 only. The stripping is now a line-based block scanner (fences closing only on a bare fence line, block HTML comments, indented code outside a list) followed by one inline pass in which the earlier of an HTML comment or a code span wins and a span stops at a blank line; a reference after a separator with no space is listed. List warnings are keyed by keyword and first reference, so "Closes #1 and #2. Fixes #1, #3." warns about each list with its own keyword. Adversarial 64 KB descriptions parse in at most about 30 ms.
+- Second round on #202: the block scanner measures indentation against the open list item's content indent (the marker and the spaces after it), so indented code inside an item starts four columns past its content, and a line indented less than the item ends the list unless it lazily continues the item's paragraph, which a fence or comment block never does; fences close against their own container's indent. Pullfrog checked the three shapes against GitHub's renderer (`POST /markdown`, `gfm`); the probe's list-item case still links. The left-as-is items above that this settles are gone: what remains (a lost-update race, case-sensitive other-repository de-duplication) never makes the close line over-report.
+- Third round on #202: the scanner moved to `src/review/code-blanking.ts` and now normalises CRLF and lone CR first (GitHub's web editor writes `\r\n`, so before this a fence on a real description never closed and everything after it was blanked), rejects a backtick fence opener whose info string holds a backtick, keeps a stack of open list items so a nested list's end returns to the outer item's indent, lets an ordered list interrupt a paragraph only from `1`, ends a paragraph at an ATX heading, a thematic break or a setext underline, and reads fences inside blockquotes (a quoted fence ends when the quote does; a `>` line inside an unquoted fence is code). The race between the refresh and a review's summary write stays accepted, as above.
+- **For Andrew:** each review round has found further CommonMark corners the hand scanner gets wrong, and there will be more (lazy blockquote continuation, HTML blocks of other kinds, link reference definitions, tables). Every remaining gap is display-only. Three ways forward, for you to choose: keep the hand scanner and fix corners as they show (no dependency, no extra call); add a pinned CommonMark parser such as `micromark` and read the text outside code from its events (exact, one dependency); or render the description with GitHub's `POST /markdown` (`gfm`) and read the text outside `<code>`/`<pre>` (exact by construction, one call per review and per edit, the same cost you set aside for `closingIssuesReferences`).

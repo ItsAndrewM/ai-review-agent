@@ -86,11 +86,11 @@ describe("routeWebhook", () => {
     }
   })
 
-  it("leaves an edited pull request unrouted, so a title or base edit starts no review", () => {
+  it("starts no review on an edit, and leaves an edit that names no body or base change unrouted", () => {
     const pr = { number: 3, draft: false, head: { sha: "abc" } }
     expect(routeWebhook("pull_request", { ...base, action: "edited", pull_request: pr }, "d", "andabot")).toEqual({
       kind: "ignore",
-      reason: "pull_request edited",
+      reason: "pull_request edited without a body or base change",
     })
   })
 
@@ -113,6 +113,37 @@ describe("routeWebhook", () => {
     expect(
       routeWebhook("pull_request", { ...base, sender: bot, action: "closed", pull_request: pr }, "d", "andabot"),
     ).toEqual(closed)
+  })
+
+  it("turns an edit of the description or the base into an edited event, and ignores an edit of the title alone", () => {
+    const pr = { number: 3, draft: false, head: { sha: "abc" } }
+    const edited = {
+      kind: "handle",
+      incoming: [
+        {
+          kind: "edited",
+          key: { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 },
+          deliveryId: "d",
+        },
+      ],
+    }
+    const editOf = (changes: Record<string, { from: string }>) =>
+      routeWebhook("pull_request", { ...base, action: "edited", pull_request: pr, changes }, "d", "andabot")
+    expect(editOf({ body: { from: "Closes #1 and #2" } })).toEqual(edited)
+    expect(editOf({ base: { from: "staging" } })).toEqual(edited)
+    expect(editOf({ title: { from: "old" } })).toEqual({
+      kind: "ignore",
+      reason: "pull_request edited without a body or base change",
+    })
+    const bot = { login: "release-please[bot]", type: "Bot" }
+    expect(
+      routeWebhook(
+        "pull_request",
+        { ...base, sender: bot, action: "edited", pull_request: pr, changes: { body: { from: "x" } } },
+        "d",
+        "andabot",
+      ),
+    ).toEqual(edited)
   })
 
   it("ignores bots and other events", () => {

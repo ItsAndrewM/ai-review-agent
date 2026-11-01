@@ -88,6 +88,7 @@ export function renderSummaryComment(input: {
   checks?: ChecksDisplay | undefined
   sandboxSeconds?: number | undefined
   seconds?: number | undefined
+  closes?: readonly string[] | undefined
 }): string {
   return summaryLayout({
     botLogin: input.botLogin,
@@ -100,6 +101,7 @@ export function renderSummaryComment(input: {
       ...sinceLines(input.since),
     ],
     footer: [
+      ...closesLines(input.closes),
       ...reviewedBy(input.model, input.skillsFingerprint, input.repoSkillsFingerprint, input.verify, input.seconds),
       ...unverifiedLines(input.verify),
       ...spendLines(input.spend, input.sandboxSeconds),
@@ -126,6 +128,7 @@ export interface SummaryRunInput {
   skillsFingerprint: string
   linkedIssues: readonly number[]
   configError?: string | undefined
+  closes?: readonly string[] | undefined
 }
 
 export function renderSummaryRun(input: SummaryRunInput): string {
@@ -135,6 +138,7 @@ export function renderSummaryRun(input: SummaryRunInput): string {
     content: input.summary,
     afterWalkthrough: [],
     footer: [
+      ...closesLines(input.closes),
       summarizedBy(input.model, input.skillsFingerprint),
       linkedIssuesLine(input.linkedIssues),
       commandsLine(input.botLogin),
@@ -380,11 +384,17 @@ function standardsLine(paths: readonly string[]): string {
   return `<sub>Standards: ${listed}</sub>`
 }
 
-function codeSpan(text: string): string {
+export function codeSpan(text: string): string {
   return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
 }
 
-export function renderUnpostedSummary(input: { botLogin: string; headSha: string; note: string }): string {
+export function renderUnpostedSummary(input: {
+  botLogin: string
+  headSha: string
+  note: string
+  closes?: readonly string[] | undefined
+}): string {
+  const closes = closesLines(input.closes)
   return [
     SUMMARY_MARKER,
     `## ${input.botLogin} review`,
@@ -392,7 +402,12 @@ export function renderUnpostedSummary(input: { botLogin: string; headSha: string
     `**Head:** \`${input.headSha.slice(0, 7)}\``,
     "",
     input.note,
+    ...(closes.length === 0 ? [] : ["", ...closes]),
   ].join("\n")
+}
+
+function closesLines(closes: readonly string[] | undefined): readonly string[] {
+  return closes ?? []
 }
 
 export function incompleteNote(missing: readonly string[]): string {

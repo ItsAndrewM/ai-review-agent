@@ -47,6 +47,7 @@ export const WebhookPayload = Type.Object({
   ),
   check_run: Type.Optional(CheckTarget),
   check_suite: Type.Optional(CheckTarget),
+  changes: Type.Optional(Type.Object({ body: Type.Optional(Type.Object({})), base: Type.Optional(Type.Object({})) })),
 })
 
 export type WebhookPayload = Static<typeof WebhookPayload>
@@ -87,6 +88,9 @@ function routeFromAnySender(
   if (eventName === "check_suite" && delivery.action === "completed") {
     return routeCompletedSuite(payload.check_suite, delivery, botLogin)
   }
+  if (eventName === "pull_request" && delivery.action === "edited" && payload.pull_request) {
+    return routeEdited(payload.pull_request, delivery, payload.changes)
+  }
   if (eventName === "pull_request" && delivery.action === "closed" && payload.pull_request) {
     const key = { ...delivery.repo, number: payload.pull_request.number }
     return { kind: "handle", incoming: [{ kind: "closed", key, deliveryId: delivery.deliveryId }] }
@@ -124,6 +128,14 @@ function checkTarget(eventName: string, payload: WebhookPayload): CheckTarget | 
   if (eventName === "check_run") return payload.check_run
   if (eventName === "check_suite") return payload.check_suite
   return undefined
+}
+
+function routeEdited(pullRequest: PullRequestEvent, delivery: Delivery, changes: WebhookPayload["changes"]): Routed {
+  if (changes?.body === undefined && changes?.base === undefined) {
+    return ignore("pull_request edited without a body or base change")
+  }
+  const key = { ...delivery.repo, number: pullRequest.number }
+  return { kind: "handle", incoming: [{ kind: "edited", key, deliveryId: delivery.deliveryId }] }
 }
 
 function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Routed {

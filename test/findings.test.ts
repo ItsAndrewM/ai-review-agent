@@ -1783,6 +1783,41 @@ describe("renderUnpostedSummary", () => {
   })
 })
 
+describe("the close block in every summary comment", () => {
+  const block = [
+    "<!-- andabot:closes -->",
+    "<sub>Merging closes #80 (from the description).</sub>",
+    "<!-- andabot:closes-end -->",
+  ]
+
+  it("puts it after the note of a comment for a review that didn't post", () => {
+    const text = renderUnpostedSummary({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      note: "_Not reviewed yet._",
+      closes: block,
+    })
+    expect(text.endsWith(`_Not reviewed yet._\n\n${block.join("\n")}`)).toBe(true)
+  })
+
+  it("puts it at the top of a review's footer, before Reviewed by", () => {
+    const text = renderSummaryComment({
+      botLogin: "andabot",
+      headSha: "0123456789abcdef",
+      event: "APPROVE",
+      submission: base,
+      accepted: [],
+      droppedCount: 0,
+      linkedIssues: [],
+      instructionFiles: [],
+      model: "@cf/zai-org/glm-5.3-flash",
+      skillsFingerprint: "89abcdef01234567",
+      closes: block,
+    })
+    expect(text).toContain(`${block.join("\n")}\n<sub>Reviewed by`)
+  })
+})
+
 describe("renderUnpostedNote", () => {
   it("says the review couldn't be posted and keeps the model's prose as the note", () => {
     const note = renderUnpostedNote({ kind: "prose", text: "The change looks sound." }, { kind: "unanswered" })
