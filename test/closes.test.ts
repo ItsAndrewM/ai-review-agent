@@ -1,5 +1,16 @@
+import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
-import { closesOf, refText, type Closes } from "../src/review/closes.ts"
+import { PullRequestInfo } from "../src/github/client.ts"
+import {
+  CLOSES_END,
+  CLOSES_START,
+  closesBlock,
+  closesBlockOf,
+  closesOf,
+  refText,
+  withClosesBlock,
+  type Closes,
+} from "../src/review/closes.ts"
 
 const REPO = "ItsAndrewM/ai-review-agent"
 
@@ -73,5 +84,95 @@ describe("closesOf", () => {
 
   it("closes nothing for no description", () => {
     expect(closesOf(null, REPO)).toEqual({ closes: [], listed: [], negated: [] })
+  })
+})
+
+describe("closesBlock", () => {
+  const block = (body: string, base = "main", defaultBranch: string | undefined = "main"): string[] =>
+    closesBlock(closesOf(body, REPO), base, defaultBranch)
+
+  it("wraps the close line in the markers, joining the issues with commas and a final and", () => {
+    expect(block("Closes #80")).toEqual([
+      CLOSES_START,
+      "<sub>Merging closes #80 (from the description).</sub>",
+      CLOSES_END,
+    ])
+    expect(block("Closes #1. Fixes octo/repo#100. Resolves #3.")[1]).toBe(
+      "<sub>Merging closes #1, octo/repo#100 and #3 (from the description).</sub>",
+    )
+  })
+
+  it("warns above the close line about each listed reference and each negated close", () => {
+    expect(block("Closes #80 and #100. Merging won't close #6.")).toEqual([
+      CLOSES_START,
+      '⚠️ #100 follows "and" after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Closes #80, closes #100".',
+      '⚠️ "won\'t close #6" still closes #6 on merge: GitHub ignores the "won\'t". Name it without a keyword to leave it open, such as "Part of #6".',
+      "<sub>Merging closes #80 and #6 (from the description).</sub>",
+      CLOSES_END,
+    ])
+    expect(block("Fixes #1, #2 and #3")[2]).toBe(
+      '⚠️ #3 follows "and" after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Fixes #1, fixes #2, fixes #3".',
+    )
+  })
+
+  it("says nothing between the markers when the description has no closing keyword", () => {
+    expect(block("Part of #6.")).toEqual([CLOSES_START, CLOSES_END])
+  })
+
+  it("says merging closes nothing off the default branch, without the list or warnings", () => {
+    expect(block("Closes #80 and #100", "staging", "main")).toEqual([
+      CLOSES_START,
+      "<sub>Merging into `staging` closes no issue: GitHub closes them only on a merge into `main`.</sub>",
+      CLOSES_END,
+    ])
+    expect(block("Part of #6.", "staging", "main")).toEqual([CLOSES_START, CLOSES_END])
+  })
+
+  it("takes a base with no known default branch as the default", () => {
+    expect(closesBlock(closesOf("Closes #80", REPO), "staging", undefined)[1]).toBe(
+      "<sub>Merging closes #80 (from the description).</sub>",
+    )
+  })
+})
+
+describe("withClosesBlock", () => {
+  const comment = ["<!-- andabot:summary -->", "body", CLOSES_START, "<sub>old</sub>", CLOSES_END, "footer"].join("\n")
+
+  it("replaces only the text between the markers", () => {
+    expect(withClosesBlock(comment, [CLOSES_START, "<sub>new</sub>", CLOSES_END])).toBe(
+      ["<!-- andabot:summary -->", "body", CLOSES_START, "<sub>new</sub>", CLOSES_END, "footer"].join("\n"),
+    )
+  })
+
+  it("answers nothing for a comment without the markers, or when the block is unchanged", () => {
+    expect(withClosesBlock("<!-- andabot:summary -->\nolder comment", [CLOSES_START, CLOSES_END])).toBeUndefined()
+    expect(withClosesBlock(comment, [CLOSES_START, "<sub>old</sub>", CLOSES_END])).toBeUndefined()
+  })
+})
+
+describe("closesBlockOf", () => {
+  const repoOf = (defaultBranch: string | undefined): PullRequestInfo["base"]["repo"] =>
+    defaultBranch === undefined ? { full_name: REPO } : { full_name: REPO, default_branch: defaultBranch }
+  const pr = (body: string | null, ref: string, defaultBranch?: string): PullRequestInfo => ({
+    number: 5,
+    title: "t",
+    body,
+    state: "open",
+    user: { login: "a" },
+    base: { ref, sha: "b", repo: repoOf(defaultBranch) },
+    head: { ref: "h", sha: "c" },
+    changed_files: 1,
+    additions: 1,
+    deletions: 0,
+    labels: [],
+  })
+
+  it("reads the description, the base and the repository's default branch from the pull request", () => {
+    expect(closesBlockOf(pr("Closes #80", "main", "main"))[1]).toBe(
+      "<sub>Merging closes #80 (from the description).</sub>",
+    )
+    expect(closesBlockOf(pr("Closes #80", "staging", "main"))[1]).toContain("Merging into `staging` closes no issue")
+    expect(Value.Check(PullRequestInfo, pr("Closes #80", "main", "main"))).toBe(true)
+    expect(Value.Check(PullRequestInfo, pr(null, "main"))).toBe(true)
   })
 })

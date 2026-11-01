@@ -1,3 +1,5 @@
+import type { PullRequestInfo } from "../github/client.ts"
+
 export interface IssueRef {
   repo: string | undefined
   number: number
@@ -144,4 +146,59 @@ function blankInlineCode(text: string): string {
 
 function blank(span: string): string {
   return span.replace(/[^\n]/g, " ")
+}
+
+export const CLOSES_START = "<!-- andabot:closes -->"
+export const CLOSES_END = "<!-- andabot:closes-end -->"
+
+export function closesBlockOf(pr: PullRequestInfo): string[] {
+  return closesBlock(closesOf(pr.body, pr.base.repo.full_name), pr.base.ref, pr.base.repo.default_branch)
+}
+
+export function closesBlock(closes: Closes, base: string, defaultBranch: string | undefined): string[] {
+  return [CLOSES_START, ...closesLines(closes, base, defaultBranch), CLOSES_END]
+}
+
+function closesLines(closes: Closes, base: string, defaultBranch: string | undefined): string[] {
+  if (closes.closes.length === 0) return []
+  if (defaultBranch !== undefined && base !== defaultBranch) {
+    return [
+      `<sub>Merging into \`${base}\` closes no issue: GitHub closes them only on a merge into \`${defaultBranch}\`.</sub>`,
+    ]
+  }
+  return [
+    ...closes.listed.map((entry) => listedWarning(entry, closes.listed)),
+    ...closes.negated.map(negatedWarning),
+    `<sub>Merging closes ${joined(closes.closes.map(refText))} (from the description).</sub>`,
+  ]
+}
+
+function listedWarning(entry: ListedRef, all: readonly ListedRef[]): string {
+  const run = [
+    entry.first,
+    ...all.filter((other) => refText(other.first) === refText(entry.first)).map((other) => other.ref),
+  ]
+  const suggestion = run
+    .map((ref, index) => `${index === 0 ? entry.keyword : entry.keyword.toLowerCase()} ${refText(ref)}`)
+    .join(", ")
+  const ref = refText(entry.ref)
+  return `⚠️ ${ref} follows "${entry.separator}" after a keyword, so merging won't close it. Repeat the keyword for each issue: "${suggestion}".`
+}
+
+function negatedWarning(entry: NegatedClose): string {
+  const ref = refText(entry.ref)
+  return `⚠️ "${entry.phrase}" still closes ${ref} on merge: GitHub ignores the "${entry.negation}". Name it without a keyword to leave it open, such as "Part of ${ref}".`
+}
+
+function joined(items: readonly string[]): string {
+  if (items.length <= 1) return items.join("")
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1) ?? ""}`
+}
+
+export function withClosesBlock(body: string, block: readonly string[]): string | undefined {
+  const start = body.indexOf(CLOSES_START)
+  const end = body.indexOf(CLOSES_END, start)
+  if (start < 0 || end < 0) return undefined
+  const rewritten = `${body.slice(0, start)}${block.join("\n")}${body.slice(end + CLOSES_END.length)}`
+  return rewritten === body ? undefined : rewritten
 }

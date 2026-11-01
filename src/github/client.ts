@@ -15,7 +15,11 @@ export const PullRequestInfo = Type.Object({
   body: Type.Union([Type.String(), Type.Null()]),
   state: Type.String(),
   user: Type.Object({ login: Type.String() }),
-  base: Type.Object({ ref: Type.String(), sha: Type.String(), repo: Type.Object({ full_name: Type.String() }) }),
+  base: Type.Object({
+    ref: Type.String(),
+    sha: Type.String(),
+    repo: Type.Object({ full_name: Type.String(), default_branch: Type.Optional(Type.String()) }),
+  }),
   head: Type.Object({ ref: Type.String(), sha: Type.String() }),
   draft: Type.Optional(Type.Boolean()),
   changed_files: Type.Integer(),
