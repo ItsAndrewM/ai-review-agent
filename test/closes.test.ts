@@ -72,6 +72,16 @@ describe("closesOf", () => {
     expect(listed(closesOf("Fixes #134,#133", REPO))).toEqual(['#133 after ","'])
   })
 
+  it("reads indented code relative to a list item's content, and ends the item after a fence or comment block", () => {
+    expect(closed("- item\n\n        Fixes #123")).toEqual([])
+    expect(closed("- item\n  ```\n  code\n  ```\ntext\n\n    Closes #140")).toEqual([])
+    expect(closed("- item\n  <!--\n  note\n  -->\ntext\n\n    Closes #140")).toEqual([])
+    expect(closed("- a\n- b\n\n    Closes #9")).toEqual(["#9"])
+    expect(closed("1. step\n\n   Closes #10")).toEqual(["#10"])
+    expect(closed("- item\n  ```\n  Closes #11\n  ```\n- next Closes #12")).toEqual(["#12"])
+    expect(closed("Para\n    Closes #13")).toEqual(["#13"])
+  })
+
   it("reads a keyword in a blockquote or in bold", () => {
     expect(closed("> Fixes #125")).toEqual(["#125"])
     expect(closed("**Closes #118**")).toEqual(["#118"])

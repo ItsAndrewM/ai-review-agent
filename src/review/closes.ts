@@ -34,8 +34,9 @@ const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/
 const FENCE_CLOSE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/
 const COMMENT_BLOCK = /^ {0,3}<!--/
 const COMMENT_END = "-->"
-const INDENTED = /^(?: {4}|\t)/
-const LIST_ITEM = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/
+const LIST_MARKER = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[ \t]+|$)/
+const CODE_INDENT = 4
+const TAB_STOP = 4
 const CLAUSE_END = /[.!?;\n]/g
 const WORD = /\S+/g
 const NEGATIONS = new Set(["not", "never", "without"])
@@ -134,12 +135,16 @@ function plainWord(word: string): string {
   return word.toLowerCase().replace(/[^\p{L}'’]/gu, "")
 }
 
+interface OpenFence {
+  run: string
+  indent: number
+}
+
 interface BlockScan {
-  fence: string | undefined
+  fence: OpenFence | undefined
   comment: boolean
-  indentedCode: boolean
-  inList: boolean
-  previousBlank: boolean
+  listIndent: number | undefined
+  paragraph: boolean
 }
 
 function withoutCode(text: string): string {
@@ -147,63 +152,89 @@ function withoutCode(text: string): string {
 }
 
 function blankBlocks(text: string): string {
-  const scan: BlockScan = { fence: undefined, comment: false, indentedCode: false, inList: false, previousBlank: true }
+  const scan: BlockScan = { fence: undefined, comment: false, listIndent: undefined, paragraph: false }
   return text
     .split("\n")
-    .map((line) => {
-      const blanked = blankedLine(scan, line)
-      scan.previousBlank = line.trim() === ""
-      return blanked
-    })
+    .map((line) => blankedLine(scan, line))
     .join("\n")
 }
 
 function blankedLine(scan: BlockScan, line: string): string {
-  if (scan.fence !== undefined) {
-    if (closesFence(line, scan.fence)) scan.fence = undefined
-    return blank(line)
-  }
+  if (scan.fence !== undefined) return fenceLine(scan, scan.fence, line)
   if (scan.comment) return endOfComment(scan, line)
-  return openingLine(scan, line)
+  if (line.trim() === "") {
+    scan.paragraph = false
+    return line
+  }
+  return contentLine(scan, line)
 }
 
-function closesFence(line: string, fence: string): boolean {
-  const closer = FENCE_CLOSE.exec(line)?.[1]
-  return closer !== undefined && closer[0] === fence[0] && closer.length >= fence.length
+function fenceLine(scan: BlockScan, fence: OpenFence, line: string): string {
+  const closer = FENCE_CLOSE.exec(dedented(line, fence.indent))?.[1]
+  if (closer !== undefined && closer[0] === fence.run[0] && closer.length >= fence.run.length) {
+    scan.fence = undefined
+    scan.paragraph = false
+  }
+  return blank(line)
 }
 
 function endOfComment(scan: BlockScan, line: string): string {
   const end = line.indexOf(COMMENT_END)
   if (end < 0) return blank(line)
   scan.comment = false
+  scan.paragraph = false
   const after = end + COMMENT_END.length
   return `${blank(line.slice(0, after))}${line.slice(after)}`
 }
 
-function openingLine(scan: BlockScan, line: string): string {
-  const fence = FENCE_OPEN.exec(line)?.[1]
-  if (fence !== undefined) {
-    scan.fence = fence
+function contentLine(scan: BlockScan, line: string): string {
+  const indent = indentOf(line)
+  leaveListUnlessContinued(scan, line, indent)
+  const container = scan.listIndent ?? 0
+  if (indent - container >= CODE_INDENT && !scan.paragraph) return blank(line)
+  return blockStart(scan, line, dedented(line, container), container)
+}
+
+function leaveListUnlessContinued(scan: BlockScan, line: string, indent: number): void {
+  if (scan.listIndent === undefined || indent >= scan.listIndent) return
+  const lazy = scan.paragraph && !FENCE_OPEN.test(line) && !COMMENT_BLOCK.test(line) && !LIST_MARKER.test(line)
+  if (!lazy) scan.listIndent = undefined
+}
+
+function blockStart(scan: BlockScan, line: string, body: string, container: number): string {
+  const run = FENCE_OPEN.exec(body)?.[1]
+  if (run !== undefined) {
+    scan.fence = { run, indent: container }
     return blank(line)
   }
-  if (COMMENT_BLOCK.test(line) && !line.includes(COMMENT_END)) {
+  if (COMMENT_BLOCK.test(body) && !body.includes(COMMENT_END)) {
     scan.comment = true
     return blank(line)
   }
-  return indentedLine(scan, line)
+  const marker = LIST_MARKER.exec(body)?.[0]
+  if (marker !== undefined) scan.listIndent = container + indentOf(marker.replace(/[^ \t]/g, " "))
+  scan.paragraph = true
+  return line
 }
 
-function indentedLine(scan: BlockScan, line: string): string {
-  if (line.trim() === "") return line
-  trackList(scan, line)
-  const code = INDENTED.test(line) && !scan.inList && (scan.previousBlank || scan.indentedCode)
-  scan.indentedCode = code
-  return code ? blank(line) : line
+function indentOf(line: string): number {
+  let columns = 0
+  for (const character of line) {
+    if (character === " ") columns += 1
+    else if (character === "\t") columns += TAB_STOP - (columns % TAB_STOP)
+    else break
+  }
+  return columns
 }
 
-function trackList(scan: BlockScan, line: string): void {
-  if (LIST_ITEM.test(line)) scan.inList = true
-  else if (scan.previousBlank && !INDENTED.test(line)) scan.inList = false
+function dedented(line: string, columns: number): string {
+  let used = 0
+  let index = 0
+  while (index < line.length && used < columns && (line[index] === " " || line[index] === "\t")) {
+    used += line[index] === "\t" ? TAB_STOP - (used % TAB_STOP) : 1
+    index += 1
+  }
+  return line.slice(index)
 }
 
 function blank(span: string): string {
