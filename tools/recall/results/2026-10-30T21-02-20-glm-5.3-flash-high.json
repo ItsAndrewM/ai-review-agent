@@ -1223,8 +1223,8 @@
             "severity": "suggestion",
             "title": "A chat question answered mid-review is billed to the review's cost"
           },
-          "standing": "known_false",
-          "known": "66-f3"
+          "standing": "allowed",
+          "known": "66-a9"
         },
         {
           "finding": {
@@ -1405,8 +1405,8 @@
             "severity": "suggestion",
             "title": "A question answered mid-review is billed to the review's spend"
           },
-          "standing": "known_false",
-          "known": "66-f3"
+          "standing": "allowed",
+          "known": "66-a9"
         },
         {
           "finding": {
@@ -6140,8 +6140,8 @@
             "title": "The JSON hold lapses after a refused submit_review in the retry",
             "side": "RIGHT"
           },
-          "standing": "known_false",
-          "known": "38-f8"
+          "standing": "allowed",
+          "known": "38-a3"
         },
         {
           "finding": {

@@ -1984,8 +1984,8 @@
             "severity": "nitpick",
             "title": "postReview reads pending twice on the not_in_flight path"
           },
-          "standing": "allowed",
-          "known": "91-a1"
+          "standing": "known_false",
+          "known": "91-f3"
         },
         {
           "finding": {
@@ -2101,8 +2101,8 @@
             "severity": "nitpick",
             "title": "runSummary recomputes the reviewable file list for the filter check"
           },
-          "standing": "allowed",
-          "known": "91-a2"
+          "standing": "known_false",
+          "known": "91-f4"
         }
       ],
       "verdict": "approve"

@@ -204,7 +204,7 @@
           "id": "66-f3",
           "path": "src/pull-request.ts",
           "pattern": "(chat|question|answer)[^.]{0,80}(bill|inflat|spend|cost|footer)",
-          "note": "false: a busy conversation queues a prompt (pi-durable submissions), so a question answered mid-review runs after the review and its footer"
+          "note": "false while the run is live: a busy conversation queues a prompt, so a question answered during the review's turns runs after the review and its footer; one answered in the idle window between the usage baseline and the review's prompt is charged to the review, which 66-a9 allows"
         },
         {
           "id": "66-f1",
@@ -439,20 +439,7 @@
           "evidence": "CodeRabbit on #91, open as #119"
         }
       ],
-      "allowed": [
-        {
-          "id": "91-a1",
-          "path": "src/pull-request.ts",
-          "pattern": "reads pending twice|readPending[^.]{0,60}(second|twice|again)|second storage read",
-          "note": "true: postReview resolves pendingFor and then readPending again on the refusal path"
-        },
-        {
-          "id": "91-a2",
-          "path": "src/pull-request.ts",
-          "pattern": "recomputes the reviewable|everyFileFiltered[^.]{0,80}(recomput|again|twice)",
-          "note": "true: runSummary's everyFileFiltered recomputes the reviewable list summaryFiles already holds"
-        }
-      ],
+      "allowed": [],
       "knownFalse": [
         {
           "id": "91-f5",
@@ -463,14 +450,14 @@
         {
           "id": "91-f4",
           "path": "src/pull-request.ts",
-          "pattern": "(computes|computed|runs) [^.]{0,40}twice|reviewableFiles[^.]{0,80}twice|everyFileFiltered[^.]{0,80}recomput|reviewable list twice",
-          "note": "false: a second filter over the changed list is bounded work, as 91-f3"
+          "pattern": "(computes|computed|runs) [^.]{0,40}twice|reviewableFiles[^.]{0,80}twice|everyFileFiltered[^.]{0,80}recomput|recomputes the reviewable|reviewable list twice",
+          "note": "false: a second filter over the changed list is bounded work, as 91-f3 (raised again by the 31 Oct GLM row; the ruling stands)"
         },
         {
           "id": "91-f3",
           "path": "src/pull-request.ts",
-          "pattern": "re-reads? pending|readPending[^.]{0,80}(again|extra|second)|extra storage read",
-          "note": "false: one extra storage read on a refusal path, and the pending record is what the refusal logs"
+          "pattern": "re-reads? pending|reads pending twice|readPending[^.]{0,80}(again|extra|second|twice)|(extra|second) storage read",
+          "note": "false: one extra storage read on a refusal path, and the pending record is what the refusal logs (the 31 Oct GLM row raised it again as a nitpick; the ruling stands)"
         },
         {
           "id": "91-f1",
