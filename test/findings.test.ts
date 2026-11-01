@@ -1854,9 +1854,15 @@ describe("the sweep's footer line", () => {
   })
 
   it("gives the same lines alone for the check run's summary", () => {
-    expect(sweepLines("started")).toEqual([started])
-    expect(sweepLines("restarted")).toEqual([restarted])
-    expect(sweepLines(undefined)).toEqual([])
+    expect(sweepLines("started", "andabot")).toEqual([started])
+    expect(sweepLines("restarted", "andabot")).toEqual([restarted])
+    expect(sweepLines(undefined, "andabot")).toEqual([])
+  })
+
+  it("names the deploy's own bot login in the started line", () => {
+    expect(sweepLines("started", "andabot-staging")).toEqual([
+      "<sub>Started by the 15-minute sweep: no webhook reached andabot-staging for this push.</sub>",
+    ])
   })
 })
 
