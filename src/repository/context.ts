@@ -203,25 +203,27 @@ export function standardsFor(
   context: RepositoryContext,
   changed: readonly string[],
   pathInstructions: readonly PathInstruction[],
+  configFile: string,
 ): RenderedStandards {
   const loaded = instructionCandidates(context.tree.entries, changed).flatMap((path) => {
     const text = cachedBody(context, path)
     return text === undefined ? [] : [{ path, text }]
   })
-  return renderStandards(orderedStandards(loaded, changed, pathInstructions))
+  return renderStandards(orderedStandards(loaded, changed, pathInstructions, configFile))
 }
 
 export function reviewStandards(
   context: RepositoryContext | undefined,
   changed: readonly string[],
   pathInstructions: readonly PathInstruction[],
+  configFile: string,
 ): ReviewStandards {
   if (context === undefined) {
-    const configured = renderStandards(orderedStandards([], changed, pathInstructions))
+    const configured = renderStandards(orderedStandards([], changed, pathInstructions, configFile))
     return { ...configured, loadsSkipped: 0, treeTruncated: false }
   }
   return {
-    ...standardsFor(context, changed, pathInstructions),
+    ...standardsFor(context, changed, pathInstructions, configFile),
     loadsSkipped: unloadedPaths(context, changed).length,
     treeTruncated: context.tree.truncated,
   }
@@ -231,10 +233,11 @@ export async function reviewRepository(
   context: RepositoryContext | undefined,
   changed: readonly string[],
   pathInstructions: readonly PathInstruction[],
+  configFile: string,
 ): Promise<ReviewRepository> {
   return {
     context,
-    standards: reviewStandards(context, changed, pathInstructions),
+    standards: reviewStandards(context, changed, pathInstructions, configFile),
     skills: await repositorySkills(context),
   }
 }

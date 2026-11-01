@@ -1,6 +1,6 @@
 import { Type } from "typebox"
-import { pausedMarkerOf, summaryMarkerOf } from "../names.ts"
-import { CONFIG_FILE, type SkipReason } from "../repository/config.ts"
+import { configFileOf, pausedMarkerOf, summaryMarkerOf } from "../names.ts"
+import type { SkipReason } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
 
 export const PausedBy = Type.String()
@@ -85,11 +85,11 @@ function skippedResumeReply(reason: SkipReason, botLogin: string): string {
     case "draft":
       return "Resumed. It's a draft, so I'll review it once it's ready for review."
     case "auto":
-      return `Resumed. \`${CONFIG_FILE}\` turns automatic reviews off, ${onRequest}`
+      return `Resumed. \`${configFileOf(botLogin)}\` turns automatic reviews off, ${onRequest}`
     case "base_branch":
-      return `Resumed. \`${CONFIG_FILE}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
+      return `Resumed. \`${configFileOf(botLogin)}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
     case "title_keyword":
-      return `Resumed. This pull request's title holds one of \`${CONFIG_FILE}\`'s \`ignore_title_keywords\`, ${onRequest}`
+      return `Resumed. This pull request's title holds one of \`${configFileOf(botLogin)}\`'s \`ignore_title_keywords\`, ${onRequest}`
   }
 }
 

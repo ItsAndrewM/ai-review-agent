@@ -1,7 +1,6 @@
 import type { IssueComment, ReviewEvent } from "../github/client.ts"
-import { summaryMarkerOf } from "../names.ts"
+import { configFileOf, summaryMarkerOf } from "../names.ts"
 import type { CheckRecord, SeverityCounts } from "../records.ts"
-import { CONFIG_FILE } from "../repository/config.ts"
 import { secondsText } from "../sandbox/checks.ts"
 import type { SandboxStatus } from "../sandbox/runs.ts"
 import { plural, were } from "./copy.ts"
@@ -108,7 +107,7 @@ export function renderSummaryComment(input: {
       linkedIssuesLine(input.linkedIssues),
       standardsLine(input.instructionFiles),
       commandsLine(input.botLogin),
-      ...configNoteLines(input.configError),
+      ...configNoteLines(input.configError, input.botLogin),
     ],
   })
 }
@@ -141,7 +140,7 @@ export function renderSummaryRun(input: SummaryRunInput): string {
       summarizedBy(input.model, input.skillsFingerprint),
       linkedIssuesLine(input.linkedIssues),
       commandsLine(input.botLogin),
-      ...configNoteLines(input.configError),
+      ...configNoteLines(input.configError, input.botLogin),
     ],
   })
 }
@@ -204,10 +203,10 @@ function commandsLine(botLogin: string): string {
   return `<sub>Commands: \`@${botLogin} review\`, \`@${botLogin} full review\`, \`@${botLogin} help\`. Ask a question with \`@${botLogin} <question>\`.</sub>`
 }
 
-function configNoteLines(error: string | undefined): string[] {
+function configNoteLines(error: string | undefined, botLogin: string): string[] {
   if (error === undefined) return []
   const problem = codeSpan(cut(flattened(error), MOST_CONFIG_ERROR_CHARS))
-  return ["", `_${CONFIG_FILE} was ignored: ${problem}; the defaults applied._`]
+  return ["", `_${configFileOf(botLogin)} was ignored: ${problem}; the defaults applied._`]
 }
 
 function sinceLines(since: SinceSection | undefined): string[] {

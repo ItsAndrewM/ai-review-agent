@@ -185,6 +185,14 @@ describe("createReviewExtension", () => {
     expect(runCheck?.description).toContain("whole suite is CI's job")
   })
 
+  it("names the deploy's own config file in list_changed_files", () => {
+    const staging = { ...host, botLogin: () => "andabot-staging" }
+    const list = createReviewExtension(staging).tools?.find((tool) => tool.name === "list_changed_files")
+    expect(list?.description).toContain("repository's .andabot-staging.yaml path_filters")
+    const ours = createReviewExtension(host).tools?.find((tool) => tool.name === "list_changed_files")
+    expect(ours?.description).toContain("repository's .andabot.yaml path_filters")
+  })
+
   it("runs submit_review's round one call at a time, so two calls in one round can't post or verify at once", () => {
     const submit = createReviewExtension(host).tools?.find((tool) => tool.name === SUBMIT_REVIEW_TOOL)
     expect(submit?.executionMode).toBe("sequential")

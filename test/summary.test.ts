@@ -330,6 +330,11 @@ describe("renderSummaryRun", () => {
     expect(renderSummaryRun(run)).not.toContain("was ignored")
   })
 
+  it("names the deploy's own config file in the config note", () => {
+    const text = renderSummaryRun({ ...run, botLogin: "andabot-staging", configError: "invalid YAML: bad indent" })
+    expect(text).toContain("_.andabot-staging.yaml was ignored:")
+  })
+
   it("says none when no issue is linked, and names the bot by its login", () => {
     const text = renderSummaryRun({ ...run, botLogin: "reviewer-bot", linkedIssues: [] })
     expect(text).toContain("## reviewer-bot review\n")

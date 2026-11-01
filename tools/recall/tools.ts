@@ -152,7 +152,7 @@ function invalid(name: string): string {
 
 function checkRefusal(args: JsonValue): string {
   if (!Value.Check(RunCheckParameters, args)) return invalid("run_check")
-  return refusalText(args.name, { kind: "off" })
+  return refusalText(args.name, { kind: "off" }, BOT_LOGIN)
 }
 
 function resolveRefusal(args: JsonValue): string {

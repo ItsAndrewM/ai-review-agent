@@ -295,7 +295,7 @@ A summary that lands while a review is publishing can be overwritten though its 
 
 ### Configuration file
 
-`.andabot.yaml` is optional and is read at the pull request's base commit, like the instruction files, so a pull request cannot change the rules it is reviewed by: one that turns `auto` off, adds a title keyword or filters out its own files is still reviewed under the base's settings, and its change applies once it is on the base branch. The object reads it on its own, not with the tree, so a tree GitHub fails to serve leaves the settings in force. `docs/setup.md` lists every setting with its default.
+The file is named after the deploy's login, `.<BOT_LOGIN>.yaml`, so `.andabot.yaml` for andabot, and a deploy reads only its own (#177): a second deploy, such as staging, gets settings of its own and can't pick up another bot's. Where a file leaves `reviews.auto` unset, is missing or can't be read, the Worker's `AUTO_REVIEW` decides it, which is how staging stays quiet until it is tagged. `.andabot.yaml` is optional and is read at the pull request's base commit, like the instruction files, so a pull request cannot change the rules it is reviewed by: one that turns `auto` off, adds a title keyword or filters out its own files is still reviewed under the base's settings, and its change applies once it is on the base branch. The object reads it on its own, not with the tree, so a tree GitHub fails to serve leaves the settings in force. `docs/setup.md` lists every setting with its default.
 
 ```yaml
 reviews:

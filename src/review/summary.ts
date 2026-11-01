@@ -1,7 +1,7 @@
 import { Type, type Static } from "typebox"
 import { Value } from "typebox/value"
 import type { ChangedFile } from "../github/diff.ts"
-import { CONFIG_FILE } from "../repository/config.ts"
+import { configFileOf } from "../names.ts"
 import { shortSha } from "../sha.ts"
 import type { LastReview } from "./approval.ts"
 import {
@@ -135,7 +135,7 @@ export function summaryReply(outcome: SummaryOutcome, botLogin: string): string 
     case "closed":
       return "The pull request is closed, so there's nothing to summarize."
     case "filtered":
-      return `\`path_filters\` in \`${CONFIG_FILE}\` leave out every changed file, so there's nothing to summarize.`
+      return `\`path_filters\` in \`${configFileOf(botLogin)}\` leave out every changed file, so there's nothing to summarize.`
   }
 }
 

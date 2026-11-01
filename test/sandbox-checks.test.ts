@@ -140,13 +140,20 @@ describe("checkText and refusalText", () => {
   })
 
   it("says why a check didn't run", () => {
-    expect(refusalText("test", { kind: "off" })).toBe("The sandbox is off for this repository, so test did not run.")
-    expect(refusalText("test", { kind: "spent", seconds: 900, budget: 900 })).toContain("900")
-    expect(refusalText("lint", { kind: "unavailable", reason: "install" })).toContain("install")
-    expect(refusalText("lint", { kind: "no_command" })).toContain("no lint command")
-    expect(refusalText("test", { kind: "bad_path", problem: "a b" })).toContain("a b")
-    expect(refusalText("test", { kind: "missing_path", path: "x.ts" })).toContain("x.ts")
-    expect(refusalText("test", { kind: "ended" })).toBe(
+    expect(refusalText("test", { kind: "off" }, "andabot")).toBe(
+      "The sandbox is off for this repository, so test did not run.",
+    )
+    expect(refusalText("test", { kind: "spent", seconds: 900, budget: 900 }, "andabot")).toContain("900")
+    expect(refusalText("lint", { kind: "unavailable", reason: "install" }, "andabot")).toContain("install")
+    expect(refusalText("lint", { kind: "no_command" }, "andabot")).toBe(
+      "This repository has no lint command: nothing in .andabot.yaml's checks and no runner package.json names.",
+    )
+    expect(refusalText("lint", { kind: "no_command" }, "andabot-staging")).toContain(
+      "nothing in .andabot-staging.yaml's checks",
+    )
+    expect(refusalText("test", { kind: "bad_path", problem: "a b" }, "andabot")).toContain("a b")
+    expect(refusalText("test", { kind: "missing_path", path: "x.ts" }, "andabot")).toContain("x.ts")
+    expect(refusalText("test", { kind: "ended" }, "andabot")).toBe(
       "No review is in flight for this pull request, so test did not run.",
     )
   })

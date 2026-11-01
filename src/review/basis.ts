@@ -1,4 +1,3 @@
-import { CONFIG_FILE } from "../repository/config.ts"
 import type { FindingInput } from "./findings.ts"
 
 type Graded = Pick<FindingInput, "basis_kind" | "severity">
@@ -51,6 +50,7 @@ export function standardBasisProblem(basis: string, context: BasisContext): stri
 }
 
 const MOST_DOCS_LISTED = 10
+const CONFIG_FILE_LABEL = /^(\.[^/:\s]+\.yaml): /
 const PATH_EDGE = "[\\s`'\"()\\[\\],;:]"
 
 export function docsBasisProblem(basis: string, context: BasisContext): string | undefined {
@@ -76,8 +76,8 @@ function namesStandardsFile(text: string, instructionFiles: readonly string[]): 
 
 function namesOf(instructionFile: string): string[] {
   const lower = instructionFile.toLowerCase()
-  const configPrefix = `${CONFIG_FILE.toLowerCase()}: `
-  if (lower.startsWith(configPrefix)) return [CONFIG_FILE.toLowerCase()]
+  const configFile = CONFIG_FILE_LABEL.exec(lower)?.[1]
+  if (configFile !== undefined) return [configFile]
   const basename = lower.split("/").at(-1)
   return basename === undefined || basename === lower ? [lower] : [lower, basename]
 }

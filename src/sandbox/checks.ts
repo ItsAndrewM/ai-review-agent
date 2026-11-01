@@ -1,5 +1,6 @@
 import { Type } from "typebox"
 import { Value } from "typebox/value"
+import { configFileOf } from "../names.ts"
 import type { CheckRecord } from "../records.ts"
 import type { Manager } from "./checkout.ts"
 import { lastLine } from "./checkout.ts"
@@ -168,7 +169,7 @@ export type CheckRefusal =
   | { readonly kind: "missing_path"; readonly path: string }
   | { readonly kind: "ended" }
 
-export function refusalText(name: CheckName, refusal: CheckRefusal): string {
+export function refusalText(name: CheckName, refusal: CheckRefusal, botLogin: string): string {
   switch (refusal.kind) {
     case "off":
       return `The sandbox is off for this repository, so ${name} did not run.`
@@ -177,7 +178,7 @@ export function refusalText(name: CheckName, refusal: CheckRefusal): string {
     case "unavailable":
       return `The sandbox is unavailable for this review (${refusal.reason} failed), so ${name} did not run.`
     case "no_command":
-      return `This repository has no ${name} command: nothing in .andabot.yaml's checks and no runner package.json names.`
+      return `This repository has no ${name} command: nothing in ${configFileOf(botLogin)}'s checks and no runner package.json names.`
     case "bad_path":
       return `${name} did not run: ${refusal.problem}.`
     case "missing_path":

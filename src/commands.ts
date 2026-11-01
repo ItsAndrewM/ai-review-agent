@@ -1,4 +1,5 @@
-import { CONFIG_FILE, type SkipReason } from "./repository/config.ts"
+import { configFileOf } from "./names.ts"
+import type { SkipReason } from "./repository/config.ts"
 import { shortSha } from "./sha.ts"
 
 export type Command =
@@ -61,7 +62,7 @@ export function skippedReviewText(reason: ReviewSkip, headSha: string, botLogin:
   }
   if (reason === "not_open") return "This pull request is closed, so there's nothing to review."
   if (reason === "path_filters") {
-    return `Nothing to review: \`${CONFIG_FILE}\`'s \`path_filters\` leave out every file this pull request changes.`
+    return `Nothing to review: \`${configFileOf(botLogin)}\`'s \`path_filters\` leave out every file this pull request changes.`
   }
   return undefined
 }

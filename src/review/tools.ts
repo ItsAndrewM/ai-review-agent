@@ -12,7 +12,7 @@ import {
 import type { Static } from "typebox"
 import type { GitHubClient, PullRequestInfo } from "../github/client.ts"
 import { filterGlobs, isFiltered, type ChangedFile } from "../github/diff.ts"
-import { budgetRefusalMarkerOf } from "../names.ts"
+import { budgetRefusalMarkerOf, configFileOf } from "../names.ts"
 import { grep, MAX_SEARCH_CALLS, patternProblem, tree, type GrepWork } from "../repository/search.ts"
 import type { SnapshotFiles } from "../repository/snapshot.ts"
 import { ReviewSubmission, type ReviewSubmissionInput } from "./findings.ts"
@@ -168,8 +168,7 @@ export function createReviewExtension(host: ReviewHost): Extension {
 
   const listChangedFiles = defineTool({
     name: "list_changed_files",
-    description:
-      "List the files the pull request changes, with status and line counts. A file marked (filtered) is left out of the review by the repository's .andabot.yaml path_filters: it needs no walkthrough row, and a finding on it is dropped.",
+    description: `List the files the pull request changes, with status and line counts. A file marked (filtered) is left out of the review by the repository's ${configFileOf(host.botLogin())} path_filters: it needs no walkthrough row, and a finding on it is dropped.`,
     parameters: Type.Object({}),
     replay: "safe",
     async execute() {

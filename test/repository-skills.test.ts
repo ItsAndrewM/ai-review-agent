@@ -335,7 +335,7 @@ describe("loading a repository's skills at the base commit", () => {
     )
     const context = await loadRepositoryContext(github, ref, BASE, ["src/a.ts"], failOnUnreadable)
     expect(Object.keys(context.files)).toEqual([...rules, ...skillPaths.slice(0, MAX_INSTRUCTION_LOADS - 3)])
-    expect(reviewStandards(context, ["src/a.ts"], []).used).toEqual(rules)
+    expect(reviewStandards(context, ["src/a.ts"], [], ".andabot.yaml").used).toEqual(rules)
     const skills = await repositorySkills(context)
     expect(skills.offered?.names).toHaveLength(MAX_INSTRUCTION_LOADS - 3)
     expect(skills.unloaded).toHaveLength(9)
@@ -373,7 +373,7 @@ describe("loading a repository's skills at the base commit", () => {
     const { github, calls } = fakeGitHub([blob(FOO_SKILL), blob(FOO_RULES)], bodies)
     const context = await loadRepositoryContext(github, ref, BASE, FOO_CHANGED, failOnUnreadable)
     expect(fetchesOf(calls, FOO_RULES)).toBe(1)
-    expect(reviewStandards(context, FOO_CHANGED, []).used).toEqual([FOO_RULES])
+    expect(reviewStandards(context, FOO_CHANGED, [], ".andabot.yaml").used).toEqual([FOO_RULES])
     const skill = await (await repositorySkills(context)).offered?.source.load("foo")
     expect(skill?.resources?.map(({ path }) => path)).toEqual(["CLAUDE.md"])
   })
@@ -837,14 +837,14 @@ describe("reviewRepository", () => {
       "CLAUDE.md": "Rules.",
       ".github/skills/lint/SKILL.md": skillMd("Lint."),
     })
-    const repository = await reviewRepository(context, ["src/a.ts"], [])
+    const repository = await reviewRepository(context, ["src/a.ts"], [], ".andabot.yaml")
     expect(repository.context).toBe(context)
-    expect(repository.standards).toEqual(reviewStandards(context, ["src/a.ts"], []))
+    expect(repository.standards).toEqual(reviewStandards(context, ["src/a.ts"], [], ".andabot.yaml"))
     expect(repository.skills.offered?.names).toEqual(["lint"])
   })
 
   it("carries no standard and no skill for an unreadable context", async () => {
-    const repository = await reviewRepository(undefined, ["src/a.ts"], [])
+    const repository = await reviewRepository(undefined, ["src/a.ts"], [], ".andabot.yaml")
     expect(repository.standards.used).toEqual([])
     expect(repository.skills).toEqual(await repositorySkills(undefined))
   })

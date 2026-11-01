@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest"
 import { GitHubClient } from "../src/github/client.ts"
 import {
   AndabotConfig,
-  CONFIG_FILE,
+  autoReviewOf,
+  configSourceOf,
   CONFIG_PREFIX,
   configKey,
   configReadOf,
@@ -27,6 +28,8 @@ import { DEFAULT_DOC_GLOBS } from "../src/repository/docs.ts"
 
 const ref = { owner: "o", repo: "r" }
 const BASE = "ba5e5".repeat(8)
+const ANDABOT = configSourceOf("andabot", undefined)
+
 const CONFIG_PATH = `/repos/o/r/contents/.andabot.yaml?ref=${BASE}`
 
 const FULL_FILE = [
@@ -134,13 +137,13 @@ const served = (body: string) => () => new Response(body, { status: 200 })
 
 describe("reviews.docs", () => {
   it("rejects a value that isn't a list of globs, naming the key", () => {
-    expect(parseConfig("reviews:\n  docs: wiki\n").error).toContain("/reviews/docs")
-    expect(parseConfig("reviews:\n  docs:\n    - ''\n").error).toContain("/reviews/docs")
+    expect(parseConfig("reviews:\n  docs: wiki\n", true).error).toContain("/reviews/docs")
+    expect(parseConfig("reviews:\n  docs:\n    - ''\n", true).error).toContain("/reviews/docs")
   })
 
   it("defaults to the authoritative docs and takes a list in their place", () => {
-    expect(parseConfig("reviews:\n  auto: true\n").config.reviews.docs).toEqual([...DEFAULT_DOC_GLOBS])
-    expect(parseConfig("reviews:\n  docs:\n    - '!docs/archive/**'\n").config.reviews.docs).toEqual([
+    expect(parseConfig("reviews:\n  auto: true\n", true).config.reviews.docs).toEqual([...DEFAULT_DOC_GLOBS])
+    expect(parseConfig("reviews:\n  docs:\n    - '!docs/archive/**'\n", true).config.reviews.docs).toEqual([
       "!docs/archive/**",
     ])
   })
@@ -166,13 +169,13 @@ describe("DEFAULT_CONFIG", () => {
 
 describe("checks", () => {
   it("refuses a check it doesn't know and an empty template, applying the defaults", () => {
-    expect(parseConfig("checks:\n  build: pnpm build\n").error).toContain("build")
-    expect(parseConfig("checks:\n  lint: ''\n").error).toBeDefined()
-    expect(parseConfig("checks:\n  lint: ''\n").config.checks).toBeUndefined()
+    expect(parseConfig("checks:\n  build: pnpm build\n", true).error).toContain("build")
+    expect(parseConfig("checks:\n  lint: ''\n", true).error).toBeDefined()
+    expect(parseConfig("checks:\n  lint: ''\n", true).config.checks).toBeUndefined()
   })
 
   it("reads a partial map", () => {
-    expect(parseConfig("checks:\n  test: pnpm vitest run {paths}\n").config.checks).toEqual({
+    expect(parseConfig("checks:\n  test: pnpm vitest run {paths}\n", true).config.checks).toEqual({
       test: "pnpm vitest run {paths}",
     })
   })
@@ -181,7 +184,7 @@ describe("checks", () => {
 describe("AndabotConfig", () => {
   it("accepts the defaults and a parsed full file, so a stored config can be checked on its way back in", () => {
     expect(Value.Check(AndabotConfig, DEFAULT_CONFIG)).toBe(true)
-    expect(Value.Check(AndabotConfig, parseConfig(FULL_FILE).config)).toBe(true)
+    expect(Value.Check(AndabotConfig, parseConfig(FULL_FILE, true).config)).toBe(true)
   })
 
   it("is the complete config, refusing one that lacks a setting or carries an unknown one", () => {
@@ -210,16 +213,16 @@ describe("parseConfig", () => {
     ["an empty reviews mapping", "reviews: {}\n"],
     ["a model alone", "model: {}\n"],
   ])("gives the defaults and no error for %s", (_name, text) => {
-    expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error: undefined })
+    expect(parseConfig(text, true)).toEqual({ config: LITERAL_DEFAULTS, error: undefined })
   })
 
   it("reads every setting of a full file, carrying model.verify and dropping the rest of model", () => {
-    expect(parseConfig(FULL_FILE)).toEqual({ config: FULL_CONFIG, error: undefined })
+    expect(parseConfig(FULL_FILE, true)).toEqual({ config: FULL_CONFIG, error: undefined })
   })
 
   it("fills in the defaults for the settings a file leaves out", () => {
     const text = "reviews:\n  drafts: true\n  path_filters:\n    - '!**/*.snap'\n"
-    expect(parseConfig(text)).toEqual({
+    expect(parseConfig(text, true)).toEqual({
       config: {
         reviews: {
           auto: true,
@@ -238,27 +241,27 @@ describe("parseConfig", () => {
   })
 
   it("keeps request_changes_workflow: false as an override, and leaves it unset when the file says nothing", () => {
-    const overridden = parseConfig("reviews:\n  request_changes_workflow: false\n")
+    const overridden = parseConfig("reviews:\n  request_changes_workflow: false\n", true)
     expect(overridden.config.reviews.request_changes_workflow).toBe(false)
-    expect(parseConfig("reviews:\n  auto: false\n").config.reviews.request_changes_workflow).toBeUndefined()
+    expect(parseConfig("reviews:\n  auto: false\n", true).config.reviews.request_changes_workflow).toBeUndefined()
   })
 
   it("keeps reviews.verify: false as the repository's switch off, and leaves verify on when the file says nothing", () => {
-    expect(parseConfig("reviews:\n  verify: false\n").config.reviews.verify).toBe(false)
-    expect(parseConfig("reviews:\n  verify: true\n").config.reviews.verify).toBe(true)
-    expect(parseConfig("reviews:\n  auto: false\n").config.reviews.verify).toBe(true)
+    expect(parseConfig("reviews:\n  verify: false\n", true).config.reviews.verify).toBe(false)
+    expect(parseConfig("reviews:\n  verify: true\n", true).config.reviews.verify).toBe(true)
+    expect(parseConfig("reviews:\n  auto: false\n", true).config.reviews.verify).toBe(true)
     expect(DEFAULT_CONFIG.reviews.verify).toBe(true)
   })
 
   it("reads model.verify as the repository's verify model", () => {
-    expect(parseConfig('model:\n  verify: "@cf/x/y"\n')).toEqual({
+    expect(parseConfig('model:\n  verify: "@cf/x/y"\n', true)).toEqual({
       config: { ...LITERAL_DEFAULTS, model: { verify: "@cf/x/y" } },
       error: undefined,
     })
   })
 
   it("leaves the verify model unset for a model that names none, as model.draft does", () => {
-    const parsed = parseConfig('model:\n  draft: "@cf/a"\n')
+    const parsed = parseConfig('model:\n  draft: "@cf/a"\n', true)
     expect(parsed.error).toBeUndefined()
     expect(parsed.config.model?.verify).toBeUndefined()
     expect(parsed).toStrictEqual({ config: LITERAL_DEFAULTS, error: undefined })
@@ -266,28 +269,29 @@ describe("parseConfig", () => {
 
   it("accepts any other mapping under model and ignores it", () => {
     const text = "model:\n  name: glm-5.3-flash\n  options:\n    temperature: 0.2\n    stops: [a, b]\n"
-    expect(parseConfig(text)).toStrictEqual({ config: LITERAL_DEFAULTS, error: undefined })
+    expect(parseConfig(text, true)).toStrictEqual({ config: LITERAL_DEFAULTS, error: undefined })
   })
 
   it("carries model.verify and nothing else of model, beside the other keys", () => {
     const text = 'model:\n  name: glm-5.3-flash\n  verify: "@cf/x/y"\n  options:\n    temperature: 0.2\n'
-    expect(parseConfig(text).config.model).toStrictEqual({ verify: "@cf/x/y" })
+    expect(parseConfig(text, true).config.model).toStrictEqual({ verify: "@cf/x/y" })
   })
 
   it("gives the defaults and an error naming reviews/auto for a boolean written as a string", () => {
-    expect(parseConfig('reviews:\n  auto: "yes"\n')).toEqual({
+    expect(parseConfig('reviews:\n  auto: "yes"\n', true)).toEqual({
       config: LITERAL_DEFAULTS,
       error: "/reviews/auto must be boolean",
     })
   })
 
   it("reads YAML 1.2, where an unquoted yes is the string and not a boolean", () => {
-    expect(parseConfig("reviews:\n  drafts: yes\n").error).toBe("/reviews/drafts must be boolean")
+    expect(parseConfig("reviews:\n  drafts: yes\n", true).error).toBe("/reviews/drafts must be boolean")
   })
 
   it("applies none of an invalid file, though some of its settings are valid", () => {
     const { config, error } = parseConfig(
       "reviews:\n  auto: false\n  drafts: soon\n  path_filters:\n    - '!**/*.snap'\n",
+      true,
     )
     expect(error).toBe("/reviews/drafts must be boolean")
     expect(config).toEqual(LITERAL_DEFAULTS)
@@ -352,7 +356,7 @@ describe("parseConfig", () => {
       "/reviews/path_instructions/0/severity schema is false",
     ],
   ])("gives the defaults and names the first problem, for %s", (_name, text, error) => {
-    expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error })
+    expect(parseConfig(text, true)).toEqual({ config: LITERAL_DEFAULTS, error })
   })
 
   it.each([
@@ -360,11 +364,11 @@ describe("parseConfig", () => {
     ["a scalar", "just some words\n"],
     ["a number", "5\n"],
   ])("names the document itself as the problem when it is %s and not a mapping", (_name, text) => {
-    expect(parseConfig(text)).toEqual({ config: LITERAL_DEFAULTS, error: "/ must be object" })
+    expect(parseConfig(text, true)).toEqual({ config: LITERAL_DEFAULTS, error: "/ must be object" })
   })
 
   it("gives the defaults and the first line of the YAML error, with its location and without its code frame", () => {
-    const { config, error } = parseConfig("reviews:\n  auto: true\n  auto: false\n")
+    const { config, error } = parseConfig("reviews:\n  auto: true\n  auto: false\n", true)
     expect(config).toEqual(LITERAL_DEFAULTS)
     expect(error).toBe("invalid YAML: Map keys must be unique at line 3, column 3")
   })
@@ -375,15 +379,15 @@ describe("parseConfig", () => {
     ["two documents", "reviews: {}\n---\nmodel: {}\n"],
     ["an alias with no anchor", "reviews: *missing\n"],
   ])("reports %s as one line starting with invalid YAML", (_name, text) => {
-    const { config, error } = parseConfig(text)
+    const { config, error } = parseConfig(text, true)
     expect(config).toEqual(LITERAL_DEFAULTS)
     expect(error).toMatch(/^invalid YAML: [^\n]+$/)
   })
 
   it("hands each caller its own copy of the defaults, so changing one leaves them alone", () => {
-    parseConfig("").config.reviews.path_filters.push("!first")
-    parseConfig("reviews: always\n").config.reviews.base_branches.push("first")
-    expect(parseConfig("").config).toEqual(LITERAL_DEFAULTS)
+    parseConfig("", true).config.reviews.path_filters.push("!first")
+    parseConfig("reviews: always\n", true).config.reviews.base_branches.push("first")
+    expect(parseConfig("", true).config).toEqual(LITERAL_DEFAULTS)
     expect(DEFAULT_CONFIG).toEqual(LITERAL_DEFAULTS)
   })
 })
@@ -391,7 +395,7 @@ describe("parseConfig", () => {
 describe("readConfig", () => {
   it("is the defaults, absent and without an error, when the base commit has no .andabot.yaml", async () => {
     const { github, calls } = fakeGitHub(() => new Response('{"message":"Not Found"}', { status: 404 }))
-    expect(await readConfig(github, ref, BASE, failOnUnreadable)).toEqual({
+    expect(await readConfig(github, ref, BASE, failOnUnreadable, ANDABOT)).toEqual({
       config: LITERAL_DEFAULTS,
       error: undefined,
       present: false,
@@ -401,7 +405,7 @@ describe("readConfig", () => {
 
   it("reads the one file at the base commit and parses it", async () => {
     const { github, calls } = fakeGitHub(served(FULL_FILE))
-    expect(await readConfig(github, ref, BASE, failOnUnreadable)).toEqual({
+    expect(await readConfig(github, ref, BASE, failOnUnreadable, ANDABOT)).toEqual({
       config: FULL_CONFIG,
       error: undefined,
       present: true,
@@ -411,7 +415,7 @@ describe("readConfig", () => {
 
   it("counts an empty file as present, with the defaults and no error", async () => {
     const { github } = fakeGitHub(served(""))
-    expect(await readConfig(github, ref, BASE, failOnUnreadable)).toEqual({
+    expect(await readConfig(github, ref, BASE, failOnUnreadable, ANDABOT)).toEqual({
       config: LITERAL_DEFAULTS,
       error: undefined,
       present: true,
@@ -421,7 +425,7 @@ describe("readConfig", () => {
   it("gives the defaults and the parse error for an invalid file, which is present and not unreadable", async () => {
     const { report, reported } = recorder()
     const { github } = fakeGitHub(served('reviews:\n  auto: "yes"\n'))
-    expect(await readConfig(github, ref, BASE, report)).toEqual({
+    expect(await readConfig(github, ref, BASE, report, ANDABOT)).toEqual({
       config: LITERAL_DEFAULTS,
       error: "/reviews/auto must be boolean",
       present: true,
@@ -436,7 +440,11 @@ describe("readConfig", () => {
   ])("reports a %s as unreadable and reviews with the defaults and the error text", async (status, error) => {
     const { report, reported } = recorder()
     const { github } = fakeGitHub(() => new Response("forbidden", { status }))
-    expect(await readConfig(github, ref, BASE, report)).toEqual({ config: LITERAL_DEFAULTS, error, present: false })
+    expect(await readConfig(github, ref, BASE, report, ANDABOT)).toEqual({
+      config: LITERAL_DEFAULTS,
+      error,
+      present: false,
+    })
     expect(reported).toEqual([error])
   })
 
@@ -445,7 +453,7 @@ describe("readConfig", () => {
     const { github } = fakeGitHub(() => {
       throw new TypeError("fetch failed")
     })
-    expect(await readConfig(github, ref, BASE, report)).toEqual({
+    expect(await readConfig(github, ref, BASE, report, ANDABOT)).toEqual({
       config: LITERAL_DEFAULTS,
       error: `GitHubError: GitHub /repos/o/r/contents/.andabot.yaml?ref=${BASE}: TypeError: fetch failed`,
       present: false,
@@ -458,16 +466,54 @@ describe("readConfig", () => {
   it("hands out copies of the defaults whether the file is missing or unreadable", async () => {
     const missing = fakeGitHub(() => new Response("", { status: 404 }))
     const broken = fakeGitHub(() => new Response("boom", { status: 502 }))
-    const absent = await readConfig(missing.github, ref, BASE, failOnUnreadable)
-    const unreadable = await readConfig(broken.github, ref, BASE, recorder().report)
+    const absent = await readConfig(missing.github, ref, BASE, failOnUnreadable, ANDABOT)
+    const unreadable = await readConfig(broken.github, ref, BASE, recorder().report, ANDABOT)
     absent.config.reviews.path_filters.push("!first")
     unreadable.config.reviews.base_branches.push("first")
     expect(DEFAULT_CONFIG).toEqual(LITERAL_DEFAULTS)
-    expect((await readConfig(missing.github, ref, BASE, failOnUnreadable)).config).toEqual(LITERAL_DEFAULTS)
+    expect((await readConfig(missing.github, ref, BASE, failOnUnreadable, ANDABOT)).config).toEqual(LITERAL_DEFAULTS)
+  })
+})
+
+describe("the deploy's config source", () => {
+  const staging = configSourceOf("andabot-staging", "false")
+  const STAGING_PATH = `/repos/o/r/contents/.andabot-staging.yaml?ref=${BASE}`
+
+  it("is andabot's own file, with automatic reviews on, for andabot", () => {
+    expect(ANDABOT).toEqual({ file: ".andabot.yaml", auto: true })
   })
 
-  it("reads the one file name the standards' labels use too", () => {
-    expect(CONFIG_FILE).toBe(".andabot.yaml")
+  it("reads the login's own file and no other", async () => {
+    const { github, calls } = fakeGitHub(() => new Response('{"message":"Not Found"}', { status: 404 }))
+    await readConfig(github, ref, BASE, failOnUnreadable, staging)
+    expect(calls).toEqual([STAGING_PATH])
+  })
+
+  it("AUTO_REVIEW false turns automatic reviews off when the file doesn't set them", () => {
+    expect(parseConfig("reviews:\n  drafts: true\n", false).config.reviews.auto).toBe(false)
+  })
+
+  it("a missing file takes AUTO_REVIEW", async () => {
+    const { github } = fakeGitHub(() => new Response('{"message":"Not Found"}', { status: 404 }))
+    expect((await readConfig(github, ref, BASE, failOnUnreadable, staging)).config.reviews.auto).toBe(false)
+  })
+
+  it("an invalid file takes AUTO_REVIEW", () => {
+    expect(parseConfig("reviews: 3", false).config.reviews.auto).toBe(false)
+  })
+
+  it("an unreadable file takes AUTO_REVIEW", async () => {
+    const { github } = fakeGitHub(() => new Response("boom", { status: 502 }))
+    expect((await readConfig(github, ref, BASE, recorder().report, staging)).config.reviews.auto).toBe(false)
+  })
+
+  it("the file's own auto wins over AUTO_REVIEW", () => {
+    expect(parseConfig("reviews:\n  auto: true\n", false).config.reviews.auto).toBe(true)
+  })
+
+  it("AUTO_REVIEW is on unless it is exactly false, so a deploy without it keeps reviewing", () => {
+    expect([undefined, "", "true", "yes"].map(autoReviewOf)).toEqual([true, true, true, true])
+    expect(autoReviewOf("false")).toBe(false)
   })
 })
 
@@ -598,7 +644,7 @@ describe("configStatus", () => {
 
   it("names each of readConfig's outcomes", async () => {
     const statusOf = async (respond: () => Response) =>
-      configStatus(await readConfig(fakeGitHub(respond).github, ref, BASE, recorder().report))
+      configStatus(await readConfig(fakeGitHub(respond).github, ref, BASE, recorder().report, ANDABOT))
     expect(await statusOf(() => new Response("", { status: 404 }))).toBe("missing")
     expect(await statusOf(served(FULL_FILE))).toBe("file")
     expect(await statusOf(served("reviews: always\n"))).toBe("invalid")
@@ -690,7 +736,7 @@ describe("verifyModelFor", () => {
 
 describe("runSettings", () => {
   it("carries the request-changes workflow a run starts with, the file's over the var", () => {
-    const off = { ...parseConfig("reviews:\n  request_changes_workflow: false\n"), present: true }
+    const off = { ...parseConfig("reviews:\n  request_changes_workflow: false\n", true), present: true }
     expect(runSettings(off, "true", "")).toEqual({ requestChangesWorkflow: false })
     expect(runSettings(VALID, "false", "")).toEqual({ requestChangesWorkflow: true })
     expect(runSettings(MISSING, "true", "")).toEqual({ requestChangesWorkflow: true })

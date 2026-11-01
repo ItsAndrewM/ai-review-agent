@@ -44,6 +44,7 @@ import {
 import { errorOf, failureSummary, isTransient, softenUnlessTransient, TransientFailure } from "./github/errors.ts"
 import { log, logError, errorText } from "./log.ts"
 import { outputLimitOf, reviewThinkingLevel, withBudgetRefusal, withForcedJson, withOutputLimit } from "./models.ts"
+import { configFileOf } from "./names.ts"
 import { reactWithEyes } from "./reaction.ts"
 import { PostedReview, PullRequestKey, StoredSessionId, SummaryCommentId } from "./records.ts"
 import {
@@ -53,6 +54,7 @@ import {
   configStatus,
   isCacheable,
   pullRequestFacts,
+  configSourceOf,
   readConfig,
   requestChangesWorkflow,
   reviewTrigger,
@@ -747,7 +749,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
 
   async #checkRefused(name: CheckName, refusal: CheckRefusal): Promise<string> {
     log("check.refused", { number: (await this.pullRequest()).number, name, reason: refusal.kind })
-    return refusalText(name, refusal)
+    return refusalText(name, refusal, this.botLogin())
   }
 
   reviewModel() {
@@ -1612,7 +1614,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<ReviewRepository> {
     const { baseSha, changed } = contextInputs(pr, files)
     const context = await this.loadedContext(pr.number, baseSha, changed, deliveryId)
-    const repository = await reviewRepository(context, changed, pathInstructions)
+    const repository = await reviewRepository(context, changed, pathInstructions, configFileOf(this.botLogin()))
     for (const { event, fields } of skillLogs(pr.number, repository.skills)) log(event, fields)
     return repository
   }
@@ -1622,8 +1624,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const cached = await this.cachedConfig(baseSha)
     if (cached !== undefined) return cached
     const fields = { number: pr.number, base: shortSha(baseSha) }
-    const read = await readConfig(await this.github(), await this.key(), baseSha, (error) =>
-      logError("config.unreadable", { ...fields, error }),
+    const read = await readConfig(
+      await this.github(),
+      await this.key(),
+      baseSha,
+      (error) => logError("config.unreadable", { ...fields, error }),
+      configSourceOf(this.botLogin(), this.env.AUTO_REVIEW),
     )
     if (isCacheable(read)) await this.cacheConfig(baseSha, read)
     return read

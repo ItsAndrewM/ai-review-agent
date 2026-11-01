@@ -19,6 +19,10 @@
   "vars": {
     // The GitHub App's login, without the [bot] suffix. People tag @andabot.
     "BOT_LOGIN": "andabot",
+    // The default for a repository's reviews.auto when its config file
+    // doesn't set it, or can't be read. "false" makes a deploy, such as
+    // staging, review only when tagged. Only "false" turns it off.
+    "AUTO_REVIEW": "true",
     // Workers AI model for the review. GLM-5.3 Flash caught all five of #9's
     // planted defects and posts through the tool, for under a cent a review
     // (#2). GLM 5.x, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid

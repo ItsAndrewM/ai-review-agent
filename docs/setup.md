@@ -46,7 +46,8 @@ Variables in `wrangler.jsonc`:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. |
+| `BOT_LOGIN` | `andabot` | The App's login without `[bot]`. Must match the App name. Every name the bot shows comes from it: the mention it answers to, its config file `.<BOT_LOGIN>.yaml`, the hidden markers in its comments, its user-agent and its sandbox script names. Two deploys with different logins can review the same pull request without touching each other's comments. |
+| `AUTO_REVIEW` | `true` | The default for a repository's `reviews.auto` when its config file doesn't set it, is missing, or can't be read. `false` makes the deploy review only when tagged, as staging does. Only `false` turns it off. |
 | `REVIEW_MODEL` | `@cf/zai-org/glm-5.3-flash` | Workers AI model. GLM 5.x, the default included, Kimi K2.7 Code and DeepSeek V4 need the Workers Paid plan; gpt-oss-120b and glm-4.7-flash also run on Free. Workers AI's free 10,000 neurons a day cover about 15 to 28 reviews on GLM-5.3 Flash, as measured on #2. |
 | `MAX_OUTPUT_TOKENS` | `16000` | Most output tokens one model call may ask for, reasoning included; the model's own maximum and its context still cap it. Raise it, for example with `--var MAX_OUTPUT_TOKENS:32000` on deploy, when large pull requests get cut-off reviews. Anything but a positive whole number falls back to 16,000. `review.start` logs the value in effect as `maxOutputTokens`. |
 | `MAX_REVIEW_NEURONS` | `10000` | Neurons after which the model is told to submit; if it still hasn't three model requests later, the review fails. The request that crosses it and those three are spent past it. 10,000 is one day of Workers AI's free allowance. Anything but a positive whole number falls back to 10,000, and spend on a model without a price isn't counted. `review.budget_spent` and `review.budget_refused` log the two stops. |
@@ -114,13 +115,13 @@ gh api -X PUT repos/{owner}/{repo}/branches/main/protection --input - <<'JSON'
 JSON
 ```
 
-## 6. Per-repository settings: `.andabot.yaml`
+## 6. Per-repository settings: `.<BOT_LOGIN>.yaml`
 
-A repository can keep an `.andabot.yaml` at its root. andabot reads it at the pull request's base commit, never the head, so a pull request cannot change the rules it is reviewed by: one that edits the file is reviewed under the base's version, and the edit applies once it is on the base branch. Every setting is optional, and a repository without the file gets the defaults.
+A repository can keep a config file at its root, named after the deploy's login: `.andabot.yaml` for andabot, `.andabot-staging.yaml` for staging. Each deploy reads only its own, and this section calls it `.andabot.yaml`. andabot reads it at the pull request's base commit, never the head, so a pull request cannot change the rules it is reviewed by: one that edits the file is reviewed under the base's version, and the edit applies once it is on the base branch. Every setting is optional, and a repository without the file gets the defaults.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `reviews.auto` | `true` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
+| `reviews.auto` | unset: the Worker's `AUTO_REVIEW` | `false`: a push starts no review, and only a command such as `@andabot review` does. |
 | `reviews.drafts` | `false` | `false`: a draft waits until it is marked ready for review. `true`: a draft is reviewed on each push like any pull request, so its review can post before its checks finish; an approval waiting on them follows once the draft is marked ready for review. |
 | `reviews.base_branches` | `[]`: any base | Review only pull requests whose base branch is listed, by its exact name: `release/*` names a branch called `release/*`, not every release branch. |
 | `reviews.ignore_title_keywords` | `[]` | Skip a pull request whose title contains one of these anywhere, ignoring case. `WIP` also matches `Wipe`, so `WIP:` or `[WIP]` is more precise. A blank entry matches nothing. |
