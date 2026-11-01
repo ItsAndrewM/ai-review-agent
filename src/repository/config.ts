@@ -75,7 +75,8 @@ export const StoredConfig = Type.Object({
   config: AndabotConfig,
   error: Type.Optional(Type.String()),
   present: Type.Boolean(),
-  autoReview: Type.Optional(Type.Boolean()),
+  file: Type.String(),
+  autoReview: Type.Boolean(),
 })
 
 export type StoredConfig = Static<typeof StoredConfig>
@@ -218,16 +219,16 @@ export function staleConfigKeys(keys: readonly string[], baseSha: string): strin
 export function storedConfig(
   baseSha: string,
   { config, error, present }: ConfigRead,
-  autoReview: boolean,
+  { file, auto }: ConfigSource,
 ): StoredConfig {
-  const record = { baseSha, config, present, autoReview }
+  const record = { baseSha, config, present, file, autoReview: auto }
   return error === undefined ? record : { ...record, error }
 }
 
 export const configReadOf = ({ config, error, present }: StoredConfig): ConfigRead => ({ config, error, present })
 
-export const cachedRead = (stored: StoredConfig, autoReview: boolean): ConfigRead | undefined =>
-  (stored.autoReview ?? true) === autoReview ? configReadOf(stored) : undefined
+export const cachedRead = (stored: StoredConfig, { file, auto }: ConfigSource): ConfigRead | undefined =>
+  stored.file === file && stored.autoReview === auto ? configReadOf(stored) : undefined
 
 export const pullRequestFacts = ({ draft, base, title }: PullRequestSource): PullRequestFacts => ({
   draft: draft === true,

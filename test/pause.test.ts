@@ -196,31 +196,40 @@ describe("resumeReply", () => {
 
   it("words each resume step", () => {
     expect(NOT_PAUSED_REPLY).toBe("Not paused.")
-    expect(resumeReply("review", head, "andabot")).toBe("Resumed: reviewing `def5678`.")
-    expect(resumeReply("evaluate", head, "andabot")).toBe("Resumed: `def5678` is reviewed already.")
-    expect(resumeReply("running", head, "andabot")).toBe("Resumed: a review of `def5678` is already running.")
-    expect(resumeReply("closed", head, "andabot")).toBe(
+    expect(resumeReply("review", head, "andabot", true)).toBe("Resumed: reviewing `def5678`.")
+    expect(resumeReply("evaluate", head, "andabot", true)).toBe("Resumed: `def5678` is reviewed already.")
+    expect(resumeReply("running", head, "andabot", true)).toBe("Resumed: a review of `def5678` is already running.")
+    expect(resumeReply("closed", head, "andabot", true)).toBe(
       "Resumed. The pull request is closed, so there's nothing to review.",
     )
-    expect(resumeReply("draft", head, "andabot")).toBe(
+    expect(resumeReply("draft", head, "andabot", true)).toBe(
       "Resumed. It's a draft, so I'll review it once it's ready for review.",
     )
   })
 
   it("says which .andabot.yaml setting keeps pushes unreviewed, and how to ask for a review", () => {
-    expect(resumeReply("auto", head, "andabot")).toBe(
+    expect(resumeReply("auto", head, "andabot", true)).toBe(
       "Resumed. `.andabot.yaml` turns automatic reviews off, so pushes aren't reviewed; `@andabot review` reviews on request.",
     )
-    expect(resumeReply("base_branch", head, "andabot")).toBe(
+    expect(resumeReply("base_branch", head, "andabot", true)).toBe(
       "Resumed. `.andabot.yaml`'s `base_branches` leave out this pull request's base, so pushes aren't reviewed; `@andabot review` reviews on request.",
     )
-    expect(resumeReply("title_keyword", head, "andabot")).toBe(
+    expect(resumeReply("title_keyword", head, "andabot", true)).toBe(
       "Resumed. This pull request's title holds one of `.andabot.yaml`'s `ignore_title_keywords`, so pushes aren't reviewed; `@andabot review` reviews on request.",
     )
   })
 
+  it("blames the deploy, not the config file, when the deploy's AUTO_REVIEW turns automatic reviews off", () => {
+    expect(resumeReply("auto", head, "andabot-staging", false)).toBe(
+      "Resumed. Automatic reviews are off for this deploy, so pushes aren't reviewed; `@andabot-staging review` reviews on request.",
+    )
+    expect(resumeReply("base_branch", head, "andabot-staging", false)).toContain(
+      "`.andabot-staging.yaml`'s `base_branches`",
+    )
+  })
+
   it("names the bot to ask for a review", () => {
-    expect(resumeReply("auto", head, "reviewer-bot")).toContain("`@reviewer-bot review` reviews on request.")
+    expect(resumeReply("auto", head, "reviewer-bot", true)).toContain("`@reviewer-bot review` reviews on request.")
   })
 })
 

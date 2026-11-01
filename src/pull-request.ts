@@ -1645,7 +1645,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   private async cachedConfig(baseSha: string): Promise<ConfigRead | undefined> {
     const key = configKey(baseSha)
     const stored = await this.ctx.storage.get(key)
-    if (Value.Check(StoredConfig, stored)) return cachedRead(stored, this.#configSource().auto)
+    if (Value.Check(StoredConfig, stored)) return cachedRead(stored, this.#configSource())
     if (stored !== undefined) await this.ctx.storage.delete(key)
     return undefined
   }
@@ -1655,7 +1655,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       const listed = await this.ctx.storage.list({ prefix: CONFIG_PREFIX })
       const stale = staleConfigKeys([...listed.keys()], baseSha)
       if (stale.length > 0) await this.ctx.storage.delete(stale)
-      await this.ctx.storage.put(configKey(baseSha), storedConfig(baseSha, read, this.#configSource().auto))
+      await this.ctx.storage.put(configKey(baseSha), storedConfig(baseSha, read, this.#configSource()))
     } catch (error) {
       logError("config.uncached", { base: shortSha(baseSha), error: errorText(error) })
     }
@@ -2409,7 +2409,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     await this.refreshPausedLine(key.number)
     const step = await this.resumeStepFor(pr)
     log("command.resumed", { number: key.number, author: incoming.author, head: shortSha(pr.head.sha), step })
-    await this.respond(github, key, incoming, resumeReply(step, pr.head.sha, this.botLogin()))
+    await this.respond(
+      github,
+      key,
+      incoming,
+      resumeReply(step, pr.head.sha, this.botLogin(), this.#configSource().auto),
+    )
     await this.catchUp(step, pr, call, callerVersion)
   }
 

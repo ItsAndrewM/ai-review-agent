@@ -62,7 +62,7 @@ Variables in `wrangler.jsonc`:
 
 ## Staging: `andabot-staging`
 
-A second deploy beside andabot, with its own GitHub App, Worker, Durable Objects and container, configured as `env.staging` in `wrangler.jsonc` (#177). It runs the same code under the login `andabot-staging`, so it reads `.andabot-staging.yaml`, writes its own hidden markers and never edits andabot's comments. Its `AUTO_REVIEW` is `false`: it reviews only after `@andabot-staging review` (or another command), on any base, whatever the repository's config files say about andabot. Use it to try a change on a real pull request before production runs it.
+A second deploy beside andabot, with its own GitHub App, Worker, Durable Objects and container, configured as `env.staging` in `wrangler.jsonc` (#177). It runs the same code under the login `andabot-staging`, so it reads `.andabot-staging.yaml`, writes its own hidden markers and never edits andabot's comments. Its `AUTO_REVIEW` is `false`: it reviews only after `@andabot-staging review` (or another command), on any base, whatever `.andabot.yaml` says. Only a `.andabot-staging.yaml` that sets `reviews.auto: true` turns its push reviews on. Use it to try a change on a real pull request before production runs it.
 
 ```sh
 node scripts/register-app.mjs ~/andabot-staging-app.json andabot-staging https://andabot-staging.dinocode.workers.dev/webhook

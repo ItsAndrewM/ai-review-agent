@@ -63,7 +63,7 @@ export function resumeStep(input: {
 
 export const NOT_PAUSED_REPLY = "Not paused."
 
-export function resumeReply(step: ResumeStep, headSha: string, botLogin: string): string {
+export function resumeReply(step: ResumeStep, headSha: string, botLogin: string, autoReview: boolean): string {
   const head = `\`${shortSha(headSha)}\``
   switch (step) {
     case "review":
@@ -75,17 +75,19 @@ export function resumeReply(step: ResumeStep, headSha: string, botLogin: string)
     case "closed":
       return "Resumed. The pull request is closed, so there's nothing to review."
     default:
-      return skippedResumeReply(step, botLogin)
+      return skippedResumeReply(step, botLogin, autoReview)
   }
 }
 
-function skippedResumeReply(reason: SkipReason, botLogin: string): string {
+function skippedResumeReply(reason: SkipReason, botLogin: string, autoReview: boolean): string {
   const onRequest = `so pushes aren't reviewed; \`@${botLogin} review\` reviews on request.`
   switch (reason) {
     case "draft":
       return "Resumed. It's a draft, so I'll review it once it's ready for review."
     case "auto":
-      return `Resumed. \`${configFileOf(botLogin)}\` turns automatic reviews off, ${onRequest}`
+      return autoReview
+        ? `Resumed. \`${configFileOf(botLogin)}\` turns automatic reviews off, ${onRequest}`
+        : `Resumed. Automatic reviews are off for this deploy, ${onRequest}`
     case "base_branch":
       return `Resumed. \`${configFileOf(botLogin)}\`'s \`base_branches\` leave out this pull request's base, ${onRequest}`
     case "title_keyword":
