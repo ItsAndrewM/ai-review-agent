@@ -109,6 +109,7 @@ import type { SnapshotFiles } from "./repository/snapshot.ts"
 import { SqlSnapshotFiles } from "./repository/sql-snapshot.ts"
 import {
   approvalRecord,
+  approvedPosted,
   checksState,
   decideApproval,
   evaluatesAfterReview,
@@ -143,6 +144,7 @@ import { bundledSkills } from "./review/bundled-skills.ts"
 import {
   failedCheckRun,
   postedCheckRun,
+  approvedCheckRun,
   postedEarlierCheckRun,
   replacedCheckRun,
   startedCheckRun,
@@ -1289,8 +1291,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       unverified,
       ...attribution,
     }
-    if (sandboxSeconds !== undefined) posted.sandboxSeconds = sandboxSeconds
-    if (checks !== undefined) posted.checks = [...checks.runs]
+    withOptionalPostedFields(posted, sandboxSeconds, checks, pending.checkRunId)
     await this.ctx.storage.put<PostedReview>(`posted:${pr.head.sha}`, posted)
     await this.endOwnRun(
       pending.deliveryId,
@@ -2786,8 +2787,28 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
     )
     await this.rewriteSummaryVerdict(head)
+    await this.markPostedApproved(head)
     log("approval.posted", { ...context, review: review.id })
     return { kind: "approved", head }
+  }
+
+  private async markPostedApproved(head: string): Promise<void> {
+    const stored = await this.ctx.storage.get(`posted:${head}`)
+    if (!Value.Check(PostedReview, stored)) return
+    const posted = approvedPosted(stored)
+    await this.ctx.storage.put<PostedReview>(`posted:${head}`, posted)
+    if (posted.checkRunId === undefined) return
+    try {
+      const key = await this.key()
+      const update = approvedCheckRun(posted, await this.summaryCommentUrl(), Date.now())
+      await (await this.github()).updateCheckRun(key, posted.checkRunId, update)
+    } catch (error) {
+      logError("approval.check_run_failed", {
+        head: shortSha(head),
+        checkRunId: posted.checkRunId,
+        error: errorText(error),
+      })
+    }
   }
 
   private async rewriteSummaryVerdict(headSha: string): Promise<void> {
@@ -3093,6 +3114,17 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function withOptionalPostedFields(
+  posted: PostedReview,
+  sandboxSeconds: number | undefined,
+  checks: ChecksDisplay | undefined,
+  checkRunId: number | undefined,
+): void {
+  if (sandboxSeconds !== undefined) posted.sandboxSeconds = sandboxSeconds
+  if (checks !== undefined) posted.checks = [...checks.runs]
+  if (checkRunId !== undefined) posted.checkRunId = checkRunId
+}
 
 function openedAt(pending: PendingReview): number {
   return pending.openedAt ?? pending.started

@@ -58,6 +58,18 @@ export function postedEarlierCheckRun(
   return completedCheckRun("success", checkOutput(title, summary), detailsUrl, completedAt)
 }
 
+const NO_COUNTS = { blocking: 0, major: 0, suggestion: 0, nitpick: 0 }
+const APPROVED_SUMMARY = "Approved once the checks passed; the summary comment has the review."
+
+export function approvedCheckRun(
+  posted: Pick<PostedReview, "counts" | "unverified">,
+  detailsUrl: string | undefined,
+  completedAt: number,
+): UpdateCheckRun {
+  const title = markedUnverified(checkRunTitle("APPROVE", posted.counts ?? NO_COUNTS), posted.unverified === true)
+  return completedCheckRun("success", checkOutput(title, APPROVED_SUMMARY), detailsUrl, completedAt)
+}
+
 export function failedCheckRun(reason: string, detailsUrl: string | undefined, completedAt: number): UpdateCheckRun {
   return completedCheckRun("failure", checkOutput("Review did not complete", reason), detailsUrl, completedAt)
 }

@@ -42,6 +42,11 @@ describe("PostedReview", () => {
     expect(Value.Check(PostedReview, { ...posted, counts: { blocking: 1, suggestion: 2, nitpick: 0 } })).toBe(true)
   })
 
+  it("accepts the review's check run id, which the approval retitles, and a record without one", () => {
+    expect(Value.Check(PostedReview, { ...posted, checkRunId: 1234 })).toBe(true)
+    expect(Value.Check(PostedReview, { ...posted, checkRunId: "1234" })).toBe(false)
+  })
+
   it("accepts the verdict the review showed, and refuses one a summary can't show", () => {
     expect(Value.Check(PostedReview, { ...posted, shown: "WITHHELD" })).toBe(true)
     expect(Value.Check(PostedReview, { ...posted, shown: "AWAITING_CHECKS" })).toBe(true)
