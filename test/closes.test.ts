@@ -72,6 +72,7 @@ describe("closesOf", () => {
     expect(negated("This doesn't fix the flake; closes #5")).toEqual([])
     expect(negated("Not now, maybe later we close #7")).toEqual([])
     expect(negated("It no longer fixes #3")).toEqual(["no longer fixes #3"])
+    expect(negated("<!-- won't --> closes #6")).toEqual([])
     expect(closed("Merging won't close #124")).toEqual(["#124"])
   })
 
@@ -106,13 +107,43 @@ describe("closesBlock", () => {
     expect(block("Closes #80 and #100. Merging won't close #6.")).toEqual([
       CLOSES_START,
       '⚠️ #100 follows "and" after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Closes #80, closes #100".',
-      '⚠️ "won\'t close #6" still closes #6 on merge: GitHub ignores the "won\'t". Name it without a keyword to leave it open, such as "Part of #6".',
+      '⚠️ `won\'t close #6` still closes #6 on merge: GitHub ignores the "won\'t". Name it without a keyword to leave it open, such as "Part of #6".',
       "<sub>Merging closes #80 and #6 (from the description).</sub>",
       CLOSES_END,
     ])
-    expect(block("Fixes #1, #2 and #3")[2]).toBe(
-      '⚠️ #3 follows "and" after a keyword, so merging won\'t close it. Repeat the keyword for each issue: "Fixes #1, fixes #2, fixes #3".',
-    )
+    expect(block("Fixes #1, #2 and #3")).toEqual([
+      CLOSES_START,
+      '⚠️ #2 and #3 follow "Fixes #1" without a keyword of their own, so merging won\'t close them. Repeat the keyword for each issue: "Fixes #1, fixes #2, fixes #3".',
+      "<sub>Merging closes #1 (from the description).</sub>",
+      CLOSES_END,
+    ])
+  })
+
+  it("keeps the block small whatever the description, so the summary stays under GitHub's comment limit", () => {
+    const thousand = `Fixes ${Array.from({ length: 1000 }, (_, i) => `#${i + 1}`).join(", ")}`
+    const listedRun = block(thousand)
+    expect(listedRun.join("\n").length).toBeLessThan(1_000)
+    expect(listedRun[1]).toContain("#2, #3, #4, #5, #6 and 994 more follow")
+    expect(listedRun[1]).toContain('"Fixes #1, fixes #2, fixes #3, …"')
+    const many = Array.from({ length: 3_500 }, (_, i) => `Merging won't close #${i + 1}.`).join(" ")
+    const negatedMany = block(many)
+    expect(negatedMany.join("\n").length).toBeLessThan(2_000)
+    expect(negatedMany).toContain("⚠️ 3495 more wording problems aren't listed.")
+    expect(negatedMany.at(-2)).toContain("#9, #10 and 3490 more (from the description).")
+    const longWord = block(`${"x".repeat(60_000)}n't close #6`)
+    expect(longWord.join("\n").length).toBeLessThan(500)
+  })
+
+  it("warns only about the negation when a list follows a negated keyword, never advising a close the author didn't want", () => {
+    const negatedList = closesOf("Merging won't close #80 and #100", REPO)
+    expect(negatedList.listed).toEqual([])
+    expect(block("Merging won't close #80 and #100").filter((line) => line.startsWith("⚠️"))).toEqual([
+      '⚠️ `won\'t close #80` still closes #80 on merge: GitHub ignores the "won\'t". Name it without a keyword to leave it open, such as "Part of #80".',
+    ])
+  })
+
+  it("quotes the negated phrase in a code span, so the author's markup or mentions don't reach the comment", () => {
+    expect(block("Merging won't @octocat close #6")[1]).toContain("`won't @octocat close #6` still closes #6")
   })
 
   it("says nothing between the markers when the description has no closing keyword", () => {
@@ -141,6 +172,15 @@ describe("withClosesBlock", () => {
   it("replaces only the text between the markers", () => {
     expect(withClosesBlock(comment, [CLOSES_START, "<sub>new</sub>", CLOSES_END])).toBe(
       ["<!-- andabot:summary -->", "body", CLOSES_START, "<sub>new</sub>", CLOSES_END, "footer"].join("\n"),
+    )
+  })
+
+  it("rewrites the footer's block when the model's summary text above it carries the markers too", () => {
+    const echoed = [CLOSES_START, "summary text", CLOSES_END, "body", CLOSES_START, "<sub>old</sub>", CLOSES_END].join(
+      "\n",
+    )
+    expect(withClosesBlock(echoed, [CLOSES_START, "<sub>new</sub>", CLOSES_END])).toBe(
+      [CLOSES_START, "summary text", CLOSES_END, "body", CLOSES_START, "<sub>new</sub>", CLOSES_END].join("\n"),
     )
   })
 

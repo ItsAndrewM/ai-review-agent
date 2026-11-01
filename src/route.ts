@@ -88,6 +88,9 @@ function routeFromAnySender(
   if (eventName === "check_suite" && delivery.action === "completed") {
     return routeCompletedSuite(payload.check_suite, delivery, botLogin)
   }
+  if (eventName === "pull_request" && delivery.action === "edited" && payload.pull_request) {
+    return routeEdited(payload.pull_request, delivery, payload.changes)
+  }
   if (eventName === "pull_request" && delivery.action === "closed" && payload.pull_request) {
     const key = { ...delivery.repo, number: payload.pull_request.number }
     return { kind: "handle", incoming: [{ kind: "closed", key, deliveryId: delivery.deliveryId }] }
@@ -97,7 +100,7 @@ function routeFromAnySender(
 
 function routeEvent(eventName: string, payload: WebhookPayload, delivery: Delivery, botLogin: string): Routed {
   if (eventName === "pull_request" && payload.pull_request) {
-    return routePullRequest(payload.pull_request, delivery, botLogin, payload.changes)
+    return routePullRequest(payload.pull_request, delivery, botLogin)
   }
   if (eventName === "pull_request_review_thread" && payload.pull_request) {
     return routeThread(payload.pull_request, delivery)
@@ -135,14 +138,8 @@ function routeEdited(pullRequest: PullRequestEvent, delivery: Delivery, changes:
   return { kind: "handle", incoming: [{ kind: "edited", key, deliveryId: delivery.deliveryId }] }
 }
 
-function routePullRequest(
-  pullRequest: PullRequestEvent,
-  delivery: Delivery,
-  botLogin: string,
-  changes: WebhookPayload["changes"],
-): Routed {
+function routePullRequest(pullRequest: PullRequestEvent, delivery: Delivery, botLogin: string): Routed {
   const action = delivery.action ?? ""
-  if (action === "edited") return routeEdited(pullRequest, delivery, changes)
   if (!REVIEW_ACTIONS.has(action)) return ignore(`pull_request ${action}`)
   const reaction = action === "opened" ? descriptionReaction(pullRequest, delivery, botLogin) : undefined
   const review = reviewOf(pullRequest, delivery)

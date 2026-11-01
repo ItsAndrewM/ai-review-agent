@@ -152,7 +152,7 @@ import {
   supersededCheckRun,
   unchangedCheckRun,
 } from "./review/check.ts"
-import { closesBlockOf, closesFields, closesOf, withClosesBlock } from "./review/closes.ts"
+import { closesBlockFor, closesBlockOf, closesFields, closesOf, withClosesBlock } from "./review/closes.ts"
 import { plural, were } from "./review/copy.ts"
 import {
   neuronsSince,
@@ -2741,13 +2741,10 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const key = await this.key()
     const github = await this.github()
     const body = (await github.getIssueComment(key, commentId)).body ?? ""
-    const edited = withClosesBlock(body, closesBlockOf(pr))
+    const closes = closesOf(pr.body, pr.base.repo.full_name)
+    const edited = withClosesBlock(body, closesBlockFor(pr, closes))
     if (edited !== undefined) await github.updateIssueComment(key, commentId, edited)
-    log("closes.refreshed", {
-      number: pr.number,
-      ...closesFields(closesOf(pr.body, pr.base.repo.full_name)),
-      changed: edited !== undefined,
-    })
+    log("closes.refreshed", { number: pr.number, ...closesFields(closes), changed: edited !== undefined })
   }
 
   private async currentPullRequest(): Promise<PullRequestInfo> {

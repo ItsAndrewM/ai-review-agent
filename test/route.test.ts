@@ -135,7 +135,7 @@ describe("routeWebhook", () => {
       kind: "ignore",
       reason: "pull_request edited without a body or base change",
     })
-    const bot = { login: "andabot[bot]", type: "Bot" }
+    const bot = { login: "release-please[bot]", type: "Bot" }
     expect(
       routeWebhook(
         "pull_request",
@@ -143,7 +143,7 @@ describe("routeWebhook", () => {
         "d",
         "andabot",
       ),
-    ).toEqual({ kind: "ignore", reason: "sent by a bot" })
+    ).toEqual(edited)
   })
 
   it("ignores bots and other events", () => {

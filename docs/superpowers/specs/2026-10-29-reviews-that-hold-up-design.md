@@ -480,3 +480,15 @@ Andrew approved the spec ahead and was away; these are mine, to check.
 ### Left to the builder
 
 The incoming kind's name and its place in `accept`; how the suggestion line quotes the separator; the exact clipping of a long reference run in a warning; where `Closes` is rendered (render.ts or closes.ts), as long as the same function serves the review, the `summary` command and the edit.
+
+### Rulings after the review
+
+The fresh review (opus, 1 Nov 2026) found one Critical, three Important and seven Minor. Fixed:
+
+- **The block is bounded.** A short description ("Fixes #1, …, #75", 370 characters) had pushed the summary past GitHub's 65,536-character comment limit, failing every summary write on that pull request. Now one warning per list ("#2 and #3 follow "Fixes #1" without a keyword of their own, …"), naming at most five later references and suggesting at most three ("Fixes #1, fixes #2, fixes #3, …"); at most five warnings, then "N more wording problems aren't listed."; at most ten issues in the close line, then "and N more"; the quoted phrase clipped to 60 characters and the negation word to 20. Measured on 64 KB adversarial descriptions: every block under 1 KB.
+- **The negation scan is linear.** It looks back at most 200 characters for the clause, so a 64 KB description parses in tens of milliseconds where it took seconds; an edit parses the description once.
+- **A list after a negated keyword gets only the negation warning,** so "won't close #80 and #100" never advises "close #80, close #100".
+- **A bot's edit is routed,** as the builder-check call says (the plan had it ignored); the refresh edits a comment, not the pull request, so it can't loop.
+- **The quoted phrase sits in a code span and is read from the code-stripped text,** so the author's markup or a mention never reaches andabot's comment and a negation inside an HTML comment doesn't count; the rewrite takes the last start marker, so marker text in the model's summary above the footer can't be cut into.
+
+Left as they are, for a follow-up if they show (each makes andabot under-report what GitHub closes, never over-report): a `` `<!--` `` inside a code span blanks the rest of the description, an inline code span can pair across a blank line, a fence opener with an info string inside an open fence closes it, a fence inside a blockquote isn't recognised, and "Fixes #1,#2" with no space gets no warning. Also left: a refresh landing between a review's read and write of the summary comment can write the older comment back, the same race the verdict rewrite and the paused line have; another repository's reference is de-duplicated case-sensitively; `refreshCloses`'s skips are tested only through the pure helpers, as the repository tests its object.

@@ -384,7 +384,7 @@ function standardsLine(paths: readonly string[]): string {
   return `<sub>Standards: ${listed}</sub>`
 }
 
-function codeSpan(text: string): string {
+export function codeSpan(text: string): string {
   return text.includes("`") ? `\`\` ${text} \`\`` : `\`${text}\``
 }
 
