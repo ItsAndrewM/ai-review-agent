@@ -3,6 +3,7 @@ import {
   approvedCheckRun,
   checkRunTitle,
   failedCheckRun,
+  gaveUpCheckRun,
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
   postedCheckRun,
@@ -269,6 +270,23 @@ describe("failedCheckRun", () => {
       output: { title: "Review did not complete", summary: "timeout: the model did not answer" },
     })
     expect(failedCheckRun("x", "https://example.test", at).details_url).toBe("https://example.test")
+  })
+})
+
+describe("gaveUpCheckRun", () => {
+  it("completes as neutral, naming the head and the command that retries", () => {
+    expect(gaveUpCheckRun("abcdef1234", "andabot", at)).toEqual({
+      conclusion: "neutral",
+      completed_at: "2026-10-17T20:36:38Z",
+      output: {
+        title: "Review didn't finish",
+        summary: "The review of `abcdef1` stopped twice without finishing. Comment `@andabot review` to try again.",
+      },
+    })
+  })
+
+  it("names the deploy's own bot login", () => {
+    expect(gaveUpCheckRun("abcdef1234", "andabot-staging", at).output.summary).toContain("`@andabot-staging review`")
   })
 })
 

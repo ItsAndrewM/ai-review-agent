@@ -155,6 +155,23 @@ const AddedReaction = Type.Object({
   data: Type.Object({ addReaction: Type.Object({ reaction: Type.Object({ content: Type.String() }) }) }),
 })
 
+const Installations = Type.Array(Type.Object({ id: Type.Integer() }))
+
+const InstallationRepositories = Type.Object({
+  repositories: Type.Array(Type.Object({ name: Type.String(), owner: Type.Object({ login: Type.String() }) })),
+})
+
+const OpenPullRequests = Type.Array(
+  Type.Object({
+    number: Type.Integer(),
+    title: Type.String(),
+    draft: Type.Optional(Type.Boolean()),
+    updated_at: Type.String(),
+    head: Type.Object({ sha: Type.String() }),
+    base: Type.Object({ ref: Type.String() }),
+  }),
+)
+
 const GraphQLErrors = Type.Object({ errors: Type.Array(Type.Object({ message: Type.String() })) })
 
 const REVIEW_THREADS_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
@@ -211,6 +228,15 @@ export interface CheckRunSummary {
   app: string | null
 }
 
+export interface OpenPullRequest {
+  number: number
+  headSha: string
+  draft: boolean
+  baseRef: string
+  title: string
+  updatedAt: number
+}
+
 export const SYMLINK_MODE = "120000"
 
 export const isSymlink = ({ mode }: Pick<TreeEntry, "mode">): boolean => mode === SYMLINK_MODE
@@ -246,6 +272,8 @@ export interface BlobText {
   text: string | undefined
 }
 
+type OpenPullRequestNode = Static<typeof OpenPullRequests>[number]
+
 type CheckRunNode = Static<typeof CheckRunsPage>["check_runs"][number]
 
 type TreeNode = Static<typeof Tree>["tree"][number]
@@ -276,7 +304,7 @@ export interface CreateReview {
   comments: ReviewComment[]
 }
 
-export type CheckRunConclusion = "success" | "failure" | "cancelled"
+export type CheckRunConclusion = "success" | "failure" | "cancelled" | "neutral"
 
 export interface CheckRunOutput {
   title: string
@@ -305,6 +333,7 @@ const MOST_COMMENT_PAGES = 10
 const MOST_THREAD_PAGES = 5
 const BLOBS_PER_QUERY = 50
 const MOST_CHECK_RUN_PAGES = 10
+const MOST_SWEEP_PAGES = 10
 
 export class GitHubClient {
   constructor(
@@ -509,6 +538,47 @@ export class GitHubClient {
     await this.graphql(AddedReaction, ADD_EYES_MUTATION, { subjectId })
   }
 
+  async listInstallations(): Promise<number[]> {
+    const ids: number[] = []
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
+      const batch = await this.json(Installations, `/app/installations?per_page=${PER_PAGE}&page=${page}`)
+      ids.push(...batch.map(({ id }) => id))
+      if (batch.length < PER_PAGE) return ids
+    }
+    throw new Error(`GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} installations`)
+  }
+
+  async listInstallationRepositories(): Promise<RepoRef[]> {
+    const repos: RepoRef[] = []
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
+      const { repositories } = await this.json(
+        InstallationRepositories,
+        `/installation/repositories?per_page=${PER_PAGE}&page=${page}`,
+      )
+      repos.push(...repositories.map(({ name, owner }) => ({ owner: owner.login, repo: name })))
+      if (repositories.length < PER_PAGE) return repos
+    }
+    throw new Error(`GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} repositories in the installation`)
+  }
+
+  async listOpenPullRequests(ref: RepoRef, since: number): Promise<OpenPullRequest[]> {
+    const pulls: OpenPullRequest[] = []
+    for (let page = 1; page <= MOST_SWEEP_PAGES; page++) {
+      const batch = (
+        await this.json(
+          OpenPullRequests,
+          `/repos/${ref.owner}/${ref.repo}/pulls?state=open&sort=updated&direction=desc&per_page=${PER_PAGE}&page=${page}`,
+        )
+      ).map(openPullRequest)
+      const recent = batch.filter(({ updatedAt }) => updatedAt >= since)
+      pulls.push(...recent)
+      if (recent.length < PER_PAGE) return pulls
+    }
+    throw new Error(
+      `GitHub: more than ${MOST_SWEEP_PAGES * PER_PAGE} open pull requests updated since ${new Date(since).toISOString()} on ${ref.owner}/${ref.repo}`,
+    )
+  }
+
   async getCollaboratorPermission(ref: RepoRef, username: string): Promise<string> {
     const data = await this.json(
       CollaboratorPermission,
@@ -592,6 +662,17 @@ function flattenThread(node: Static<typeof ThreadNode>): ReviewThread[] {
       authorIsBot: first.author?.__typename === "Bot",
     },
   ]
+}
+
+function openPullRequest({ number, title, draft, updated_at, head, base }: OpenPullRequestNode): OpenPullRequest {
+  return {
+    number,
+    headSha: head.sha,
+    draft: draft ?? false,
+    baseRef: base.ref,
+    title,
+    updatedAt: Date.parse(updated_at),
+  }
 }
 
 function summarizeCheckRun({ name, status, conclusion, app }: CheckRunNode): CheckRunSummary {

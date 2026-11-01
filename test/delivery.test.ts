@@ -67,6 +67,22 @@ describe("StoredIncoming", () => {
     const key = { installationId: 99, owner: "ItsAndrewM", repo: "ai-review-agent", number: 3 }
     expect(Value.Check(StoredIncoming, { kind: "edited", key, deliveryId: "d" })).toBe(true)
   })
+
+  it("keeps a sweep's review incoming with the listing's facts", () => {
+    const sweep = { draft: true, baseRef: "main", title: "WIP" }
+    const stored = { ...review, deliveryId: "sweep:abc", sweep }
+    const roundTripped: unknown = JSON.parse(JSON.stringify(stored))
+    expect(Value.Check(StoredIncoming, roundTripped)).toBe(true)
+    expect(roundTripped).toEqual(stored)
+  })
+
+  it("still keeps a webhook's review incoming, which has no sweep facts", () => {
+    expect(Value.Check(StoredIncoming, review)).toBe(true)
+  })
+
+  it("refuses sweep facts missing a field", () => {
+    expect(Value.Check(StoredIncoming, { ...review, sweep: { draft: false, baseRef: "main" } })).toBe(false)
+  })
 })
 
 describe("Deliveries.accept", () => {
