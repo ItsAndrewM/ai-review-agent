@@ -318,6 +318,14 @@ describe("the answer skill", () => {
     expect(text).toContain("resolve_thread")
     expect(text).toContain("withdrawn")
     expect(text).toContain("Never resolve on the author's word alone")
-    expect(text).toContain('version="2"')
+    expect(text).toContain('version="3"')
+  })
+
+  it("speaks of the reviewer's own threads without naming a bot, so any deploy can use it", async () => {
+    const skill = await (await bundledSkills()).source.load("answer")
+    if (skill === null) throw new Error("the answer skill is missing")
+    const text = renderActivatedSkill(skill)
+    expect(text).not.toContain("andabot")
+    expect(text).toContain("In one of your own threads")
   })
 })
