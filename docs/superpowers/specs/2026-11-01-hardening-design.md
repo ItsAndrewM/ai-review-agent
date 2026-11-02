@@ -154,7 +154,7 @@ The pending review gains `ledger: { day, holder, reserved }`. Settlement goes to
 
 ### Where the object checks
 
-In `review()`, after `headSkip` and `settingsSkip` and before `clearFlight`, so a draft, a path-filtered push or a reviewed head never touches the ledger. A resume of the review's own `pending` (`flight.kind === "resume"`) doesn't reserve again; it carries the pending's `ledger`. A sweep restart reserves anew; the dead run's reservation stays until midnight.
+In `review()`, after `headSkip` and `settingsSkip` and before `clearFlight`, so a draft, a path-filtered push or a reviewed head never touches the ledger. A resume of the review's own `pending` (`flight.kind === "resume"`) doesn't reserve again; it carries the pending's `ledger`. A sweep restart keeps the dead run's `ledger` too (`restartedPending` carries it), so its settlement swaps the dead run's reservation for the restarted run's spend, and the dead run's own spend goes uncounted.
 
 Each exit that ends a run settles it: `releasePending` after a post, `reportFailedReview`, `reportUnpostedReview`, `skipUnchanged`, the thrown-and-released path, the sweep's give-up, a replaced run (`clearFlight`) and a superseded head (`headMoved`). One helper, `settleLedger(pending)`, reads `reviewSpend` and `#sandbox.seconds()` and calls `settle`, best-effort (`budget.ledger_unreadable` on a throw).
 
