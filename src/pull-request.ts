@@ -2750,7 +2750,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     try {
       result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
     } finally {
-      await this.addSpendSince(before)
+      await this.addSpendSince(before, "summary")
     }
     if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
     return parseWrittenSummary(result.text ?? "")
@@ -3083,7 +3083,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } finally {
       this.#answers.delete(incoming.deliveryId)
       await this.#runs.end(key.number, "answer_end")
-      await this.addSpendSince(usageBefore)
+      await this.addSpendSince(usageBefore, "answer")
     }
   }
 
@@ -3327,13 +3327,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     return reserveReview(this.dayStores(), ledgerHolder(await this.key(), deliveryId), neurons, cap, Date.now())
   }
 
-  private async addSpendSince(before: UsageTotals | undefined): Promise<void> {
+  private async addSpendSince(before: UsageTotals | undefined, when: "answer" | "summary"): Promise<void> {
     if (before === undefined) return
     try {
       const neurons = neuronsSince(before, usageTotals(await this.usageLedger().usage())) ?? 0
       await addQuestion(this.dayStores(), neurons, this.dailyCap(), Date.now())
     } catch (error) {
-      logError("budget.usage_unreadable", { error: errorText(error) })
+      logError("budget.usage_unreadable", { when, error: errorText(error) })
     }
   }
 

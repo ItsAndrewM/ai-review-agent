@@ -174,6 +174,8 @@ In `answer()`, before `setModel`: `room(cap)`; refused → reply "Today's review
 - `budget.daily_warning` (once a day), `budget.daily_spent` (once a day), from the ledger, with `day`, `spent`, `reserved`, `cap`.
 - `budget.settled`, from the ledger on each settle, with `holder`, `neurons`, `sandboxSeconds` and the day's `spent`, so Workers Logs can sum a day without the object.
 - `budget.ledger_unreadable` (error), with `when`: `reserve`, `settle`, `room` or `add`.
+- `budget.usage_unreadable` (error), with `when`: `answer` or `summary`, when a question's or summary's usage can't be read, so its spend isn't added.
+- `budget.summary_failed` (error), with `number`, when the ⏳ line can't be written; the skip isn't remembered, so the next sweep tries again.
 
 ### Non-goals
 
