@@ -143,6 +143,8 @@ import {
   type ChecksState,
   type WaitReason,
   type WorkflowState,
+  ApprovalOverride,
+  overrideFor,
 } from "./review/approval.ts"
 import type { BasisContext } from "./review/basis.ts"
 import {
@@ -2927,7 +2929,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       lastReview,
       openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), []), resolved),
       checks: await this.checksOn(pr.head.sha),
+      override: (await this.overrideOn(pr.head.sha)) !== undefined,
     }
+  }
+
+  private async overrideOn(head: string): Promise<ApprovalOverride | undefined> {
+    const stored = await this.ctx.storage.get("approvalOverride")
+    return overrideFor(Value.Check(ApprovalOverride, stored) ? stored : undefined, head)
   }
 
   private async isPaused(): Promise<boolean> {

@@ -19,6 +19,7 @@ import {
   nextRecheck,
   retriesAtDoor,
   openBlockingIn,
+  overrideFor,
   ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
@@ -46,6 +47,7 @@ const ready: ApprovalState = {
   lastReview: requested,
   openBlocking: 0,
   checks: "passing",
+  override: false,
 }
 
 function outcome(state: ApprovalState): string {
@@ -586,5 +588,46 @@ describe("retriesAtDoor", () => {
     expect(retriesAtDoor({ kind: "failed", transient: false }, undefined)).toBe(false)
     expect(retriesAtDoor({ kind: "wait", reason: "checks_pending" }, undefined)).toBe(false)
     expect(retriesAtDoor({ kind: "approved", head: "abc" }, undefined)).toBe(false)
+  })
+})
+
+describe("decideApproval with an override for the head", () => {
+  const withheld: LastReview = { ...requested, event: "COMMENT", verdict: "approve", withheld: 2 }
+  const heldBack: LastReview = { ...requested, heldBack: 1 }
+  const overridden = { ...ready, override: true }
+
+  it.each([
+    ["open blocking threads", { openBlocking: 2 }],
+    ["threads it couldn't read", { openBlocking: "unknown" as const }],
+    ["a review that withheld approval", { lastReview: withheld }],
+    ["a review that held a blocking finding back", { lastReview: heldBack }],
+  ])("approves past %s", (_name, state) => {
+    expect(outcome({ ...ready, ...state })).not.toBe("approve")
+    expect(outcome({ ...overridden, ...state })).toBe("approve")
+  })
+
+  it.each([
+    ["checks_pending", { checks: "pending" as const }],
+    ["checks_failing", { checks: "failing" as const }],
+    ["checks_unknown", { checks: "unknown" as const }],
+    ["review_in_flight", { reviewInFlight: true }],
+    ["not_reviewed", { reviewedHead: "aaa" }],
+    ["paused", { paused: true }],
+    ["workflow_off", { workflow: false }],
+    ["not_open", { open: false }],
+    ["no_record", { lastReview: undefined }],
+    ["approved", { lastReview: { ...requested, event: "APPROVE" as const } }],
+  ])("still waits as %s", (reason, state) => {
+    expect(outcome({ ...overridden, openBlocking: 3, ...state })).toBe(reason)
+  })
+})
+
+describe("overrideFor", () => {
+  const stored = { head: "bbb", by: "andrew", at: 1 }
+
+  it("holds only for the head it was given on, so a push needs a new approve", () => {
+    expect(overrideFor(stored, "bbb")).toEqual(stored)
+    expect(overrideFor(stored, "ccc")).toBeUndefined()
+    expect(overrideFor(undefined, "bbb")).toBeUndefined()
   })
 })

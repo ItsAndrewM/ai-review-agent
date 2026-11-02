@@ -29,7 +29,14 @@ export type WorkflowState = boolean | "unknown"
 
 export type WebhookTrigger = "thread_resolved" | "thread_unresolved" | "checks_completed"
 
-export type ApprovalTrigger = WebhookTrigger | "review" | "already_reviewed" | "resolve" | "resume" | "recheck"
+export type ApprovalTrigger =
+  | WebhookTrigger
+  | "review"
+  | "already_reviewed"
+  | "resolve"
+  | "resume"
+  | "recheck"
+  | "approve"
 
 export type DecidedWait =
   | "workflow_unknown"
@@ -66,6 +73,7 @@ export interface ApprovalState {
   lastReview: LastReview | undefined
   openBlocking: number | "unknown"
   checks: ChecksState
+  override: boolean
 }
 
 export interface ReviewFacts {
@@ -93,8 +101,16 @@ export interface PullRequestStanding {
 
 const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"])
 
+export const ApprovalOverride = Type.Object({ head: Type.String(), by: Type.String(), at: Type.Integer() })
+
+export type ApprovalOverride = Static<typeof ApprovalOverride>
+
+export function overrideFor(stored: ApprovalOverride | undefined, head: string): ApprovalOverride | undefined {
+  return stored?.head === head ? stored : undefined
+}
+
 export function decideApproval(state: ApprovalState): ApprovalDecision {
-  const reason = pullRequestWait(state) ?? recordWait(state.lastReview) ?? liveStateWait(state)
+  const reason = pullRequestWait(state) ?? recordWait(state.lastReview, state.override) ?? liveStateWait(state)
   return reason === undefined ? { kind: "approve" } : { kind: "wait", reason }
 }
 
@@ -108,14 +124,15 @@ function pullRequestWait(state: ApprovalState): DecidedWait | undefined {
   return undefined
 }
 
-function recordWait(last: LastReview | undefined): DecidedWait | undefined {
+function recordWait(last: LastReview | undefined, override: boolean): DecidedWait | undefined {
   if (last === undefined) return "no_record"
   if (last.event === "APPROVE") return "approved"
-  if (!awaitsApproval(last)) return "review_stands"
+  if (!override && !awaitsApproval(last)) return "review_stands"
   return undefined
 }
 
 function liveStateWait(state: ApprovalState): DecidedWait | undefined {
+  if (state.override) return checksWait(state.checks)
   if (state.openBlocking === "unknown") return "threads_unknown"
   if (state.openBlocking > 0) return "blocking_threads"
   return checksWait(state.checks)
