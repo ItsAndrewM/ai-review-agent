@@ -19,6 +19,7 @@ export const LastReview = Type.Object({
   withheld: Type.Optional(Type.Integer()),
   at: Type.Integer(),
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
+  requestedBy: Type.Optional(Type.String()),
 })
 
 export type LastReview = Static<typeof LastReview>
@@ -213,8 +214,10 @@ export function approvalRecord(
   reviewId: number,
   headSha: string,
   at: number,
+  requestedBy?: string,
 ): LastReview {
-  const approved = evaluatedApprovalOf({ reviewId, headSha, at })
+  const evaluated = evaluatedApprovalOf({ reviewId, headSha, at })
+  const approved = requestedBy === undefined ? evaluated : { ...evaluated, requestedBy }
   return previous?.counts === undefined ? approved : { ...approved, counts: previous.counts }
 }
 

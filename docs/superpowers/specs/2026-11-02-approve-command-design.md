@@ -102,10 +102,13 @@ Built inline from the plan, reviewed whole-branch on opus ("with fixes": no Crit
 - **Q4 narrowed after the review:** a head counts as reviewed when `reviewed.headSha` is the head and a `lastReview` exists, even if that review was of an earlier head. A review that found nothing new (GitHub's Update branch, a merge from the base) moves `reviewed` but not `lastReview`, and would otherwise leave `approve` refused for good. That head has no findings the requester hasn't seen, so Q4's intent holds.
 - **Worded replies for every wait.** A head that moved, or a review that started, says the approve lapsed. An approval already posting says so. Unread checks say it will look again.
 - **`approve` schedules the re-checks** (20 s, 1 min, 5 min) on a pending or unread check, like a check suite's evaluation, so a stale read can't strand it (#74, #87).
+- **CodeRabbit on #214:**
+  - The approval record stores `requestedBy`, so a later `summary` keeps "on request by".
+  - An approval on request of an unverified review keeps "(unverified)".
+  - The help line says the approval holds for the head until the next review.
 - **Deferred minors:**
   - The "approved" reply mentions open threads even when none were open.
   - The body names both reasons when only one applied.
-  - The attribution isn't stored, so a later `summary` drops "on request by".
   - An unreadable config is reported as "workflow off".
   - An invalid config falls back to defaults, which re-enables `approve`.
   - The override isn't tied to the review id, which is safe under the object's input gates.

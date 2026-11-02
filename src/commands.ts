@@ -50,7 +50,7 @@ export function helpText(botLogin: string): string {
     `- \`@${botLogin} full review\`: start over: review the whole pull request again, ignoring earlier reviews.`,
     `- \`@${botLogin} summary\`: rewrite the summary comment for the current head, without a review.`,
     `- \`@${botLogin} resolve\`: resolve all my open threads, or only this one when you reply in one of my threads, then check whether I can approve.`,
-    `- \`@${botLogin} approve\`: approve this head past my open threads and the reasons my review gave, once the other checks pass. Lasts until my next review.`,
+    `- \`@${botLogin} approve\`: approve this head past my open threads and the reasons my review gave, once the other checks pass. Holds for this head until my next review.`,
     `- \`@${botLogin} pause\`: stop reviewing pushes until \`@${botLogin} resume\`. Commands keep working.`,
     `- \`@${botLogin} resume\`: review pushes again, starting with the current head if it has no review yet.`,
     `- \`@${botLogin} help\`: this message.`,

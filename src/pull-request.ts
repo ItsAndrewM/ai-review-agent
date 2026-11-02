@@ -3026,7 +3026,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     })
     await this.ctx.storage.put<LastReview>(
       "lastReview",
-      approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
+      approvalRecord(await this.readLastReview(), review.id, head, Date.now(), context.override),
     )
     await this.rewriteSummaryVerdict(head, context.override)
     await this.markPostedApproved(head, context.override)

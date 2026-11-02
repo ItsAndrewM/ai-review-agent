@@ -126,6 +126,13 @@ describe("approvedCheckRun on request", () => {
     const posted = { counts: countOf(["blocking"]) }
     expect(approvedCheckRun(posted, undefined, at, "andrew").output.title).toBe("Approved on request by @andrew")
   })
+
+  it("keeps the unverified marker on an approval on request", () => {
+    const posted = { counts: countOf(["blocking"]), unverified: true }
+    expect(approvedCheckRun(posted, undefined, at, "andrew").output.title).toBe(
+      "Approved on request by @andrew (unverified)",
+    )
+  })
 })
 
 describe("approvedCheckRun", () => {

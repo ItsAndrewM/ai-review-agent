@@ -66,7 +66,7 @@ describe("helpText", () => {
     for (const line of [
       "- `@andabot summary`: rewrite the summary comment for the current head, without a review.",
       "- `@andabot resolve`: resolve all my open threads, or only this one when you reply in one of my threads, then check whether I can approve.",
-      "- `@andabot approve`: approve this head past my open threads and the reasons my review gave, once the other checks pass. Lasts until my next review.",
+      "- `@andabot approve`: approve this head past my open threads and the reasons my review gave, once the other checks pass. Holds for this head until my next review.",
       "- `@andabot pause`: stop reviewing pushes until `@andabot resume`. Commands keep working.",
       "- `@andabot resume`: review pushes again, starting with the current head if it has no review yet.",
     ]) {
