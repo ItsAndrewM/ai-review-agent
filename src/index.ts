@@ -10,6 +10,7 @@ import { versionOf } from "./version.ts"
 export { PullRequest } from "./pull-request.ts"
 export { Outbound } from "./sandbox/outbound.ts"
 export { ReviewSandbox } from "./sandbox/review-sandbox.ts"
+export { DailySpend } from "./budget/daily-spend.ts"
 export { SandboxLeases } from "./sandbox/sandbox-leases.ts"
 
 export default {
