@@ -2484,7 +2484,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
     const override: ApprovalOverride = { head: pr.head.sha, by: call.incoming.author, at: Date.now() }
     await this.ctx.storage.put<ApprovalOverride>("approvalOverride", override)
-    const outcome = await this.evaluateApproval("approve", call.incoming.deliveryId)
+    const { outcome } = await this.evaluateWithRecheck("approve", call.incoming.deliveryId, 0)
     await this.respond(call.github, call.key, call.incoming, overrideReply(outcome, pr.head.sha, this.botLogin()))
   }
 

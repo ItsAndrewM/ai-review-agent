@@ -1,6 +1,7 @@
 import { configFileOf } from "../names.ts"
 import { shortSha } from "../sha.ts"
-import type { ApprovalOutcome, LastReview, WorkflowState } from "./approval.ts"
+import type { ApprovalOutcome, LastReview, WaitReason, WorkflowState } from "./approval.ts"
+import { approvalNote } from "./resolve.ts"
 
 export type ApproveStep =
   | "thread"
@@ -49,7 +50,7 @@ function pullRequestStep(facts: ApproveFacts): ApproveStep | undefined {
 }
 
 function reviewStep({ reviewedHead, lastReview, head }: ApproveFacts): ApproveStep {
-  if (reviewedHead !== head || lastReview?.headSha !== head) return "not_reviewed"
+  if (reviewedHead !== head || lastReview === undefined) return "not_reviewed"
   return lastReview.event === "APPROVE" ? "approved" : "override"
 }
 
@@ -89,7 +90,24 @@ export function overrideReply(outcome: ApprovalOutcome, head: string, botLogin: 
   if (outcome.kind === "failed") {
     return `I couldn't approve ${sha}: GitHub didn't answer. Try \`@${botLogin} approve\` again.`
   }
-  if (outcome.reason === "checks_pending") return `I'll approve ${sha} once the other checks pass.`
-  if (outcome.reason === "checks_failing") return `I'll approve ${sha} once the failing checks pass.`
-  return `I couldn't approve ${sha} yet: ${outcome.reason}.`
+  return waitReply(outcome.reason, sha) ?? approvalNote(outcome, undefined, botLogin) ?? `Approval of ${sha} waits.`
+}
+
+function waitReply(reason: WaitReason, sha: string): string | undefined {
+  switch (reason) {
+    case "checks_pending":
+      return `I'll approve ${sha} once the other checks pass.`
+    case "checks_failing":
+      return `I'll approve ${sha} once the failing checks pass.`
+    case "checks_unknown":
+      return `I couldn't read the checks on ${sha}; I'll look again shortly and approve once they pass.`
+    case "head_moved":
+      return `The head moved past ${sha}, so this approve lapsed; type it again once my review of the new head posts.`
+    case "review_in_flight":
+      return "A review started, so this approve lapsed; type it again once it posts."
+    case "approving":
+      return `An approval of ${sha} is already on its way.`
+    default:
+      return undefined
+  }
 }

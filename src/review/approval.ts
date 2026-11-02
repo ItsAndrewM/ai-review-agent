@@ -258,6 +258,8 @@ export interface Recheck {
 
 const RECHECK_DELAYS_MS = [20_000, 60_000, 300_000]
 
+const RECHECKED_TRIGGERS = new Set<ApprovalTrigger>(["checks_completed", "recheck", "approve"])
+
 const UNSETTLED_WAITS = new Set<WaitReason>([
   "review_in_flight",
   "checks_pending",
@@ -267,7 +269,7 @@ const UNSETTLED_WAITS = new Set<WaitReason>([
 ])
 
 export function nextRecheck(trigger: ApprovalTrigger, outcome: ApprovalOutcome, attempt: number): Recheck | undefined {
-  if (trigger !== "checks_completed" && trigger !== "recheck") return undefined
+  if (!RECHECKED_TRIGGERS.has(trigger)) return undefined
   if (outcome.kind === "approved" || (outcome.kind === "wait" && !UNSETTLED_WAITS.has(outcome.reason))) return undefined
   const inMs = RECHECK_DELAYS_MS[attempt]
   return inMs === undefined ? undefined : { attempt: attempt + 1, inMs }

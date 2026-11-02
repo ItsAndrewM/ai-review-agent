@@ -90,3 +90,23 @@ The object's `approveOnRequest(call)`:
   - the body, verdict and check-run wording.
 - `docs/setup.md` and `docs/design.md` describe it.
 - A live check on staging approves a fixture past a blocking finding.
+
+## Rulings while building and after the review
+
+Built inline from the plan, reviewed whole-branch on opus ("with fixes": no Critical, three Important, nine Minor), and live-checked on staging (fixture #213, base `main-with-approve`).
+
+- **`approve` is required in `AndabotConfig`.** So a config cached before it reads as a miss and is read again, as with `reviews.verify`.
+- **Any review that starts clears the override.** A `full review` of the same head can't then be approved past findings nobody saw.
+- **`overridesJudgment` decides the wording** (tested). Only an approval the override let through says "on request by".
+- **A failed evaluation gets its own reply**, asking for the command again.
+- **Q4 narrowed after the review:** a head counts as reviewed when `reviewed.headSha` is the head and a `lastReview` exists, even if that review was of an earlier head. A review that found nothing new (GitHub's Update branch, a merge from the base) moves `reviewed` but not `lastReview`, and would otherwise leave `approve` refused for good. That head has no findings the requester hasn't seen, so Q4's intent holds.
+- **Worded replies for every wait.** A head that moved, or a review that started, says the approve lapsed. An approval already posting says so. Unread checks say it will look again.
+- **`approve` schedules the re-checks** (20 s, 1 min, 5 min) on a pending or unread check, like a check suite's evaluation, so a stale read can't strand it (#74, #87).
+- **Deferred minors:**
+  - The "approved" reply mentions open threads even when none were open.
+  - The body names both reasons when only one applied.
+  - The attribution isn't stored, so a later `summary` drops "on request by".
+  - An unreadable config is reported as "workflow off".
+  - An invalid config falls back to defaults, which re-enables `approve`.
+  - The override isn't tied to the review id, which is safe under the object's input gates.
+  - The override is read twice per evaluation.

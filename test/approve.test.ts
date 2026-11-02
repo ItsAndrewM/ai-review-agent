@@ -42,10 +42,15 @@ describe("approveStep", () => {
     ["review_running", { reviewRunning: true }],
     ["not_reviewed", { reviewedHead: "0000000" }],
     ["not_reviewed", { lastReview: undefined }],
-    ["not_reviewed", { lastReview: { ...requested, headSha: "0000000" } }],
     ["approved", { lastReview: { ...requested, event: "APPROVE" as const } }],
   ])("refuses as %s", (step, facts) => {
     expect(approveStep({ ...ready, ...facts })).toBe(step)
+  })
+
+  it("treats a head whose review found nothing new as reviewed, as after GitHub's Update branch", () => {
+    const updated = { ...ready, head: "fedcba9876", reviewedHead: "fedcba9876" }
+    expect(approveStep(updated)).toBe("override")
+    expect(approveStep({ ...updated, lastReview: { ...requested, event: "APPROVE" as const } })).toBe("approved")
   })
 
   it("checks in order, so a thread reply is refused before anything else", () => {
@@ -90,7 +95,16 @@ describe("overrideReply", () => {
       "I'll approve `abcdef1` once the failing checks pass.",
     )
     expect(overrideReply({ kind: "wait", reason: "head_moved" }, "abcdef1234", "andabot")).toBe(
-      "I couldn't approve `abcdef1` yet: head_moved.",
+      "The head moved past `abcdef1`, so this approve lapsed; type it again once my review of the new head posts.",
+    )
+    expect(overrideReply({ kind: "wait", reason: "review_in_flight" }, "abcdef1234", "andabot")).toBe(
+      "A review started, so this approve lapsed; type it again once it posts.",
+    )
+    expect(overrideReply({ kind: "wait", reason: "approving" }, "abcdef1234", "andabot")).toBe(
+      "An approval of `abcdef1` is already on its way.",
+    )
+    expect(overrideReply({ kind: "wait", reason: "checks_unknown" }, "abcdef1234", "andabot")).toBe(
+      "I couldn't read the checks on `abcdef1`; I'll look again shortly and approve once they pass.",
     )
     expect(overrideReply({ kind: "failed", transient: true }, "abcdef1234", "andabot")).toBe(
       "I couldn't approve `abcdef1`: GitHub didn't answer. Try `@andabot approve` again.",

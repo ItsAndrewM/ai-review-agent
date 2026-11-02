@@ -517,6 +517,11 @@ describe("nextRecheck", () => {
     expect(nextRecheck("recheck", pending, 3)).toBeUndefined()
   })
 
+  it("re-checks an approve whose evaluation still reads the checks as pending, so a stale read can't strand it", () => {
+    expect(nextRecheck("approve", pending, 0)).toEqual({ attempt: 1, inMs: 20_000 })
+    expect(nextRecheck("approve", { kind: "wait", reason: "review_stands" }, 0)).toBeUndefined()
+  })
+
   it("re-checks while the review is in flight, when a read fails and when the evaluation throws", () => {
     for (const reason of ["review_in_flight", "checks_unknown", "threads_unknown", "workflow_unknown"] as const) {
       expect(nextRecheck("checks_completed", { kind: "wait", reason }, 0)).toEqual({ attempt: 1, inMs: 20_000 })
