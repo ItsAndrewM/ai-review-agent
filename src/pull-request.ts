@@ -23,6 +23,16 @@ import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
+import {
+  addQuestion,
+  ledgerHolder,
+  questionRoom,
+  reserveReview,
+  settleReview,
+  type DayStores,
+  type ReviewReservation,
+} from "./budget/daily.ts"
+import { dailyBudgetOf, reservationOf } from "./budget/ledger.ts"
 import { helpText, parseCommand, skippedReviewText, type Command, type ReviewSkip } from "./commands.ts"
 import { createAppJwt, fetchInstallationToken, InstallationToken } from "./github/app-auth.ts"
 import {
@@ -136,6 +146,16 @@ import {
 } from "./review/approval.ts"
 import type { BasisContext } from "./review/basis.ts"
 import {
+  budgetLine,
+  budgetResumeOf,
+  BudgetSkipShown,
+  budgetSkipShown,
+  carriesBudgetLine,
+  QUESTION_BUDGET_REPLY,
+  withBudgetLine,
+  type BudgetResume,
+} from "./review/budget-line.ts"
+import {
   budgetBlock,
   budgetNote,
   budgetStanding,
@@ -145,6 +165,7 @@ import {
 } from "./review/budget.ts"
 import { bundledSkills } from "./review/bundled-skills.ts"
 import {
+  dailyBudgetCheckRun,
   failedCheckRun,
   gaveUpCheckRun,
   postedCheckRun,
@@ -167,6 +188,8 @@ import {
   usageTotals,
   type ReviewSpend,
   type UsageLedger,
+  type UsageTotals,
+  neuronsOfSpend,
 } from "./review/cost.ts"
 import {
   abandonReplyWanted,
@@ -1527,7 +1550,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       log("review.skip", { reason: "in_progress", head: shortSha(pr.head.sha), number: pr.number })
       return "in_progress"
     }
-    if (incoming.full) await this.ctx.storage.delete([`posted:${pr.head.sha}`, "decided"])
     const settings = {
       staleBuild,
       callerBuild: callerVersion?.id,
@@ -1550,6 +1572,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       await this.runReview(pr, incoming, resumed)
       return undefined
     }
+    const reservation = await this.reserveDaily(incoming.deliveryId)
+    if (reservation.kind === "refused") return this.skipForBudget(pr, incoming, reservation)
+    if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
     const started = Date.now()
     await this.ctx.storage.delete("decided")
     const run = {
@@ -1570,6 +1595,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       ...runSettings(read, this.env.REQUEST_CHANGES_WORKFLOW, this.env.VERIFY_MODEL),
       ...(await this.usageBaseline()),
       ...startedMark(incoming),
+      ...ledgerRecord(reservation),
     })
     await this.runReview(pr, incoming, run)
     return undefined
@@ -1627,6 +1653,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       head: shortSha(headSha),
     })
     await this.ctx.storage.delete("pending")
+    await this.settleLedger(decision.previous)
     for (const operation of operations) await this.abortOperation(operation)
     await this.endReplacedRun(decision, headSha)
     if (decision.because === "superseded") await this.#sandbox.dropIdle("new_head")
@@ -2470,16 +2497,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async createPausedSummary(): Promise<void> {
-    const pr = await this.currentPullRequest()
-    const note = "_Not reviewed yet._"
-    await this.upsertSummary(
-      renderUnpostedSummary({
-        botLogin: this.botLogin(),
-        headSha: pr.head.sha,
-        note,
-        closes: closesBlockOf(pr, this.botLogin()),
-      }),
-    )
+    await this.upsertSummary(this.notReviewedSummary(await this.currentPullRequest()))
+  }
+
+  private notReviewedSummary(pr: PullRequestInfo): string {
+    return renderUnpostedSummary({
+      botLogin: this.botLogin(),
+      headSha: pr.head.sha,
+      note: "_Not reviewed yet._",
+      closes: closesBlockOf(pr, this.botLogin()),
+    })
   }
 
   private async resume(call: CommandCall, callerVersion?: Version): Promise<void> {
@@ -2719,7 +2746,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       tools: { extensions: [], modelTools: [] },
       model: this.reviewModel(),
     })
-    const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
+    const before = await usageBaseline(this.usageLedger())
+    let result: PiPromptResponse
+    try {
+      result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
+    } finally {
+      await this.addSpendSince(before, "summary")
+    }
     if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
     return parseWrittenSummary(result.text ?? "")
   }
@@ -3014,7 +3047,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     text: string,
     thread: ReviewThread | undefined,
   ): Promise<void> {
+    if (!(await questionRoom(this.dayStores(), this.dailyCap(), Date.now()))) {
+      log("answer.skip", { reason: "daily_budget", number: key.number, delivery: incoming.deliveryId })
+      const answering = incoming.thread ? startAnswering(thread, this.botLogin(), incoming.deliveryId) : undefined
+      await this.#replyUnlessClosed(github, key, incoming, `@${incoming.author} ${QUESTION_BUDGET_REPLY}`, answering)
+      return
+    }
     this.#runs.start()
+    const usageBefore = await usageBaseline(this.usageLedger())
     try {
       await this.harness.session().setModel(this.reviewModel())
       const operationId = `chat:${incoming.deliveryId}`
@@ -3043,6 +3083,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } finally {
       this.#answers.delete(incoming.deliveryId)
       await this.#runs.end(key.number, "answer_end")
+      await this.addSpendSince(usageBefore, "answer")
     }
   }
 
@@ -3128,6 +3169,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const commentId = await this.findSummaryComment()
     const line = await this.shownPausedLine()
     const shown = line === undefined ? body : withPausedLine(body, line, this.botLogin())
+    if (!carriesBudgetLine(shown, this.botLogin())) await this.ctx.storage.delete("budgetSkip")
     if (commentId !== undefined) {
       try {
         await github.updateIssueComment(ref, commentId, shown)
@@ -3195,6 +3237,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const pending = await this.pendingFor(deliveryId)
     if (pending === undefined) return
     await this.ctx.storage.delete(["pending", "scope"])
+    await this.settleLedger(pending)
     await this.#sandbox.dropIdle("review_end")
     if (pending.checkRunId !== undefined) await this.completeCheckRun(pending.checkRunId, pending, update)
   }
@@ -3264,9 +3307,106 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   }
 
   private async releasePending(deliveryId: string): Promise<void> {
-    if (!(await this.ownsPending(deliveryId))) return
+    const pending = await this.pendingFor(deliveryId)
+    if (pending === undefined) return
     await this.ctx.storage.delete(["pending", "scope"])
+    await this.settleLedger(pending)
     await this.#sandbox.dropIdle("review_end")
+  }
+
+  private dayStores(): DayStores {
+    return (day) => this.env.DAILY_SPEND.getByName(day)
+  }
+
+  private dailyCap(): number {
+    return dailyBudgetOf(this.env.MAX_DAILY_NEURONS)
+  }
+
+  private async reserveDaily(deliveryId: string): Promise<ReviewReservation> {
+    const cap = this.dailyCap()
+    const neurons = reservationOf(reviewBudgetOf(this.env.MAX_REVIEW_NEURONS), cap)
+    return reserveReview(this.dayStores(), ledgerHolder(await this.key(), deliveryId), neurons, cap, Date.now())
+  }
+
+  private async addSpendSince(before: UsageTotals | undefined, when: "answer" | "summary"): Promise<void> {
+    if (before === undefined) return
+    try {
+      const neurons = neuronsSince(before, usageTotals(await this.usageLedger().usage())) ?? 0
+      await addQuestion(this.dayStores(), neurons, this.dailyCap(), Date.now())
+    } catch (error) {
+      logError("budget.usage_unreadable", { when, error: errorText(error) })
+    }
+  }
+
+  private async settleLedger(pending: PendingReview): Promise<void> {
+    if (pending.ledger === undefined) return
+    const neurons = neuronsOfSpend(await this.spendOf(pending))
+    const sandboxSeconds = (await this.#sandbox.seconds()) ?? 0
+    await settleReview(this.dayStores(), pending.ledger, neurons, sandboxSeconds, this.dailyCap())
+  }
+
+  private async skipForBudget(
+    pr: PullRequestInfo,
+    incoming: ReviewIncoming,
+    refused: Extract<ReviewReservation, { kind: "refused" }>,
+  ): Promise<"daily_budget"> {
+    log("review.skip", {
+      reason: "daily_budget",
+      number: pr.number,
+      head: shortSha(pr.head.sha),
+      day: refused.day,
+      spent: Math.round(refused.spent),
+      reserved: refused.reserved,
+      cap: this.dailyCap(),
+    })
+    const shown = await this.ctx.storage.get("budgetSkip")
+    if (budgetSkipShown(Value.Check(BudgetSkipShown, shown) ? shown : undefined, pr.head.sha, refused.day)) {
+      return "daily_budget"
+    }
+    const resume = budgetResumeOf(incoming)
+    const ran = await this.showBudgetCheckRun(pr, incoming.deliveryId, resume)
+    const lined = await this.showBudgetLine(pr, resume)
+    if (ran && lined) await this.ctx.storage.put<BudgetSkipShown>("budgetSkip", { head: pr.head.sha, day: refused.day })
+    return "daily_budget"
+  }
+
+  private async showBudgetCheckRun(pr: PullRequestInfo, deliveryId: string, resume: BudgetResume): Promise<boolean> {
+    const key = await this.key()
+    const start = { name: this.botLogin(), headSha: pr.head.sha, deliveryId, startedAt: Date.now() }
+    const run = dailyBudgetCheckRun(start, this.botLogin(), resume)
+    const created = await this.guardedCheck("create", async () => (await this.github()).createCheckRun(key, run))
+    if (created === undefined) return false
+    log("check.completed", {
+      id: created.id,
+      conclusion: run.conclusion,
+      head: shortSha(pr.head.sha),
+      delivery: deliveryId,
+    })
+    return true
+  }
+
+  private async showBudgetLine(pr: PullRequestInfo, resume: BudgetResume): Promise<boolean> {
+    const line = budgetLine(pr.head.sha, this.botLogin(), resume)
+    try {
+      await this.writeBudgetLine(pr, line)
+      return true
+    } catch (error) {
+      logError("budget.summary_failed", { number: pr.number, error: errorText(error) })
+      return false
+    }
+  }
+
+  private async writeBudgetLine(pr: PullRequestInfo, line: string): Promise<void> {
+    const commentId = await this.findSummaryComment()
+    if (commentId === undefined) {
+      await this.upsertSummary(withBudgetLine(this.notReviewedSummary(pr), line, this.botLogin()))
+      return
+    }
+    const key = await this.key()
+    const github = await this.github()
+    const body = (await github.getIssueComment(key, commentId)).body ?? ""
+    const edited = withBudgetLine(body, line, this.botLogin())
+    if (edited !== body) await github.updateIssueComment(key, commentId, edited)
   }
 
   private async restartGrace(deliveryId: string): Promise<void> {
@@ -3297,6 +3437,10 @@ const SANDBOX_DROP_JOB = "sandbox.drop"
 
 const MAX_LOGGED_TEXT_CHARS = 8_000
 const MOST_KEYS_PER_GET = 128
+
+function ledgerRecord(reservation: ReviewReservation): Pick<StoredPending, "ledger"> {
+  return reservation.kind === "granted" ? { ledger: reservation.ledger } : {}
+}
 
 function withOptionalPostedFields(
   posted: PostedReview,

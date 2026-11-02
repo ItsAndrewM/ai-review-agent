@@ -34,4 +34,11 @@ describe("the staging deploy", () => {
     expect(staging.ai?.binding).toBe("AI")
     expect(staging.version_metadata?.binding).toBe("CF_VERSION_METADATA")
   })
+
+  it("keeps its own daily ledger under the same cap as production", () => {
+    for (const deploy of [production, staging]) {
+      expect(deploy.durable_objects.bindings).toContainEqual({ name: "DAILY_SPEND", class_name: "DailySpend" })
+      expect(deploy.vars.MAX_DAILY_NEURONS).toBe("200000")
+    }
+  })
 })

@@ -1,7 +1,8 @@
 import { Type } from "typebox"
-import { configFileOf, pausedMarkerOf, summaryMarkerOf } from "../names.ts"
+import { configFileOf, pausedMarkerOf } from "../names.ts"
 import type { SkipReason } from "../repository/config.ts"
 import { shortSha } from "../sha.ts"
+import { withMarkedLine, withoutMarkedLine, type MarkedLine } from "./summary-lines.ts"
 
 export const PausedBy = Type.String()
 
@@ -17,25 +18,15 @@ export function pausedLine(by: string | undefined, botLogin: string): string {
 }
 
 export function withPausedLine(body: string, line: string, botLogin: string): string {
-  if (!body.startsWith(summaryMarkerOf(botLogin))) return body
-  const lines = withoutPausedLine(body, botLogin).split("\n")
-  const headerAt = lines.findIndex((text) => text.startsWith("## "))
-  const insertAt = Math.max(headerAt, 0) + 1
-  return [...lines.slice(0, insertAt), "", line, ...lines.slice(insertAt)].join("\n")
+  return withMarkedLine(body, line, pausedKind(botLogin), botLogin)
 }
 
 export function withoutPausedLine(body: string, botLogin: string): string {
-  const marker = pausedMarkerOf(botLogin)
-  const kept: string[] = []
-  for (const text of body.split("\n")) {
-    if (!isPausedLine(text, marker)) kept.push(text)
-    else if (kept.at(-1) === "") kept.pop()
-  }
-  return kept.join("\n")
+  return withoutMarkedLine(body, pausedKind(botLogin))
 }
 
-function isPausedLine(text: string, marker: string): boolean {
-  return text.startsWith(PAUSED_OPENING) && text.trimEnd().endsWith(marker)
+function pausedKind(botLogin: string): MarkedLine {
+  return { opening: PAUSED_OPENING, marker: pausedMarkerOf(botLogin) }
 }
 
 export function pauseReply(alreadyPaused: boolean, botLogin: string): string {

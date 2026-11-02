@@ -30,6 +30,7 @@ export type ReviewSkip =
   | "in_progress"
   | SkipReason
   | "path_filters"
+  | "daily_budget"
 
 export function parseCommand(body: string, botLogin: string): Command | undefined {
   const mention = new RegExp(`(?:^|\\s)@${escapeRegExp(botLogin)}(?![\\w-])\\s*([\\s\\S]*)`, "i")
@@ -61,6 +62,9 @@ export function skippedReviewText(reason: ReviewSkip, headSha: string, botLogin:
     return `Nothing new to review: I already reviewed \`${shortSha(headSha)}\`. \`@${botLogin} full review\` reviews it again from the start.`
   }
   if (reason === "not_open") return "This pull request is closed, so there's nothing to review."
+  if (reason === "daily_budget") {
+    return `Today's review budget is spent, so I can't review \`${shortSha(headSha)}\` until midnight UTC.`
+  }
   if (reason === "path_filters") {
     return `Nothing to review: \`${configFileOf(botLogin)}\`'s \`path_filters\` leave out every file this pull request changes.`
   }

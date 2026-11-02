@@ -296,6 +296,16 @@ describe("migratePending", () => {
     expect(Value.Check(StoredPending, { ...pending, verifyModel: 5 })).toBe(false)
   })
 
+  it("keeps the day's reservation the review holds, which its settlement charges, and refuses a malformed one", () => {
+    const reserved: PendingReview = { ...pending, ledger: { day: "2026-11-02", holder: "o/r#1:d-1", reserved: 10_000 } }
+    expect(Value.Check(StoredPending, reserved)).toBe(true)
+    expect(migratePending(reserved)).toEqual(reserved)
+    expect(
+      Value.Check(StoredPending, { ...pending, ledger: { day: "2026-11-02", holder: "h", reserved: "10000" } }),
+    ).toBe(false)
+    expect(Value.Check(StoredPending, { ...pending, ledger: { day: "2026-11-02", reserved: 10_000 } })).toBe(false)
+  })
+
   it("does not accept a record without its head and delivery id", () => {
     expect(Value.Check(StoredPending, { deliveryId: "d-1", operationId: "review:d-1" })).toBe(false)
     expect(Value.Check(StoredPending, "d-1")).toBe(false)

@@ -47,6 +47,12 @@
     // tool but submit_review is blocked. 10,000 is one day of Workers AI's
     // free allowance. A model without a price counts for nothing.
     "MAX_REVIEW_NEURONS": "10000",
+    // Neurons this deploy may spend on reviews and questions in a UTC day
+    // (#186). Each review reserves MAX_REVIEW_NEURONS when it starts and
+    // settles its real spend when it ends; past the cap new reviews skip
+    // with a neutral check run and the sweep reviews them after midnight.
+    // 200,000 is $2.20 a day: about 100 reviews, and 20 running at once.
+    "MAX_DAILY_NEURONS": "200000",
     // The sandbox tier (#132): "true" lets a review start a container on
     // its first run_check call. On since #135's measurement (29 Oct 2026):
     // GLM-5.3 Flash confirmed a planted test failure and a planted type
@@ -89,12 +95,14 @@
       { "name": "PULL_REQUEST", "class_name": "PullRequest" },
       { "name": "REVIEW_SANDBOX", "class_name": "ReviewSandbox" },
       { "name": "SANDBOX_LEASES", "class_name": "SandboxLeases" },
+      { "name": "DAILY_SPEND", "class_name": "DailySpend" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["PullRequest"] },
     { "tag": "v2", "new_sqlite_classes": ["ReviewSandbox"] },
     { "tag": "v3", "new_sqlite_classes": ["SandboxLeases"] },
+    { "tag": "v4", "new_sqlite_classes": ["DailySpend"] },
   ],
   // The sandbox tier's container (#131). The build context is the container
   // folder alone, so node_modules never enters the image build. Under the
@@ -125,6 +133,7 @@
         "REVIEW_THINKING_LEVEL": "low",
         "MAX_OUTPUT_TOKENS": "16000",
         "MAX_REVIEW_NEURONS": "10000",
+        "MAX_DAILY_NEURONS": "200000",
         "SANDBOX": "true",
         "MAX_SANDBOX_SECONDS": "900",
         "SANDBOX_CHECK_TIMEOUT": "300000",
@@ -137,6 +146,7 @@
           { "name": "PULL_REQUEST", "class_name": "PullRequest" },
           { "name": "REVIEW_SANDBOX", "class_name": "ReviewSandbox" },
           { "name": "SANDBOX_LEASES", "class_name": "SandboxLeases" },
+          { "name": "DAILY_SPEND", "class_name": "DailySpend" },
         ],
       },
       "containers": [

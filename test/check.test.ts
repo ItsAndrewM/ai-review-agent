@@ -3,6 +3,7 @@ import {
   approvedCheckRun,
   checkRunTitle,
   failedCheckRun,
+  dailyBudgetCheckRun,
   gaveUpCheckRun,
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
@@ -270,6 +271,33 @@ describe("failedCheckRun", () => {
       output: { title: "Review did not complete", summary: "timeout: the model did not answer" },
     })
     expect(failedCheckRun("x", "https://example.test", at).details_url).toBe("https://example.test")
+  })
+})
+
+describe("dailyBudgetCheckRun", () => {
+  const start = { name: "andabot", headSha: "abcdef1234", deliveryId: "d1", startedAt: at }
+
+  it("is created already completed as neutral, so no failed second request can leave it in progress", () => {
+    expect(dailyBudgetCheckRun(start, "andabot", "sweep")).toEqual({
+      name: "andabot",
+      head_sha: "abcdef1234",
+      status: "completed",
+      conclusion: "neutral",
+      external_id: "d1",
+      started_at: "2026-10-17T20:36:38Z",
+      completed_at: "2026-10-17T20:36:38Z",
+      output: {
+        title: "Daily review budget spent",
+        summary:
+          "This deploy's daily model budget is spent. `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then.",
+      },
+    })
+  })
+
+  it("asks a tagged review's author to tag again after midnight", () => {
+    expect(dailyBudgetCheckRun(start, "andabot", "tag").output.summary).toBe(
+      "This deploy's daily model budget is spent. Comment `@andabot review` after midnight UTC to review `abcdef1`.",
+    )
   })
 })
 

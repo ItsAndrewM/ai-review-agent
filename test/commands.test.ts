@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest"
 import { helpText, parseCommand, skippedReviewText } from "../src/commands.ts"
 
 describe("skippedReviewText", () => {
+  it("says a tagged review waits for midnight UTC once the day's budget is spent", () => {
+    expect(skippedReviewText("daily_budget", "abcdef1234", "andabot")).toBe(
+      "Today's review budget is spent, so I can't review `abcdef1` until midnight UTC.",
+    )
+  })
+
   it("names the head already reviewed and how to review it again", () => {
     const text = skippedReviewText("already_reviewed", "abc1234def5678", "andabot")
     expect(text).toContain("`abc1234`")

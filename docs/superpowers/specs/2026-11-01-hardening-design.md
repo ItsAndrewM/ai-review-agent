@@ -111,3 +111,114 @@ Built inline from `docs/superpowers/plans/2026-11-01-sweep.md`, then reviewed wh
   - "For this push" is loose for a facts-changed re-review.
   - A never-seen head that settings skip counts once in `found`.
   - Every sweep rewrites `key`.
+
+## Slice 2, #186: a daily spend cap stops new reviews
+
+### Why
+
+#115 caps what one review spends (`MAX_REVIEW_NEURONS`), and the sandbox is capped per review and by its lease. Nothing caps what a deploy spends in a day. Cost isn't the risk, a loop is: a webhook storm, a bot pushing every minute, a retry bug, or #189's sweep (whose own cap was left to this slice) could spend without limit, and nobody would know until the bill.
+
+### Andrew's rulings (grill, 1 Nov 2026)
+
+- **Q1, what stops:** every model call. Reviews (push, sweep, `@andabot review`, `full review`, a `resume` that reviews) and questions (`@andabot <anything else>`, thread replies). A refused question gets a one-line reply. `help`, `pause`, `resume` (when it doesn't review), `resolve` and `summary` keep working. Questions' spend counts toward the day.
+- **Q2, sandbox:** the cap counts model neurons only. The ledger also keeps the day's sandbox seconds for the log; they never trip the cap.
+- **Q3, reserve:** a starting review reserves its per-review budget, `min(MAX_REVIEW_NEURONS, MAX_DAILY_NEURONS)`, and is refused if spent + reserved would pass the cap. When it posts or fails, the reservation is swapped for its real spend. A review that dies without ending keeps its reservation until midnight UTC. The cap ÷ 10,000 also bounds how many reviews run at once.
+- **Q4, default:** `MAX_DAILY_NEURONS` = `200000` ($2.20 a day, about 100 reviews and 20 at once), in production and staging.
+- **Q5, scope:** each deploy keeps its own ledger and cap. The Cloudflare billing notification is the account-wide backstop.
+- **Q6, after midnight:** a `daily_budget` skip isn't recorded as `decided`, so the first sweep after midnight UTC reviews the head (the new day's cap still applies). The object remembers it already showed this head's skip today and stays quiet on repeat sweeps.
+- **Q7, summary:** a line edited into the existing summary, as the paused line is; a pull request with no summary gets the unposted one with that line. The check run completes `neutral`, titled "Daily review budget spent". The next review's summary has no line.
+- **Q8, 80% alert:** log events now; #182 routes them. `budget.daily_warning` once a day when spent + reserved first passes 80%, `budget.daily_spent` once when the ledger first refuses a start. A comment on #182 adds both to its alert list.
+- **Q9, Cloudflare billing notification:** I find the usage-based billing alert for Workers AI (and Containers, if offered) through the Cloudflare API, show Andrew the exact policy (about 1.5× the cap over a month: ~10M neurons, ~$100), and create it only on his yes. `docs/setup.md` records it.
+- **Q10, live check:** staging, deployed from the branch with `wrangler deploy --env staging --var MAX_DAILY_NEURONS:10000`, on a fixture pull request: a tagged review posts; a push and a second tag get the neutral run, the summary line, `review.skip` `daily_budget` and `budget.daily_spent`; a question gets the budget reply. Staging's sweep skips (`AUTO_REVIEW` false), so the midnight pickup is pinned by tests, and the next UTC day a tag reviews again.
+- **Q11, ledger down:** fail open. `budget.ledger_unreadable` (an error log), and the review or question runs uncounted.
+
+### The ledger
+
+A new Durable Object class, `DailySpend` (`src/budget/daily-spend.ts`, migration `v4`, binding `DAILY_SPEND`), one object per UTC day by name (`2026-11-01`). Its state is one stored record, parsed with TypeBox on read:
+
+- `spent`: neurons settled today.
+- `sandboxSeconds`: sandbox seconds settled today.
+- `reservations`: holder → neurons, the holder being `<owner>/<repo>#<number>:<deliveryId>`.
+- `warned`, `refused`: whether today's `budget.daily_warning` and `budget.daily_spent` have been logged.
+
+RPC:
+
+- `reserve(holder, neurons, cap)` → `{ granted, spent, reserved }`. Refused when `spent + reserved + neurons > cap`. Reserving a holder twice is granted without adding (a #118 retry or a resume).
+- `settle(holder, neurons, sandboxSeconds)`: drops the holder's reservation and adds the real spend. Settling an unknown holder still adds the spend (a review that started under a ledger outage).
+- `room(cap)` → `{ open }` for a question: open while `spent + reserved < cap`.
+- `add(neurons)`: a question's spend.
+
+The day math lives in pure functions (`src/budget/ledger.ts`) that the object calls, so tests pin them without a Durable Object: `reserveIn`, `settleIn`, `roomIn`, `crossings` (which of warn/refuse to log), and `utcDay(ms)`. The object sets an alarm eight days on that deletes its storage, so old days don't pile up.
+
+The pending review gains `ledger: { day, holder, reserved }`. Settlement goes to the day the review started, so a review that crosses midnight is charged to the day that let it start.
+
+### Where the object checks
+
+In `review()`, after `headSkip` and `settingsSkip` and before `clearFlight`, so a draft, a path-filtered push or a reviewed head never touches the ledger. A resume of the review's own `pending` (`flight.kind === "resume"`) doesn't reserve again; it carries the pending's `ledger`. A sweep restart keeps the dead run's `ledger` too (`restartedPending` carries it), so its settlement swaps the dead run's reservation for the restarted run's spend, and the dead run's own spend goes uncounted.
+
+Each exit that ends a run settles it: `releasePending` after a post, `reportFailedReview`, `reportUnpostedReview`, `skipUnchanged`, the thrown-and-released path, the sweep's give-up, a replaced run (`clearFlight`) and a superseded head (`headMoved`). One helper, `settleLedger(pending)`, reads `reviewSpend` and `#sandbox.seconds()` and calls `settle`, best-effort (`budget.ledger_unreadable` on a throw).
+
+In `answer()`, before `setModel`: `room(cap)`; refused → reply "Today's review budget is spent, so I can't answer until midnight UTC." and log `answer.skip` reason `daily_budget`. After the prompt: `add(neuronsSince(before, after))`.
+
+### What the author sees
+
+- **Check run:** created and completed at once as `neutral`, title "Daily review budget spent", summary "This deploy's daily model budget is spent. `abc1234` is reviewed after midnight UTC, or comment `@andabot review` then." A repeat skip of the same head on the same day creates no second run.
+- **Summary comment:** the budget line, inserted after the header like the paused line, with its own marker `<!-- <login>:budget -->`: "⏳ Today's review budget is spent: `abc1234` is reviewed after midnight UTC." Written once per head per day (`budgetSkip: { head, day }` in storage); `upsertSummary` for the next review replaces the whole body, so the line goes with it.
+- **A tagged review** (`@andabot review`) also gets the reply through `skippedReviewText`: "Today's review budget is spent, so I can't review `abc1234` until midnight UTC."
+- **A paused pull request** keeps its paused line; the two lines can sit together.
+
+### Logs
+
+- `review.skip` reason `daily_budget`, with `number`, `head`, `day`, `spent`, `reserved`, `cap`.
+- `answer.skip` reason `daily_budget`.
+- `budget.daily_warning` (once a day), `budget.daily_spent` (once a day), from the ledger, with `day`, `spent`, `reserved`, `cap`.
+- `budget.settled`, from the ledger on each settle, with `holder`, `neurons`, `sandboxSeconds` and the day's `spent`, so Workers Logs can sum a day without the object.
+- `budget.ledger_unreadable` (error), with `when`: `reserve`, `settle`, `room` or `add`.
+- `budget.usage_unreadable` (error), with `when`: `answer` or `summary`, when a question's or summary's usage can't be read, so its spend isn't added.
+- `budget.summary_failed` (error), with `number`, when the ⏳ line can't be written; the skip isn't remembered, so the next sweep tries again.
+
+### Non-goals
+
+- A ledger shared between production and staging (Q5).
+- Counting sandbox seconds against the cap (Q2).
+- Sending the 80% alert anywhere but the log (Q8; #182).
+- Refunding a dead review's reservation before midnight.
+
+### Constraints
+
+- `MAX_DAILY_NEURONS` is parsed like `MAX_REVIEW_NEURONS`: anything but a positive whole number falls back to the default. `test/wrangler.test.ts`'s parity check covers the staging copy.
+- `CheckRunConclusion` already has `neutral` (#189).
+- The repository's lint rules.
+
+### Done when
+
+- Tests pin the ledger (reserve, refuse at the cap, a repeated reserve, settle swapping reservation for spend, settle of an unknown holder, room, the 80% and 100% crossings logged once), the skip (neutral run, summary line, no ledger call for a settings skip, a resume not reserving twice, a repeat sweep staying quiet), a question refused and a question's spend added, the reset at midnight UTC (`utcDay` and a review settled into its start day), fail-open on a throwing ledger, and the env parsing.
+- `docs/setup.md` documents `MAX_DAILY_NEURONS`, the events and the billing notification; `docs/design.md` gains the daily cap beside the per-review one.
+- The staging live check (Q10) passes and #182 has the comment adding the two events.
+
+### Calls made while planning
+
+- One object per day by name, as the issue asks, rather than one object with a key per day: no cross-day contention, and the alarm cleans a day as a unit.
+- A question needs no reservation: it's one short call, and refusing at `spent + reserved ≥ cap` keeps it under the cap but for that call.
+- A question that runs while a review of the same object is open can be counted twice (once in its own `add`, once in the review's usage window). Small and only ever over; accepted.
+- `budgetSkip` is a separate key, not a `decided` reason, so the sweep's `decideSweep` stays as it is.
+
+### Rulings while building and after the review
+
+Built inline from `docs/superpowers/plans/2026-11-01-daily-budget.md`, then reviewed whole-branch on opus ("with fixes": no Critical, three Important, nine Minor). Live-checked on staging (fixture #210) before merge.
+
+- **Settlement sits where `pending` is deleted** (`endOwnRun`, `releasePending`, a replaced run), which every exit passes through, so each run settles once.
+- **The ledger's logic is `DayAccount` over a `DayRecord`** (`src/budget/day-account.ts`), which the object wraps, so tests drive the real arithmetic and logging without a Durable Object.
+- **The paused line's insert and remove are shared** (`src/review/summary-lines.ts`) by the paused and budget lines.
+- **A refused `full review` keeps the head's record.** `posted:<sha>` is deleted only once a full review is granted, not before the reservation.
+- **`summary` keeps working but is counted** (Q1 named it among the commands that keep working; it calls the model, so its spend is added to the day like a question's).
+- **A tagged refusal doesn't promise the sweep.** The sweep reviews only what a push would, so a refused tag's line and check run say to comment `@<login> review` after midnight; a refused push or sweep says "is reviewed after midnight UTC, or comment `@<login> review` then".
+- **The budget check run is created completed in one request**, so a failed second request can't leave a run in progress on a required check.
+- **Rollback:** the `v4` migration means `wrangler rollback` can't cross this deploy; the escape hatch is a redeploy with a very large `MAX_DAILY_NEURONS`.
+- **Review feedback on #211:**
+  - The skip is remembered only once both the run and the line were shown, so a failed display is retried by the next sweep.
+  - Any summary rewrite that drops the ⏳ line (a post, a failure, an unposted or incomplete review, the `summary` command) clears the record in `upsertSummary`, so the next refusal puts the line back.
+  - `settle` and `add` check the 80% crossing too.
+  - A summary's spend is added even when its prompt throws.
+  - The sweep line also names the tag as a fallback, since a head missed by the 00:00 sweep falls out of its one-day window.
+- **Deferred minors:** the budget line can outlive its head when the next exit doesn't rewrite the summary (`skipUnchanged`, a give-up, a settings skip); spend after `submit_review` and an aborted run's last tokens go unsettled; `resume` past the cap says "reviewing" before the neutral run; a reserve that times out after applying leaks until midnight; the object-level tests wait on #188.
