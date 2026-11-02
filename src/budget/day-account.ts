@@ -34,9 +34,9 @@ export class DayAccount {
     return { granted: next.granted, spent: day.spent, reserved: reservedOf(day) }
   }
 
-  async settle(holder: string, neurons: number, sandboxSeconds: number): Promise<void> {
-    const day = settleIn(await this.#record.read(), holder, neurons, sandboxSeconds)
-    await this.#record.write(day)
+  async settle(holder: string, neurons: number, sandboxSeconds: number, cap: number): Promise<void> {
+    const before = await this.#record.read()
+    const day = await this.#noteCrossings(before, settleIn(before, holder, neurons, sandboxSeconds), cap, false)
     log("budget.settled", { day: this.#name, holder, neurons, sandboxSeconds, spent: day.spent })
   }
 
@@ -47,8 +47,9 @@ export class DayAccount {
     return { open, spent: day.spent, reserved: reservedOf(day) }
   }
 
-  async add(neurons: number): Promise<void> {
-    await this.#record.write(addIn(await this.#record.read(), neurons))
+  async add(neurons: number, cap: number): Promise<void> {
+    const before = await this.#record.read()
+    await this.#noteCrossings(before, addIn(before, neurons), cap, false)
   }
 
   async #noteCrossings(before: DayLedger, after: DayLedger, cap: number, refused: boolean): Promise<DayLedger> {

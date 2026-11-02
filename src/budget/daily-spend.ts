@@ -12,16 +12,16 @@ export class DailySpend extends DurableObject<Env> {
     return this.#account().reserve(holder, neurons, cap)
   }
 
-  settle(holder: string, neurons: number, sandboxSeconds: number): Promise<void> {
-    return this.#account().settle(holder, neurons, sandboxSeconds)
+  settle(holder: string, neurons: number, sandboxSeconds: number, cap: number): Promise<void> {
+    return this.#account().settle(holder, neurons, sandboxSeconds, cap)
   }
 
   room(cap: number): Promise<RoomAnswer> {
     return this.#account().room(cap)
   }
 
-  add(neurons: number): Promise<void> {
-    return this.#account().add(neurons)
+  add(neurons: number, cap: number): Promise<void> {
+    return this.#account().add(neurons, cap)
   }
 
   async alarm(): Promise<void> {

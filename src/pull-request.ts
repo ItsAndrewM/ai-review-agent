@@ -2746,8 +2746,12 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       model: this.reviewModel(),
     })
     const before = await usageBaseline(this.usageLedger())
-    const result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
-    await this.addSpendSince(before)
+    let result: PiPromptResponse
+    try {
+      result = await session.prompt(summaryPrompt(pr, files, issues), { operationId })
+    } finally {
+      await this.addSpendSince(before)
+    }
     if (result.status !== "done") return { kind: "unusable", reason: describeFailure(result) }
     return parseWrittenSummary(result.text ?? "")
   }
@@ -2791,6 +2795,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<SummaryOutcome> {
     const reviewed = await this.readReviewed()
     const summary = await this.storeSummary(reviewed, answer, reviewable)
+    await this.ctx.storage.delete("budgetSkip")
     await this.upsertSummary(
       renderSummaryRun({
         botLogin: this.botLogin(),
@@ -3326,7 +3331,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (before === undefined) return
     try {
       const neurons = neuronsSince(before, usageTotals(await this.usageLedger().usage())) ?? 0
-      await addQuestion(this.dayStores(), neurons, Date.now())
+      await addQuestion(this.dayStores(), neurons, this.dailyCap(), Date.now())
     } catch (error) {
       logError("budget.usage_unreadable", { error: errorText(error) })
     }
@@ -3336,7 +3341,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (pending.ledger === undefined) return
     const neurons = neuronsOfSpend(await this.spendOf(pending))
     const sandboxSeconds = (await this.#sandbox.seconds()) ?? 0
-    await settleReview(this.dayStores(), pending.ledger, neurons, sandboxSeconds)
+    await settleReview(this.dayStores(), pending.ledger, neurons, sandboxSeconds, this.dailyCap())
   }
 
   private async skipForBudget(
@@ -3357,43 +3362,50 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (budgetSkipShown(Value.Check(BudgetSkipShown, shown) ? shown : undefined, pr.head.sha, refused.day)) {
       return "daily_budget"
     }
-    await this.ctx.storage.put<BudgetSkipShown>("budgetSkip", { head: pr.head.sha, day: refused.day })
     const resume = budgetResumeOf(incoming)
-    await this.showBudgetCheckRun(pr, incoming.deliveryId, resume)
-    await this.showBudgetLine(pr, resume)
+    const ran = await this.showBudgetCheckRun(pr, incoming.deliveryId, resume)
+    const lined = await this.showBudgetLine(pr, resume)
+    if (ran && lined) await this.ctx.storage.put<BudgetSkipShown>("budgetSkip", { head: pr.head.sha, day: refused.day })
     return "daily_budget"
   }
 
-  private async showBudgetCheckRun(pr: PullRequestInfo, deliveryId: string, resume: BudgetResume): Promise<void> {
+  private async showBudgetCheckRun(pr: PullRequestInfo, deliveryId: string, resume: BudgetResume): Promise<boolean> {
     const key = await this.key()
     const start = { name: this.botLogin(), headSha: pr.head.sha, deliveryId, startedAt: Date.now() }
     const run = dailyBudgetCheckRun(start, this.botLogin(), resume)
     const created = await this.guardedCheck("create", async () => (await this.github()).createCheckRun(key, run))
-    if (created !== undefined)
-      log("check.completed", {
-        id: created.id,
-        conclusion: run.conclusion,
-        head: shortSha(pr.head.sha),
-        delivery: deliveryId,
-      })
+    if (created === undefined) return false
+    log("check.completed", {
+      id: created.id,
+      conclusion: run.conclusion,
+      head: shortSha(pr.head.sha),
+      delivery: deliveryId,
+    })
+    return true
   }
 
-  private async showBudgetLine(pr: PullRequestInfo, resume: BudgetResume): Promise<void> {
+  private async showBudgetLine(pr: PullRequestInfo, resume: BudgetResume): Promise<boolean> {
     const line = budgetLine(pr.head.sha, this.botLogin(), resume)
     try {
-      const commentId = await this.findSummaryComment()
-      if (commentId === undefined) {
-        await this.upsertSummary(withBudgetLine(this.notReviewedSummary(pr), line, this.botLogin()))
-        return
-      }
-      const key = await this.key()
-      const github = await this.github()
-      const body = (await github.getIssueComment(key, commentId)).body ?? ""
-      const edited = withBudgetLine(body, line, this.botLogin())
-      if (edited !== body) await github.updateIssueComment(key, commentId, edited)
+      await this.writeBudgetLine(pr, line)
+      return true
     } catch (error) {
       logError("budget.summary_failed", { number: pr.number, error: errorText(error) })
+      return false
     }
+  }
+
+  private async writeBudgetLine(pr: PullRequestInfo, line: string): Promise<void> {
+    const commentId = await this.findSummaryComment()
+    if (commentId === undefined) {
+      await this.upsertSummary(withBudgetLine(this.notReviewedSummary(pr), line, this.botLogin()))
+      return
+    }
+    const key = await this.key()
+    const github = await this.github()
+    const body = (await github.getIssueComment(key, commentId)).body ?? ""
+    const edited = withBudgetLine(body, line, this.botLogin())
+    if (edited !== body) await github.updateIssueComment(key, commentId, edited)
   }
 
   private async restartGrace(deliveryId: string): Promise<void> {

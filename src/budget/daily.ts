@@ -6,9 +6,9 @@ import { utcDay } from "./ledger.ts"
 
 export interface DayStore {
   reserve(holder: string, neurons: number, cap: number): Promise<ReserveAnswer>
-  settle(holder: string, neurons: number, sandboxSeconds: number): Promise<void>
+  settle(holder: string, neurons: number, sandboxSeconds: number, cap: number): Promise<void>
   room(cap: number): Promise<RoomAnswer>
-  add(neurons: number): Promise<void>
+  add(neurons: number, cap: number): Promise<void>
 }
 
 export type DayStores = (day: string) => DayStore
@@ -53,10 +53,11 @@ export async function settleReview(
   ledger: LedgerRef | undefined,
   neurons: number,
   sandboxSeconds: number,
+  cap: number,
 ): Promise<void> {
   if (ledger === undefined) return
   try {
-    await stores(ledger.day).settle(ledger.holder, neurons, sandboxSeconds)
+    await stores(ledger.day).settle(ledger.holder, neurons, sandboxSeconds, cap)
   } catch (cause) {
     unreadable("settle", cause)
   }
@@ -71,9 +72,9 @@ export async function questionRoom(stores: DayStores, cap: number, now: number):
   }
 }
 
-export async function addQuestion(stores: DayStores, neurons: number, now: number): Promise<void> {
+export async function addQuestion(stores: DayStores, neurons: number, cap: number, now: number): Promise<void> {
   try {
-    await stores(utcDay(now)).add(neurons)
+    await stores(utcDay(now)).add(neurons, cap)
   } catch (cause) {
     unreadable("add", cause)
   }

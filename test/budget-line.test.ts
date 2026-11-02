@@ -1,12 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { summaryMarkerOf } from "../src/names.ts"
-import {
-  budgetLine,
-  budgetSkipShown,
-  QUESTION_BUDGET_REPLY,
-  withBudgetLine,
-  withoutBudgetLine,
-} from "../src/review/budget-line.ts"
+import { budgetLine, budgetSkipShown, QUESTION_BUDGET_REPLY, withBudgetLine } from "../src/review/budget-line.ts"
 import { pausedLine, withPausedLine } from "../src/review/pause.ts"
 
 const summary = [
@@ -23,7 +17,7 @@ const line = budgetLine("abcdef1234", "andabot", "sweep")
 describe("budgetLine", () => {
   it("names the head and when it is reviewed, with the deploy's marker", () => {
     expect(line).toBe(
-      "⏳ Today's review budget is spent: `abcdef1` is reviewed after midnight UTC. <!-- andabot:budget -->",
+      "⏳ Today's review budget is spent: `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then. <!-- andabot:budget -->",
     )
   })
 })
@@ -56,12 +50,6 @@ describe("withBudgetLine", () => {
 
   it("leaves a body that isn't the summary comment alone", () => {
     expect(withBudgetLine("some other comment", line, "andabot")).toBe("some other comment")
-  })
-})
-
-describe("withoutBudgetLine", () => {
-  it("takes the line and its blank line out again", () => {
-    expect(withoutBudgetLine(withBudgetLine(summary, line, "andabot"), "andabot")).toBe(summary)
   })
 })
 

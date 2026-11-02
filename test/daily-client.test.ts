@@ -60,7 +60,7 @@ describe("reserveReview and settleReview", () => {
     const reserved = await reserveReview(days.stores, "o/r#1:d", 10_000, 200_000, LAST_MS_OF_NOV_1)
     expect(reserved).toEqual({ kind: "granted", ledger: { day: "2026-11-01", holder: "o/r#1:d", reserved: 10_000 } })
     if (reserved.kind !== "granted") return
-    await settleReview(days.stores, reserved.ledger, 2_014, 30)
+    await settleReview(days.stores, reserved.ledger, 2_014, 30, 200_000)
     expect(days.recordOf("2026-11-01").day).toMatchObject({ spent: 2_014, sandboxSeconds: 30, reservations: {} })
     expect(days.recordOf("2026-11-02").day).toEqual(EMPTY_DAY)
     expect(events(logged)).toContainEqual(
@@ -80,6 +80,14 @@ describe("reserveReview and settleReview", () => {
     ])
   })
 
+  it("warns at 80% when a settled review or a question's spend crosses it", async () => {
+    const settled = memoryDays()
+    await settleReview(settled.stores, { day: "2026-11-01", holder: "a", reserved: 0 }, 8_000, 0, 10_000)
+    const asked = memoryDays()
+    await addQuestion(asked.stores, 8_000, 10_000, LAST_MS_OF_NOV_1)
+    expect(events(logged).filter((line) => line.event === "budget.daily_warning")).toHaveLength(2)
+  })
+
   it("logs the 80% warning once", async () => {
     const days = memoryDays()
     await reserveReview(days.stores, "a", 8_000, 10_000, LAST_MS_OF_NOV_1)
@@ -89,7 +97,7 @@ describe("reserveReview and settleReview", () => {
 
   it("settles nothing for a review that started uncounted", async () => {
     const days = memoryDays()
-    await settleReview(days.stores, undefined, 2_014, 30)
+    await settleReview(days.stores, undefined, 2_014, 30, 200_000)
     expect(days.recordOf("2026-11-01").day).toEqual(EMPTY_DAY)
   })
 })
@@ -98,7 +106,7 @@ describe("questions", () => {
   it("has room until the day's spend reaches the cap, and adds a question's spend", async () => {
     const days = memoryDays()
     expect(await questionRoom(days.stores, 1_000, LAST_MS_OF_NOV_1)).toBe(true)
-    await addQuestion(days.stores, 1_000, LAST_MS_OF_NOV_1)
+    await addQuestion(days.stores, 1_000, 100_000, LAST_MS_OF_NOV_1)
     expect(days.recordOf("2026-11-01").day.spent).toBe(1_000)
     expect(await questionRoom(days.stores, 1_000, LAST_MS_OF_NOV_1)).toBe(false)
   })
@@ -109,8 +117,8 @@ describe("a ledger that can't be reached", () => {
     const stores = () => BROKEN
     expect(await reserveReview(stores, "a", 10_000, 200_000, LAST_MS_OF_NOV_1)).toEqual({ kind: "uncounted" })
     expect(await questionRoom(stores, 200_000, LAST_MS_OF_NOV_1)).toBe(true)
-    await settleReview(stores, { day: "2026-11-01", holder: "a", reserved: 10_000 }, 1, 0)
-    await addQuestion(stores, 1, LAST_MS_OF_NOV_1)
+    await settleReview(stores, { day: "2026-11-01", holder: "a", reserved: 10_000 }, 1, 0, 200_000)
+    await addQuestion(stores, 1, 200_000, LAST_MS_OF_NOV_1)
     expect(events(errors).map((line) => [line.event, line.when])).toEqual([
       ["budget.ledger_unreadable", "reserve"],
       ["budget.ledger_unreadable", "room"],
