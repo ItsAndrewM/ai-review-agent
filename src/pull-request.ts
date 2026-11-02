@@ -150,6 +150,7 @@ import {
   budgetResumeOf,
   BudgetSkipShown,
   budgetSkipShown,
+  carriesBudgetLine,
   QUESTION_BUDGET_REPLY,
   withBudgetLine,
   type BudgetResume,
@@ -2795,7 +2796,6 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<SummaryOutcome> {
     const reviewed = await this.readReviewed()
     const summary = await this.storeSummary(reviewed, answer, reviewable)
-    await this.ctx.storage.delete("budgetSkip")
     await this.upsertSummary(
       renderSummaryRun({
         botLogin: this.botLogin(),
@@ -3169,6 +3169,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const commentId = await this.findSummaryComment()
     const line = await this.shownPausedLine()
     const shown = line === undefined ? body : withPausedLine(body, line, this.botLogin())
+    if (!carriesBudgetLine(shown, this.botLogin())) await this.ctx.storage.delete("budgetSkip")
     if (commentId !== undefined) {
       try {
         await github.updateIssueComment(ref, commentId, shown)

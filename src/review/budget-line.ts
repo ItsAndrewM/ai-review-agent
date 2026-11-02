@@ -30,6 +30,10 @@ export function withBudgetLine(body: string, line: string, botLogin: string): st
   return withMarkedLine(body, line, budgetKind(botLogin), botLogin)
 }
 
+export function carriesBudgetLine(body: string, botLogin: string): boolean {
+  return body.includes(budgetMarkerOf(botLogin))
+}
+
 export function budgetSkipShown(stored: BudgetSkipShown | undefined, head: string, day: string): boolean {
   return stored?.head === head && stored.day === day
 }

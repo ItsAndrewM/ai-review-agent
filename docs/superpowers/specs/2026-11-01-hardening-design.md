@@ -217,8 +217,8 @@ Built inline from `docs/superpowers/plans/2026-11-01-daily-budget.md`, then revi
 - **Rollback:** the `v4` migration means `wrangler rollback` can't cross this deploy; the escape hatch is a redeploy with a very large `MAX_DAILY_NEURONS`.
 - **Review feedback on #211:**
   - The skip is remembered only once both the run and the line were shown, so a failed display is retried by the next sweep.
-  - A `summary` rewrite clears the record, so the next refusal puts the line back.
+  - Any summary rewrite that drops the ⏳ line (a post, a failure, an unposted or incomplete review, the `summary` command) clears the record in `upsertSummary`, so the next refusal puts the line back.
   - `settle` and `add` check the 80% crossing too.
   - A summary's spend is added even when its prompt throws.
   - The sweep line also names the tag as a fallback, since a head missed by the 00:00 sweep falls out of its one-day window.
-- **Deferred minors:** the budget line can outlive its head when the next exit doesn't rewrite the summary (`skipUnchanged`, a give-up, a settings skip); spend after `submit_review` and an aborted run's last tokens go unsettled; the 80% warning is checked only on reserve and room; `resume` past the cap says "reviewing" before the neutral run; a reserve that times out after applying leaks until midnight; the object-level tests wait on #188.
+- **Deferred minors:** the budget line can outlive its head when the next exit doesn't rewrite the summary (`skipUnchanged`, a give-up, a settings skip); spend after `submit_review` and an aborted run's last tokens go unsettled; `resume` past the cap says "reviewing" before the neutral run; a reserve that times out after applying leaks until midnight; the object-level tests wait on #188.

@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
 import { summaryMarkerOf } from "../src/names.ts"
-import { budgetLine, budgetSkipShown, QUESTION_BUDGET_REPLY, withBudgetLine } from "../src/review/budget-line.ts"
+import {
+  budgetLine,
+  budgetSkipShown,
+  carriesBudgetLine,
+  QUESTION_BUDGET_REPLY,
+  withBudgetLine,
+} from "../src/review/budget-line.ts"
 import { pausedLine, withPausedLine } from "../src/review/pause.ts"
 
 const summary = [
@@ -50,6 +56,14 @@ describe("withBudgetLine", () => {
 
   it("leaves a body that isn't the summary comment alone", () => {
     expect(withBudgetLine("some other comment", line, "andabot")).toBe("some other comment")
+  })
+})
+
+describe("carriesBudgetLine", () => {
+  it("tells a summary that still shows the ⏳ line from a rewrite that dropped it", () => {
+    expect(carriesBudgetLine(withBudgetLine(summary, line, "andabot"), "andabot")).toBe(true)
+    expect(carriesBudgetLine(summary, "andabot")).toBe(false)
+    expect(carriesBudgetLine(withBudgetLine(summary, line, "andabot"), "andabot-staging")).toBe(false)
   })
 })
 
