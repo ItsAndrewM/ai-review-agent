@@ -61,6 +61,15 @@ export function approvalBody(headSha: string): string {
   return `Approved at \`${headSha.slice(0, 7)}\`: none of my blocking threads is open, and the checks pass. A human review is still required to merge.`
 }
 
+export function overriddenApprovalBody(headSha: string, by: string): string {
+  return `Approved at \`${headSha.slice(0, 7)}\` on request by @${by}, past my open blocking threads and the reasons my review gave. A human review is still required to merge.`
+}
+
+export function withOverriddenVerdict(body: string, headSha: string, by: string, botLogin: string): string | undefined {
+  if (!body.startsWith(summaryMarkerOf(botLogin)) || !VERDICT_SEGMENT.test(body)) return undefined
+  return body.replace(VERDICT_SEGMENT, `**Verdict:** Approved at \`${headSha.slice(0, 7)}\` on request by @${by}`)
+}
+
 export function withApprovedVerdict(body: string, headSha: string, botLogin: string): string | undefined {
   if (!body.startsWith(summaryMarkerOf(botLogin)) || !VERDICT_SEGMENT.test(body)) return undefined
   return body.replace(VERDICT_SEGMENT, `**Verdict:** Approved at \`${headSha.slice(0, 7)}\``)

@@ -121,6 +121,13 @@ describe("postedEarlierCheckRun", () => {
   })
 })
 
+describe("approvedCheckRun on request", () => {
+  it("titles the run with who asked for the approval", () => {
+    const posted = { counts: countOf(["blocking"]) }
+    expect(approvedCheckRun(posted, undefined, at, "andrew").output.title).toBe("Approved on request by @andrew")
+  })
+})
+
 describe("approvedCheckRun", () => {
   it("retitles the run as approved with the review's counts and points Details at the summary comment", () => {
     const posted = { counts: countOf(["suggestion", "nitpick", "nitpick"]) }
