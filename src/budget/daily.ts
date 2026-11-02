@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox"
 import { errorText, logError } from "../log.ts"
+import type { PullRequestKey } from "../records.ts"
 import type { ReserveAnswer, RoomAnswer } from "./day-account.ts"
 import { utcDay } from "./ledger.ts"
 
@@ -19,6 +20,10 @@ export const LedgerRef = Type.Object({
 })
 
 export type LedgerRef = Static<typeof LedgerRef>
+
+export function ledgerHolder(key: Pick<PullRequestKey, "owner" | "repo" | "number">, deliveryId: string): string {
+  return `${key.owner}/${key.repo}#${key.number}:${deliveryId}`
+}
 
 export type ReviewReservation =
   | { kind: "granted"; ledger: LedgerRef }

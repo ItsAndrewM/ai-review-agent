@@ -3,6 +3,7 @@ import { Value } from "typebox/value"
 import { describe, expect, it } from "vitest"
 import {
   callsByModel,
+  neuronsOfSpend,
   neuronsSince,
   ReviewSpend,
   reviewSpend,
@@ -51,6 +52,15 @@ function spend(overrides: Partial<ModelSpend>): ModelSpend {
     ...overrides,
   }
 }
+
+describe("neuronsOfSpend", () => {
+  it("turns a review's priced spend into neurons and counts an unpriced model as nothing", () => {
+    const priced = spend({ usd: 0.022 })
+    const unpriced = spend({ model: "free", usd: 0, priced: false })
+    expect(neuronsOfSpend([priced, unpriced])).toBeCloseTo(2_000, 6)
+    expect(neuronsOfSpend([])).toBe(0)
+  })
+})
 
 describe("usageTotals", () => {
   it("keeps the counters pi's ledger records per model, with the cost as dollars", () => {

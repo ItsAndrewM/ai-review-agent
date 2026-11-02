@@ -189,6 +189,15 @@ export function spendFields(spend: ReviewSpend | undefined): LogFields {
   return { ...fields, neurons: Math.round(neuronsOf(totals.usd) * 10) / 10, usd: totals.usd }
 }
 
+export function neuronsOfSpend(spend: ReviewSpend): number {
+  return neuronsOf(
+    sum(
+      spend.filter((model) => model.priced),
+      (model) => model.usd,
+    ),
+  )
+}
+
 function isUnpriced(spend: ModelSpend): boolean {
   return tokensOf(spend) > 0 && !spend.priced
 }

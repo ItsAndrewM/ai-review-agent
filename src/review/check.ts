@@ -90,12 +90,29 @@ export function gaveUpCheckRun(headSha: string, botLogin: string, completedAt: n
   return completedCheckRun("neutral", output, undefined, completedAt)
 }
 
+export function dailyBudgetCheckRunStart(
+  start: Omit<CheckRunStart, "fileCount" | "model">,
+  botLogin: string,
+): CreateCheckRun {
+  return {
+    name: start.name,
+    head_sha: start.headSha,
+    status: "in_progress",
+    external_id: start.deliveryId,
+    started_at: isoSeconds(start.startedAt),
+    output: dailyBudgetOutput(start.headSha, botLogin),
+  }
+}
+
 export function dailyBudgetCheckRun(headSha: string, botLogin: string, completedAt: number): UpdateCheckRun {
-  const output = checkOutput(
+  return completedCheckRun("neutral", dailyBudgetOutput(headSha, botLogin), undefined, completedAt)
+}
+
+function dailyBudgetOutput(headSha: string, botLogin: string): CheckRunOutput {
+  return checkOutput(
     "Daily review budget spent",
     `This deploy's daily model budget is spent. \`${shortSha(headSha)}\` is reviewed after midnight UTC, or comment \`@${botLogin} review\` then.`,
   )
-  return completedCheckRun("neutral", output, undefined, completedAt)
 }
 
 export function supersededCheckRun(newHeadSha: string, completedAt: number): UpdateCheckRun {

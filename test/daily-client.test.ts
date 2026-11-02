@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest"
-import { addQuestion, questionRoom, reserveReview, settleReview, type DayStore } from "../src/budget/daily.ts"
+import {
+  addQuestion,
+  ledgerHolder,
+  questionRoom,
+  reserveReview,
+  settleReview,
+  type DayStore,
+} from "../src/budget/daily.ts"
 import { DayAccount, type DayRecord } from "../src/budget/day-account.ts"
 import { EMPTY_DAY, type DayLedger } from "../src/budget/ledger.ts"
 
@@ -110,5 +117,11 @@ describe("a ledger that can't be reached", () => {
       ["budget.ledger_unreadable", "settle"],
       ["budget.ledger_unreadable", "add"],
     ])
+  })
+})
+
+describe("ledgerHolder", () => {
+  it("names the repository, pull request and delivery, so two deliveries hold two reservations", () => {
+    expect(ledgerHolder({ owner: "o", repo: "r", number: 7 }, "abc")).toBe("o/r#7:abc")
   })
 })

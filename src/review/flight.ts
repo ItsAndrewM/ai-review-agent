@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox"
+import { LedgerRef } from "../budget/daily.ts"
 import { isTransient } from "../github/errors.ts"
 import { UsageTotals } from "./cost.ts"
 
@@ -27,6 +28,7 @@ export const StoredPending = Type.Object({
   docs: Type.Optional(Type.Array(Type.String())),
   sweepRestarted: Type.Optional(Type.Boolean()),
   sweep: Type.Optional(Type.Union([Type.Literal("started"), Type.Literal("restarted")])),
+  ledger: Type.Optional(LedgerRef),
 })
 
 export type StoredPending = Static<typeof StoredPending>

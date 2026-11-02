@@ -4,6 +4,7 @@ import {
   checkRunTitle,
   failedCheckRun,
   dailyBudgetCheckRun,
+  dailyBudgetCheckRunStart,
   gaveUpCheckRun,
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
@@ -271,6 +272,25 @@ describe("failedCheckRun", () => {
       output: { title: "Review did not complete", summary: "timeout: the model did not answer" },
     })
     expect(failedCheckRun("x", "https://example.test", at).details_url).toBe("https://example.test")
+  })
+})
+
+describe("dailyBudgetCheckRunStart", () => {
+  it("opens the run with the budget's title, so it never reads as a review in progress", () => {
+    expect(
+      dailyBudgetCheckRunStart({ name: "andabot", headSha: "abcdef1234", deliveryId: "d1", startedAt: at }, "andabot"),
+    ).toEqual({
+      name: "andabot",
+      head_sha: "abcdef1234",
+      status: "in_progress",
+      external_id: "d1",
+      started_at: "2026-10-17T20:36:38Z",
+      output: {
+        title: "Daily review budget spent",
+        summary:
+          "This deploy's daily model budget is spent. `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then.",
+      },
+    })
   })
 })
 
