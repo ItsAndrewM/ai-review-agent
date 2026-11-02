@@ -212,7 +212,7 @@ Built inline from `docs/superpowers/plans/2026-11-01-daily-budget.md`, then revi
 - **The paused line's insert and remove are shared** (`src/review/summary-lines.ts`) by the paused and budget lines.
 - **A refused `full review` keeps the head's record.** `posted:<sha>` is deleted only once a full review is granted, not before the reservation.
 - **`summary` keeps working but is counted** (Q1 named it among the commands that keep working; it calls the model, so its spend is added to the day like a question's).
-- **A tagged refusal doesn't promise the sweep.** The sweep reviews only what a push would, so a refused tag's line and check run say to comment `@<login> review` after midnight; a refused push or sweep keeps "is reviewed after midnight UTC".
+- **A tagged refusal doesn't promise the sweep.** The sweep reviews only what a push would, so a refused tag's line and check run say to comment `@<login> review` after midnight; a refused push or sweep says "is reviewed after midnight UTC, or comment `@<login> review` then".
 - **The budget check run is created completed in one request**, so a failed second request can't leave a run in progress on a required check.
 - **Rollback:** the `v4` migration means `wrangler rollback` can't cross this deploy; the escape hatch is a redeploy with a very large `MAX_DAILY_NEURONS`.
 - **Review feedback on #211:**
