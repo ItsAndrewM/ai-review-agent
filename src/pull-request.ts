@@ -143,7 +143,11 @@ import {
   type ChecksState,
   type WaitReason,
   type WorkflowState,
+  ApprovalOverride,
+  overrideFor,
+  overridesJudgment,
 } from "./review/approval.ts"
+import { approveReply, approveStep, overrideReply, type ApproveFacts } from "./review/approve.ts"
 import type { BasisContext } from "./review/basis.ts"
 import {
   budgetLine,
@@ -317,6 +321,8 @@ import {
   reviewEventOf,
   summaryCommentId,
   withApprovedVerdict,
+  withOverriddenVerdict,
+  overriddenApprovalBody,
   type Coverage,
   type RetryOutcome,
   type Verdict,
@@ -528,6 +534,7 @@ interface ApprovalContext {
   head: string
   trigger: ApprovalTrigger
   delivery: string | undefined
+  override?: string
 }
 
 interface SpentReview {
@@ -1576,7 +1583,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (reservation.kind === "refused") return this.skipForBudget(pr, incoming, reservation)
     if (incoming.full) await this.ctx.storage.delete(`posted:${pr.head.sha}`)
     const started = Date.now()
-    await this.ctx.storage.delete("decided")
+    await this.ctx.storage.delete(["decided", "approvalOverride"])
     const run = {
       operationId: `review:${incoming.deliveryId}`,
       deliveryId: incoming.deliveryId,
@@ -2450,6 +2457,9 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       case "resolve":
         await this.resolve(call)
         return
+      case "approve":
+        await this.approveOnRequest(call)
+        return
       case "summary":
         await this.summarize(call)
         return
@@ -2462,6 +2472,40 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (skipped === undefined) return
     const text = skippedReviewText(skipped, pr.head.sha, this.botLogin())
     if (text !== undefined) await this.respond(call.github, call.key, call.incoming, text)
+  }
+
+  private async approveOnRequest(call: CommandCall): Promise<void> {
+    const pr = await this.freshPullRequest()
+    const step = approveStep(await this.approveFacts(call, pr))
+    log("command.approve", { number: pr.number, author: call.incoming.author, head: shortSha(pr.head.sha), step })
+    if (step !== "override") {
+      await this.respond(call.github, call.key, call.incoming, approveReply(step, pr.head.sha, this.botLogin()))
+      return
+    }
+    const override: ApprovalOverride = { head: pr.head.sha, by: call.incoming.author, at: Date.now() }
+    await this.ctx.storage.put<ApprovalOverride>("approvalOverride", override)
+    const { outcome } = await this.evaluateWithRecheck("approve", call.incoming.deliveryId, 0)
+    await this.respond(call.github, call.key, call.incoming, overrideReply(outcome, pr.head.sha, this.botLogin()))
+  }
+
+  private async approveFacts(call: CommandCall, pr: PullRequestInfo): Promise<ApproveFacts> {
+    const read = await this.repositoryConfig(pr)
+    const lastReview = await this.readLastReview()
+    const { approve } = read.config.reviews
+    return {
+      inThread: call.incoming.thread !== undefined,
+      enabled: approve.enabled,
+      allowAuthor: approve.allow_author,
+      commenter: call.incoming.author,
+      author: pr.user.login,
+      workflow: await evaluationWorkflow(lastReview, async () => read, this.env.REQUEST_CHANGES_WORKFLOW),
+      open: pr.state === "open" && pr.draft !== true,
+      paused: await this.isPaused(),
+      reviewRunning: (await this.readPending()) !== undefined,
+      reviewedHead: (await this.readReviewed())?.headSha,
+      lastReview,
+      head: pr.head.sha,
+    }
   }
 
   private async pause(call: CommandCall): Promise<void> {
@@ -2881,8 +2925,11 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
   ): Promise<ApprovalOutcome> {
     try {
       const pr = await this.currentPullRequest()
-      const decision = decideApproval(await this.approvalState(pr, resolved))
-      const context = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
+      const state = await this.approvalState(pr, resolved)
+      const decision = decideApproval(state)
+      const context: ApprovalContext = { number: pr.number, head: shortSha(pr.head.sha), trigger, delivery: deliveryId }
+      const override = overridesJudgment(state) ? await this.overrideOn(pr.head.sha) : undefined
+      if (override !== undefined) context.override = override.by
       if (decision.kind === "wait" && decision.reason === "approved") await this.reconcileApproval()
       if (decision.kind === "wait") return waited(context, decision.reason)
       return await this.approve(pr.head.sha, context)
@@ -2927,7 +2974,13 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
       lastReview,
       openBlocking: openBlockingIn(await this.threadPlan(pr, "fresh", new Map<string, MarkedLines>(), []), resolved),
       checks: await this.checksOn(pr.head.sha),
+      override: (await this.overrideOn(pr.head.sha)) !== undefined,
     }
+  }
+
+  private async overrideOn(head: string): Promise<ApprovalOverride | undefined> {
+    const stored = await this.ctx.storage.get("approvalOverride")
+    return overrideFor(Value.Check(ApprovalOverride, stored) ? stored : undefined, head)
   }
 
   private async isPaused(): Promise<boolean> {
@@ -2968,15 +3021,15 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     ).createReview(key, key.number, {
       commit_id: head,
       event: "APPROVE",
-      body: approvalBody(head),
+      body: context.override === undefined ? approvalBody(head) : overriddenApprovalBody(head, context.override),
       comments: [],
     })
     await this.ctx.storage.put<LastReview>(
       "lastReview",
-      approvalRecord(await this.readLastReview(), review.id, head, Date.now()),
+      approvalRecord(await this.readLastReview(), review.id, head, Date.now(), context.override),
     )
-    await this.rewriteSummaryVerdict(head)
-    await this.markPostedApproved(head)
+    await this.rewriteSummaryVerdict(head, context.override)
+    await this.markPostedApproved(head, context.override)
     log("approval.posted", { ...context, review: review.id })
     return { kind: "approved", head }
   }
@@ -2986,7 +3039,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (last?.event === "APPROVE") await this.markPostedApproved(last.headSha)
   }
 
-  private async markPostedApproved(head: string): Promise<void> {
+  private async markPostedApproved(head: string, by?: string): Promise<void> {
     const stored = await this.ctx.storage.get(`posted:${head}`)
     if (!Value.Check(PostedReview, stored)) return
     const posted = approvedPostedIfNeeded(stored)
@@ -2995,7 +3048,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     if (posted.checkRunId === undefined) return
     try {
       const key = await this.key()
-      const update = approvedCheckRun(posted, await this.summaryCommentUrl(), Date.now())
+      const update = approvedCheckRun(posted, await this.summaryCommentUrl(), Date.now(), by)
       await (await this.github()).updateCheckRun(key, posted.checkRunId, update)
     } catch (error) {
       logError("approval.check_run_failed", {
@@ -3006,14 +3059,17 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     }
   }
 
-  private async rewriteSummaryVerdict(headSha: string): Promise<void> {
+  private async rewriteSummaryVerdict(headSha: string, by?: string): Promise<void> {
     try {
       const commentId = await this.summaryCommentId()
       if (commentId === undefined) return
       const key = await this.key()
       const github = await this.github()
       const comment = await github.getIssueComment(key, commentId)
-      const body = withApprovedVerdict(comment.body ?? "", headSha, this.botLogin())
+      const body =
+        by === undefined
+          ? withApprovedVerdict(comment.body ?? "", headSha, this.botLogin())
+          : withOverriddenVerdict(comment.body ?? "", headSha, by, this.botLogin())
       if (body !== undefined) await github.updateIssueComment(key, commentId, body)
     } catch (error) {
       logError("approval.summary_failed", { head: shortSha(headSha), error: errorText(error) })

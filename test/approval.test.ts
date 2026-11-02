@@ -19,6 +19,8 @@ import {
   nextRecheck,
   retriesAtDoor,
   openBlockingIn,
+  overrideFor,
+  overridesJudgment,
   ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
@@ -46,6 +48,7 @@ const ready: ApprovalState = {
   lastReview: requested,
   openBlocking: 0,
   checks: "passing",
+  override: false,
 }
 
 function outcome(state: ApprovalState): string {
@@ -514,6 +517,11 @@ describe("nextRecheck", () => {
     expect(nextRecheck("recheck", pending, 3)).toBeUndefined()
   })
 
+  it("re-checks an approve whose evaluation still reads the checks as pending, so a stale read can't strand it", () => {
+    expect(nextRecheck("approve", pending, 0)).toEqual({ attempt: 1, inMs: 20_000 })
+    expect(nextRecheck("approve", { kind: "wait", reason: "review_stands" }, 0)).toBeUndefined()
+  })
+
   it("re-checks while the review is in flight, when a read fails and when the evaluation throws", () => {
     for (const reason of ["review_in_flight", "checks_unknown", "threads_unknown", "workflow_unknown"] as const) {
       expect(nextRecheck("checks_completed", { kind: "wait", reason }, 0)).toEqual({ attempt: 1, inMs: 20_000 })
@@ -586,5 +594,58 @@ describe("retriesAtDoor", () => {
     expect(retriesAtDoor({ kind: "failed", transient: false }, undefined)).toBe(false)
     expect(retriesAtDoor({ kind: "wait", reason: "checks_pending" }, undefined)).toBe(false)
     expect(retriesAtDoor({ kind: "approved", head: "abc" }, undefined)).toBe(false)
+  })
+})
+
+describe("decideApproval with an override for the head", () => {
+  const withheld: LastReview = { ...requested, event: "COMMENT", verdict: "approve", withheld: 2 }
+  const heldBack: LastReview = { ...requested, heldBack: 1 }
+  const overridden = { ...ready, override: true }
+
+  it.each([
+    ["open blocking threads", { openBlocking: 2 }],
+    ["threads it couldn't read", { openBlocking: "unknown" as const }],
+    ["a review that withheld approval", { lastReview: withheld }],
+    ["a review that held a blocking finding back", { lastReview: heldBack }],
+  ])("approves past %s", (_name, state) => {
+    expect(outcome({ ...ready, ...state })).not.toBe("approve")
+    expect(outcome({ ...overridden, ...state })).toBe("approve")
+  })
+
+  it.each([
+    ["checks_pending", { checks: "pending" as const }],
+    ["checks_failing", { checks: "failing" as const }],
+    ["checks_unknown", { checks: "unknown" as const }],
+    ["review_in_flight", { reviewInFlight: true }],
+    ["not_reviewed", { reviewedHead: "aaa" }],
+    ["paused", { paused: true }],
+    ["workflow_off", { workflow: false }],
+    ["not_open", { open: false }],
+    ["no_record", { lastReview: undefined }],
+    ["approved", { lastReview: { ...requested, event: "APPROVE" as const } }],
+  ])("still waits as %s", (reason, state) => {
+    expect(outcome({ ...overridden, openBlocking: 3, ...state })).toBe(reason)
+  })
+})
+
+describe("overrideFor", () => {
+  const stored = { head: "bbb", by: "andrew", at: 1 }
+
+  it("holds only for the head it was given on, so a push needs a new approve", () => {
+    expect(overrideFor(stored, "bbb")).toEqual(stored)
+    expect(overrideFor(stored, "ccc")).toBeUndefined()
+    expect(overrideFor(undefined, "bbb")).toBeUndefined()
+  })
+})
+
+describe("overridesJudgment", () => {
+  const overridden = { ...ready, override: true }
+
+  it("is true only when the override is what let the approval through", () => {
+    expect(overridesJudgment({ ...overridden, openBlocking: 1 })).toBe(true)
+    expect(overridesJudgment({ ...overridden, openBlocking: "unknown" })).toBe(true)
+    expect(overridesJudgment({ ...overridden, lastReview: { ...requested, heldBack: 1 } })).toBe(true)
+    expect(overridesJudgment(overridden)).toBe(false)
+    expect(overridesJudgment({ ...ready, openBlocking: 1 })).toBe(false)
   })
 })

@@ -104,9 +104,13 @@ export function recordedVerdict(
 }
 
 function lastReviewLabel(last: LastReview, headSha: string): string {
-  if (approvedByEvaluation(last)) return atHead(VERDICT_LABEL.APPROVE, last.headSha)
+  if (approvedByEvaluation(last)) return requestedByLabel(atHead(VERDICT_LABEL.APPROVE, last.headSha), last.requestedBy)
   const label = VERDICT_LABEL[last.shown ?? last.event]
   return last.headSha === headSha ? label : atHead(label, last.headSha)
+}
+
+function requestedByLabel(label: string, requestedBy: string | undefined): string {
+  return requestedBy === undefined ? label : `${label} on request by @${requestedBy}`
 }
 
 function approvedByEvaluation(last: LastReview): boolean {

@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest"
 import { helpText, parseCommand, skippedReviewText } from "../src/commands.ts"
 
+describe("approve", () => {
+  it("parses as the approve command and is listed in help", () => {
+    expect(parseCommand("@andabot approve", "andabot")).toEqual({ kind: "approve" })
+    expect(helpText("andabot")).toContain("`@andabot approve`")
+  })
+})
+
 describe("skippedReviewText", () => {
   it("says a tagged review waits for midnight UTC once the day's budget is spent", () => {
     expect(skippedReviewText("daily_budget", "abcdef1234", "andabot")).toBe(
@@ -53,12 +60,13 @@ describe("helpText", () => {
     )
   })
 
-  it("lists all seven commands, one line each", () => {
+  it("lists all eight commands, one line each", () => {
     const lines = helpText("andabot").split("\n")
-    expect(lines.filter((line) => line.startsWith("- `@andabot"))).toHaveLength(7)
+    expect(lines.filter((line) => line.startsWith("- `@andabot"))).toHaveLength(8)
     for (const line of [
       "- `@andabot summary`: rewrite the summary comment for the current head, without a review.",
       "- `@andabot resolve`: resolve all my open threads, or only this one when you reply in one of my threads, then check whether I can approve.",
+      "- `@andabot approve`: approve this head past my open threads and the reasons my review gave, once the other checks pass. Holds for this head until my next review.",
       "- `@andabot pause`: stop reviewing pushes until `@andabot resume`. Commands keep working.",
       "- `@andabot resume`: review pushes again, starting with the current head if it has no review yet.",
     ]) {

@@ -33,6 +33,8 @@ import {
   reviewEventOf,
   summaryCommentId,
   withApprovedVerdict,
+  withOverriddenVerdict,
+  overriddenApprovalBody,
   MOST_CHECK_TAIL_BLOCKS,
   VERDICT_LABEL,
   type ChecksDisplay,
@@ -1713,6 +1715,32 @@ describe("renderReviewBody when approval waits for the checks", () => {
     expect(renderReviewBody("AWAITING_CHECKS", [finding({ severity: "suggestion" })], [])).toBe(
       "1 suggestion. Blocking findings are marked 🔴 and gate approval; the others don't. I'll approve once the head's checks pass.",
     )
+  })
+})
+
+describe("approval on request", () => {
+  const requested = renderSummaryComment({
+    botLogin: "andabot",
+    headSha: "0123456789abcdef",
+    event: "REQUEST_CHANGES",
+    submission: base,
+    accepted: [finding()],
+    droppedCount: 0,
+    linkedIssues: [],
+    instructionFiles: [],
+  })
+
+  it("says who asked and what it overrode in the approving review", () => {
+    expect(overriddenApprovalBody("0123456789abcdef", "andrew")).toBe(
+      "Approved at `0123456` on request by @andrew, past my open blocking threads and the reasons my review gave. A human review is still required to merge.",
+    )
+  })
+
+  it("names the requester in the summary's verdict and keeps the counts", () => {
+    expect(withOverriddenVerdict(requested, "0123456789abcdef", "andrew", "andabot")).toContain(
+      "**Verdict:** Approved at `0123456` on request by @andrew · 🔴 1 blocking",
+    )
+    expect(withOverriddenVerdict("not the summary", "0123456789abcdef", "andrew", "andabot")).toBeUndefined()
   })
 })
 

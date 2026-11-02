@@ -202,6 +202,14 @@ describe("recordedVerdict", () => {
     })
   })
 
+  it("keeps who asked when the evaluation's approval was on request", () => {
+    const approval = approvalRecord(requestedChanges, 2, head, 1, "andrew")
+    expect(recordedVerdict(approval, stored, head)).toStrictEqual({
+      label: "Approved at `def5678` on request by @andrew",
+      counts,
+    })
+  })
+
   it("shows a review's own approval as approved, with or without the model verdict older records kept", () => {
     const own = {
       reviewId: 3,

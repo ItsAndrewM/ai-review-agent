@@ -19,6 +19,7 @@ export const LastReview = Type.Object({
   withheld: Type.Optional(Type.Integer()),
   at: Type.Integer(),
   requestChangesWorkflow: Type.Optional(Type.Boolean()),
+  requestedBy: Type.Optional(Type.String()),
 })
 
 export type LastReview = Static<typeof LastReview>
@@ -29,7 +30,14 @@ export type WorkflowState = boolean | "unknown"
 
 export type WebhookTrigger = "thread_resolved" | "thread_unresolved" | "checks_completed"
 
-export type ApprovalTrigger = WebhookTrigger | "review" | "already_reviewed" | "resolve" | "resume" | "recheck"
+export type ApprovalTrigger =
+  | WebhookTrigger
+  | "review"
+  | "already_reviewed"
+  | "resolve"
+  | "resume"
+  | "recheck"
+  | "approve"
 
 export type DecidedWait =
   | "workflow_unknown"
@@ -66,6 +74,7 @@ export interface ApprovalState {
   lastReview: LastReview | undefined
   openBlocking: number | "unknown"
   checks: ChecksState
+  override: boolean
 }
 
 export interface ReviewFacts {
@@ -93,8 +102,22 @@ export interface PullRequestStanding {
 
 const PASSING_CONCLUSIONS = new Set(["success", "neutral", "skipped"])
 
+export const ApprovalOverride = Type.Object({ head: Type.String(), by: Type.String(), at: Type.Integer() })
+
+export type ApprovalOverride = Static<typeof ApprovalOverride>
+
+export function overrideFor(stored: ApprovalOverride | undefined, head: string): ApprovalOverride | undefined {
+  return stored?.head === head ? stored : undefined
+}
+
+export function overridesJudgment(state: ApprovalState): boolean {
+  if (!state.override) return false
+  const stands = state.lastReview !== undefined && !awaitsApproval(state.lastReview)
+  return stands || state.openBlocking !== 0
+}
+
 export function decideApproval(state: ApprovalState): ApprovalDecision {
-  const reason = pullRequestWait(state) ?? recordWait(state.lastReview) ?? liveStateWait(state)
+  const reason = pullRequestWait(state) ?? recordWait(state.lastReview, state.override) ?? liveStateWait(state)
   return reason === undefined ? { kind: "approve" } : { kind: "wait", reason }
 }
 
@@ -108,14 +131,15 @@ function pullRequestWait(state: ApprovalState): DecidedWait | undefined {
   return undefined
 }
 
-function recordWait(last: LastReview | undefined): DecidedWait | undefined {
+function recordWait(last: LastReview | undefined, override: boolean): DecidedWait | undefined {
   if (last === undefined) return "no_record"
   if (last.event === "APPROVE") return "approved"
-  if (!awaitsApproval(last)) return "review_stands"
+  if (!override && !awaitsApproval(last)) return "review_stands"
   return undefined
 }
 
 function liveStateWait(state: ApprovalState): DecidedWait | undefined {
+  if (state.override) return checksWait(state.checks)
   if (state.openBlocking === "unknown") return "threads_unknown"
   if (state.openBlocking > 0) return "blocking_threads"
   return checksWait(state.checks)
@@ -190,8 +214,10 @@ export function approvalRecord(
   reviewId: number,
   headSha: string,
   at: number,
+  requestedBy?: string,
 ): LastReview {
-  const approved = evaluatedApprovalOf({ reviewId, headSha, at })
+  const evaluated = evaluatedApprovalOf({ reviewId, headSha, at })
+  const approved = requestedBy === undefined ? evaluated : { ...evaluated, requestedBy }
   return previous?.counts === undefined ? approved : { ...approved, counts: previous.counts }
 }
 
@@ -235,6 +261,8 @@ export interface Recheck {
 
 const RECHECK_DELAYS_MS = [20_000, 60_000, 300_000]
 
+const RECHECKED_TRIGGERS = new Set<ApprovalTrigger>(["checks_completed", "recheck", "approve"])
+
 const UNSETTLED_WAITS = new Set<WaitReason>([
   "review_in_flight",
   "checks_pending",
@@ -244,7 +272,7 @@ const UNSETTLED_WAITS = new Set<WaitReason>([
 ])
 
 export function nextRecheck(trigger: ApprovalTrigger, outcome: ApprovalOutcome, attempt: number): Recheck | undefined {
-  if (trigger !== "checks_completed" && trigger !== "recheck") return undefined
+  if (!RECHECKED_TRIGGERS.has(trigger)) return undefined
   if (outcome.kind === "approved" || (outcome.kind === "wait" && !UNSETTLED_WAITS.has(outcome.reason))) return undefined
   const inMs = RECHECK_DELAYS_MS[attempt]
   return inMs === undefined ? undefined : { attempt: attempt + 1, inMs }

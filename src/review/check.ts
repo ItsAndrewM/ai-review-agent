@@ -78,11 +78,10 @@ export function approvedCheckRun(
   posted: Pick<PostedReview, "counts" | "unverified">,
   detailsUrl: string | undefined,
   completedAt: number,
+  by?: string,
 ): UpdateCheckRun {
-  const title = markedUnverified(
-    checkRunTitle("APPROVE", approvedCounts(posted.counts ?? NO_COUNTS)),
-    posted.unverified === true,
-  )
+  const plain = by === undefined ? checkRunTitle("APPROVE", approvedCounts(posted.counts ?? NO_COUNTS)) : undefined
+  const title = markedUnverified(plain ?? `Approved on request by @${by}`, posted.unverified === true)
   return completedCheckRun("success", checkOutput(title, APPROVED_SUMMARY), detailsUrl, completedAt)
 }
 
