@@ -23,7 +23,15 @@ import type { SkillContent, SkillResource, SkillSource } from "agents/skills"
 import { DurableObject } from "cloudflare:workers"
 import { Type } from "typebox"
 import { Value } from "typebox/value"
-import { ledgerHolder, reserveReview, settleReview, type DayStores, type ReviewReservation } from "./budget/daily.ts"
+import {
+  addQuestion,
+  ledgerHolder,
+  questionRoom,
+  reserveReview,
+  settleReview,
+  type DayStores,
+  type ReviewReservation,
+} from "./budget/daily.ts"
 import { dailyBudgetOf, reservationOf } from "./budget/ledger.ts"
 import { helpText, parseCommand, skippedReviewText, type Command, type ReviewSkip } from "./commands.ts"
 import { createAppJwt, fetchInstallationToken, InstallationToken } from "./github/app-auth.ts"
@@ -137,7 +145,13 @@ import {
   type WorkflowState,
 } from "./review/approval.ts"
 import type { BasisContext } from "./review/basis.ts"
-import { budgetLine, BudgetSkipShown, budgetSkipShown, withBudgetLine } from "./review/budget-line.ts"
+import {
+  budgetLine,
+  BudgetSkipShown,
+  budgetSkipShown,
+  QUESTION_BUDGET_REPLY,
+  withBudgetLine,
+} from "./review/budget-line.ts"
 import {
   budgetBlock,
   budgetNote,
@@ -172,6 +186,7 @@ import {
   usageTotals,
   type ReviewSpend,
   type UsageLedger,
+  type UsageTotals,
   neuronsOfSpend,
 } from "./review/cost.ts"
 import {
@@ -3024,7 +3039,14 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     text: string,
     thread: ReviewThread | undefined,
   ): Promise<void> {
+    if (!(await questionRoom(this.dayStores(), this.dailyCap(), Date.now()))) {
+      log("answer.skip", { reason: "daily_budget", number: key.number, delivery: incoming.deliveryId })
+      const answering = incoming.thread ? startAnswering(thread, this.botLogin(), incoming.deliveryId) : undefined
+      await this.#replyUnlessClosed(github, key, incoming, `@${incoming.author} ${QUESTION_BUDGET_REPLY}`, answering)
+      return
+    }
     this.#runs.start()
+    const usageBefore = await usageBaseline(this.usageLedger())
     try {
       await this.harness.session().setModel(this.reviewModel())
       const operationId = `chat:${incoming.deliveryId}`
@@ -3053,6 +3075,7 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     } finally {
       this.#answers.delete(incoming.deliveryId)
       await this.#runs.end(key.number, "answer_end")
+      await this.addQuestionSpend(usageBefore)
     }
   }
 
@@ -3294,6 +3317,16 @@ export class PullRequest extends DurableObject<Env> implements ReviewHost {
     const cap = this.dailyCap()
     const neurons = reservationOf(reviewBudgetOf(this.env.MAX_REVIEW_NEURONS), cap)
     return reserveReview(this.dayStores(), ledgerHolder(await this.key(), deliveryId), neurons, cap, Date.now())
+  }
+
+  private async addQuestionSpend(before: UsageTotals | undefined): Promise<void> {
+    if (before === undefined) return
+    try {
+      const neurons = neuronsSince(before, usageTotals(await this.usageLedger().usage())) ?? 0
+      await addQuestion(this.dayStores(), neurons, Date.now())
+    } catch (error) {
+      logError("answer.usage_unreadable", { error: errorText(error) })
+    }
   }
 
   private async settleLedger(pending: PendingReview): Promise<void> {
