@@ -3,6 +3,7 @@ import {
   approvedCheckRun,
   checkRunTitle,
   failedCheckRun,
+  dailyBudgetCheckRun,
   gaveUpCheckRun,
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
@@ -270,6 +271,20 @@ describe("failedCheckRun", () => {
       output: { title: "Review did not complete", summary: "timeout: the model did not answer" },
     })
     expect(failedCheckRun("x", "https://example.test", at).details_url).toBe("https://example.test")
+  })
+})
+
+describe("dailyBudgetCheckRun", () => {
+  it("completes as neutral, naming the head, when it is reviewed and the command for it", () => {
+    expect(dailyBudgetCheckRun("abcdef1234", "andabot", at)).toEqual({
+      conclusion: "neutral",
+      completed_at: "2026-10-17T20:36:38Z",
+      output: {
+        title: "Daily review budget spent",
+        summary:
+          "This deploy's daily model budget is spent. `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then.",
+      },
+    })
   })
 })
 

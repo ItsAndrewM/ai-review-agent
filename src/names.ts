@@ -6,6 +6,8 @@ export const summaryMarkerOf = (login: string): string => `<!-- ${login}:summary
 
 export const pausedMarkerOf = (login: string): string => `<!-- ${login}:paused -->`
 
+export const budgetMarkerOf = (login: string): string => `<!-- ${login}:budget -->`
+
 export interface ClosesMarkers {
   readonly start: string
   readonly end: string
