@@ -15,19 +15,25 @@ const PathInstructionEntry = Type.Object(
   { additionalProperties: false },
 )
 
-const Reviews = Type.Object(
-  {
-    auto: Type.Boolean(),
-    drafts: Type.Boolean(),
-    base_branches: Type.Array(Type.String()),
-    ignore_title_keywords: Type.Array(Type.String()),
-    request_changes_workflow: Type.Optional(Type.Boolean()),
-    verify: Type.Boolean(),
-    sandbox: Type.Boolean(),
-    path_filters: Type.Array(Type.String({ pattern: "^!" })),
-    docs: Type.Array(Type.String({ minLength: 1 })),
-    path_instructions: Type.Array(PathInstructionEntry),
-  },
+const Approve = Type.Object({ enabled: Type.Boolean(), allow_author: Type.Boolean() }, { additionalProperties: false })
+
+const reviewFields = {
+  auto: Type.Boolean(),
+  drafts: Type.Boolean(),
+  base_branches: Type.Array(Type.String()),
+  ignore_title_keywords: Type.Array(Type.String()),
+  request_changes_workflow: Type.Optional(Type.Boolean()),
+  verify: Type.Boolean(),
+  sandbox: Type.Boolean(),
+  path_filters: Type.Array(Type.String({ pattern: "^!" })),
+  docs: Type.Array(Type.String({ minLength: 1 })),
+  path_instructions: Type.Array(PathInstructionEntry),
+}
+
+const Reviews = Type.Object({ ...reviewFields, approve: Approve }, { additionalProperties: false })
+
+const ReviewsFile = Type.Partial(
+  Type.Object({ ...reviewFields, approve: Type.Partial(Approve, { additionalProperties: false }) }),
   { additionalProperties: false },
 )
 
@@ -52,7 +58,7 @@ export type AndabotConfig = Static<typeof AndabotConfig>
 
 const AndabotConfigFile = Type.Object(
   {
-    reviews: Type.Optional(Type.Partial(Reviews, { additionalProperties: false })),
+    reviews: Type.Optional(ReviewsFile),
     model: Type.Optional(Model),
     checks: Type.Optional(CheckTemplates),
   },
@@ -127,6 +133,7 @@ export const DEFAULT_CONFIG: AndabotConfig = {
     path_filters: [],
     docs: [...DEFAULT_DOC_GLOBS],
     path_instructions: [],
+    approve: { enabled: true, allow_author: false },
   },
 }
 
@@ -165,7 +172,10 @@ const schemaProblem = ([first]: readonly TLocalizedValidationError[]): string =>
   `${first?.instancePath || "/"} ${first?.message ?? "is invalid"}`
 
 const withDefaults = ({ reviews, model, checks }: AndabotConfigFile, auto: boolean): AndabotConfig => {
-  const config: AndabotConfig = { reviews: { ...defaults(auto).reviews, ...reviews } }
+  const base = defaults(auto).reviews
+  const config: AndabotConfig = {
+    reviews: { ...base, ...reviews, approve: { ...base.approve, ...reviews?.approve } },
+  }
   if (model?.verify !== undefined) config.model = { verify: model.verify }
   if (checks !== undefined) config.checks = checks
   return config

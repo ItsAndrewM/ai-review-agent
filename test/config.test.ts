@@ -59,6 +59,9 @@ const FULL_FILE = [
   "      instructions: |",
   "        A migration must be reversible.",
   "        Name the rollback.",
+  "  approve:",
+  "    enabled: false",
+  "    allow_author: true",
   "model:",
   "  name: glm-5.3-flash",
   "  verify: '@cf/x/y'",
@@ -84,6 +87,7 @@ const FULL_CONFIG = {
       { path: "apps/web/**", instructions: "Use the design tokens, not raw colors." },
       { path: "**/*.sql", instructions: "A migration must be reversible.\nName the rollback.\n" },
     ],
+    approve: { enabled: false, allow_author: true },
   },
   model: { verify: "@cf/x/y" },
   checks: { lint: "pnpm oxlint {paths}", typecheck: "pnpm tsc --noEmit", test: "pnpm vitest run {paths}" },
@@ -100,6 +104,7 @@ const LITERAL_DEFAULTS = {
     path_filters: [],
     docs: [...DEFAULT_DOC_GLOBS],
     path_instructions: [],
+    approve: { enabled: true, allow_author: false },
   },
 }
 
@@ -198,6 +203,11 @@ describe("AndabotConfig", () => {
     expect(Value.Check(AndabotConfig, { reviews: BEFORE_VERIFY_REVIEWS })).toBe(false)
   })
 
+  it("refuses a config from before reviews.approve existed, so a record cached then reads as a miss", () => {
+    const { approve: _approve, ...beforeApprove } = LITERAL_DEFAULTS.reviews
+    expect(Value.Check(AndabotConfig, { reviews: beforeApprove })).toBe(false)
+  })
+
   it("takes a verify model, and refuses one that is not a non-empty string", () => {
     expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: { verify: "@cf/x/y" } })).toBe(true)
     expect(Value.Check(AndabotConfig, { ...LITERAL_DEFAULTS, model: {} })).toBe(true)
@@ -235,6 +245,7 @@ describe("parseConfig", () => {
           path_filters: ["!**/*.snap"],
           docs: [...DEFAULT_DOC_GLOBS],
           path_instructions: [],
+          approve: { enabled: true, allow_author: false },
         },
       },
       error: undefined,
@@ -796,5 +807,23 @@ describe("runSettings", () => {
       verifyModel: "m",
       configError: "Error: GitHub 502 : boom",
     })
+  })
+})
+
+describe("reviews.approve", () => {
+  it("is on and closed to authors when the file doesn't set it", () => {
+    expect(parseConfig("", true).config.reviews.approve).toEqual({ enabled: true, allow_author: false })
+  })
+
+  it("merges a partial approve over the default, so allowing authors keeps the command on", () => {
+    const allowed = parseConfig("reviews:\n  approve:\n    allow_author: true\n", true)
+    expect(allowed.error).toBeUndefined()
+    expect(allowed.config.reviews.approve).toEqual({ enabled: true, allow_author: true })
+    const off = parseConfig("reviews:\n  approve:\n    enabled: false\n", true)
+    expect(off.config.reviews.approve).toEqual({ enabled: false, allow_author: false })
+  })
+
+  it("rejects an unknown key under approve", () => {
+    expect(parseConfig("reviews:\n  approve:\n    everyone: true\n", true).error).toMatch(/approve/)
   })
 })
