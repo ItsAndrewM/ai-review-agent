@@ -5,3 +5,5 @@ export function shortSha(sha: string): string {
 export function isShortSha(text: string): boolean {
   return /^[0-9a-f]{8}$/.test(text)
 }
+
+export const SHORT_SHA_LENGTH = 7
