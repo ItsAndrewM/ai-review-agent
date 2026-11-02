@@ -9,3 +9,5 @@ export function shortShas(shas: readonly string[]): string[] {
 export function isShortSha(text: string): boolean {
   return /^[0-9a-f]{7}$/.test(text)
 }
+
+export const SHORT_SHA_LENGTH = 7
