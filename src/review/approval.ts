@@ -109,6 +109,12 @@ export function overrideFor(stored: ApprovalOverride | undefined, head: string):
   return stored?.head === head ? stored : undefined
 }
 
+export function overridesJudgment(state: ApprovalState): boolean {
+  if (!state.override) return false
+  const stands = state.lastReview !== undefined && !awaitsApproval(state.lastReview)
+  return stands || state.openBlocking !== 0
+}
+
 export function decideApproval(state: ApprovalState): ApprovalDecision {
   const reason = pullRequestWait(state) ?? recordWait(state.lastReview, state.override) ?? liveStateWait(state)
   return reason === undefined ? { kind: "approve" } : { kind: "wait", reason }

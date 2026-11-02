@@ -20,6 +20,7 @@ import {
   retriesAtDoor,
   openBlockingIn,
   overrideFor,
+  overridesJudgment,
   ownsRecheck,
   RecheckJob,
   verdictAfterChecks,
@@ -629,5 +630,17 @@ describe("overrideFor", () => {
     expect(overrideFor(stored, "bbb")).toEqual(stored)
     expect(overrideFor(stored, "ccc")).toBeUndefined()
     expect(overrideFor(undefined, "bbb")).toBeUndefined()
+  })
+})
+
+describe("overridesJudgment", () => {
+  const overridden = { ...ready, override: true }
+
+  it("is true only when the override is what let the approval through", () => {
+    expect(overridesJudgment({ ...overridden, openBlocking: 1 })).toBe(true)
+    expect(overridesJudgment({ ...overridden, openBlocking: "unknown" })).toBe(true)
+    expect(overridesJudgment({ ...overridden, lastReview: { ...requested, heldBack: 1 } })).toBe(true)
+    expect(overridesJudgment(overridden)).toBe(false)
+    expect(overridesJudgment({ ...ready, openBlocking: 1 })).toBe(false)
   })
 })
