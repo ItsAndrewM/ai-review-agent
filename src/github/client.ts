@@ -320,6 +320,17 @@ export interface CreateCheckRun {
   output: CheckRunOutput
 }
 
+export interface CreateCompletedCheckRun {
+  name: string
+  head_sha: string
+  status: "completed"
+  conclusion: CheckRunConclusion
+  external_id: string
+  started_at: string
+  completed_at: string
+  output: CheckRunOutput
+}
+
 export interface UpdateCheckRun {
   conclusion: CheckRunConclusion
   completed_at: string
@@ -413,7 +424,7 @@ export class GitHubClient {
     })
   }
 
-  async createCheckRun(ref: RepoRef, run: CreateCheckRun): Promise<{ id: number }> {
+  async createCheckRun(ref: RepoRef, run: CreateCheckRun | CreateCompletedCheckRun): Promise<{ id: number }> {
     const { id } = await this.json(CheckRun, `/repos/${ref.owner}/${ref.repo}/check-runs`, {
       method: "POST",
       body: JSON.stringify(run),

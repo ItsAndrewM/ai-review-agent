@@ -4,7 +4,6 @@ import {
   checkRunTitle,
   failedCheckRun,
   dailyBudgetCheckRun,
-  dailyBudgetCheckRunStart,
   gaveUpCheckRun,
   isoSeconds,
   MAX_CHECK_SUMMARY_CHARS,
@@ -275,29 +274,17 @@ describe("failedCheckRun", () => {
   })
 })
 
-describe("dailyBudgetCheckRunStart", () => {
-  it("opens the run with the budget's title, so it never reads as a review in progress", () => {
-    expect(
-      dailyBudgetCheckRunStart({ name: "andabot", headSha: "abcdef1234", deliveryId: "d1", startedAt: at }, "andabot"),
-    ).toEqual({
+describe("dailyBudgetCheckRun", () => {
+  const start = { name: "andabot", headSha: "abcdef1234", deliveryId: "d1", startedAt: at }
+
+  it("is created already completed as neutral, so no failed second request can leave it in progress", () => {
+    expect(dailyBudgetCheckRun(start, "andabot", "sweep")).toEqual({
       name: "andabot",
       head_sha: "abcdef1234",
-      status: "in_progress",
+      status: "completed",
+      conclusion: "neutral",
       external_id: "d1",
       started_at: "2026-10-17T20:36:38Z",
-      output: {
-        title: "Daily review budget spent",
-        summary:
-          "This deploy's daily model budget is spent. `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then.",
-      },
-    })
-  })
-})
-
-describe("dailyBudgetCheckRun", () => {
-  it("completes as neutral, naming the head, when it is reviewed and the command for it", () => {
-    expect(dailyBudgetCheckRun("abcdef1234", "andabot", at)).toEqual({
-      conclusion: "neutral",
       completed_at: "2026-10-17T20:36:38Z",
       output: {
         title: "Daily review budget spent",
@@ -305,6 +292,12 @@ describe("dailyBudgetCheckRun", () => {
           "This deploy's daily model budget is spent. `abcdef1` is reviewed after midnight UTC, or comment `@andabot review` then.",
       },
     })
+  })
+
+  it("asks a tagged review's author to tag again after midnight", () => {
+    expect(dailyBudgetCheckRun(start, "andabot", "tag").output.summary).toBe(
+      "This deploy's daily model budget is spent. Comment `@andabot review` after midnight UTC to review `abcdef1`.",
+    )
   })
 })
 

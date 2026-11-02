@@ -18,12 +18,20 @@ const summary = [
   "_Not reviewed yet._",
 ].join("\n")
 
-const line = budgetLine("abcdef1234", "andabot")
+const line = budgetLine("abcdef1234", "andabot", "sweep")
 
 describe("budgetLine", () => {
   it("names the head and when it is reviewed, with the deploy's marker", () => {
     expect(line).toBe(
       "⏳ Today's review budget is spent: `abcdef1` is reviewed after midnight UTC. <!-- andabot:budget -->",
+    )
+  })
+})
+
+describe("budgetLine for a tagged review", () => {
+  it("asks for a tag after midnight instead of promising the sweep, which may never review this head", () => {
+    expect(budgetLine("abcdef1234", "andabot", "tag")).toBe(
+      "⏳ Today's review budget is spent: `abcdef1` isn't reviewed. Comment `@andabot review` after midnight UTC. <!-- andabot:budget -->",
     )
   })
 })
@@ -34,7 +42,7 @@ describe("withBudgetLine", () => {
   })
 
   it("replaces an earlier budget line rather than stacking a second", () => {
-    const later = budgetLine("9999999aaaa", "andabot")
+    const later = budgetLine("9999999aaaa", "andabot", "sweep")
     const twice = withBudgetLine(withBudgetLine(summary, line, "andabot"), later, "andabot")
     expect(twice.split("\n").filter((text) => text.startsWith("⏳"))).toEqual([later])
   })

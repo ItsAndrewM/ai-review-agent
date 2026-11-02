@@ -11,8 +11,19 @@ export const BudgetSkipShown = Type.Object({ head: Type.String(), day: Type.Stri
 
 export type BudgetSkipShown = Static<typeof BudgetSkipShown>
 
-export function budgetLine(headSha: string, botLogin: string): string {
-  return `${BUDGET_OPENING}: \`${shortSha(headSha)}\` is reviewed after midnight UTC. ${budgetMarkerOf(botLogin)}`
+export type BudgetResume = "sweep" | "tag"
+
+export function budgetResumeOf(review: { requestedBy?: string }): BudgetResume {
+  return review.requestedBy === undefined ? "sweep" : "tag"
+}
+
+export function budgetLine(headSha: string, botLogin: string, resume: BudgetResume): string {
+  const head = `\`${shortSha(headSha)}\``
+  const when =
+    resume === "sweep"
+      ? `${head} is reviewed after midnight UTC.`
+      : `${head} isn't reviewed. Comment \`@${botLogin} review\` after midnight UTC.`
+  return `${BUDGET_OPENING}: ${when} ${budgetMarkerOf(botLogin)}`
 }
 
 export function withBudgetLine(body: string, line: string, botLogin: string): string {

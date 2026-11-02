@@ -1,6 +1,14 @@
-import type { CheckRunConclusion, CheckRunOutput, CreateCheckRun, RepoRef, UpdateCheckRun } from "../github/client.ts"
+import type {
+  CheckRunConclusion,
+  CheckRunOutput,
+  CreateCheckRun,
+  CreateCompletedCheckRun,
+  RepoRef,
+  UpdateCheckRun,
+} from "../github/client.ts"
 import type { PostedReview, SeverityCounts } from "../records.ts"
 import { shortSha } from "../sha.ts"
+import type { BudgetResume } from "./budget-line.ts"
 import { plural } from "./copy.ts"
 import { countBySeverity, type FindingInput } from "./findings.ts"
 import { VERDICT_LABEL, type Verdict } from "./render.ts"
@@ -90,29 +98,29 @@ export function gaveUpCheckRun(headSha: string, botLogin: string, completedAt: n
   return completedCheckRun("neutral", output, undefined, completedAt)
 }
 
-export function dailyBudgetCheckRunStart(
+export function dailyBudgetCheckRun(
   start: Omit<CheckRunStart, "fileCount" | "model">,
   botLogin: string,
-): CreateCheckRun {
+  resume: BudgetResume,
+): CreateCompletedCheckRun {
   return {
     name: start.name,
     head_sha: start.headSha,
-    status: "in_progress",
+    status: "completed",
+    conclusion: "neutral",
     external_id: start.deliveryId,
     started_at: isoSeconds(start.startedAt),
-    output: dailyBudgetOutput(start.headSha, botLogin),
+    completed_at: isoSeconds(start.startedAt),
+    output: checkOutput("Daily review budget spent", dailyBudgetSummary(start.headSha, botLogin, resume)),
   }
 }
 
-export function dailyBudgetCheckRun(headSha: string, botLogin: string, completedAt: number): UpdateCheckRun {
-  return completedCheckRun("neutral", dailyBudgetOutput(headSha, botLogin), undefined, completedAt)
-}
-
-function dailyBudgetOutput(headSha: string, botLogin: string): CheckRunOutput {
-  return checkOutput(
-    "Daily review budget spent",
-    `This deploy's daily model budget is spent. \`${shortSha(headSha)}\` is reviewed after midnight UTC, or comment \`@${botLogin} review\` then.`,
-  )
+function dailyBudgetSummary(headSha: string, botLogin: string, resume: BudgetResume): string {
+  const head = `\`${shortSha(headSha)}\``
+  const prefix = "This deploy's daily model budget is spent."
+  if (resume === "sweep")
+    return `${prefix} ${head} is reviewed after midnight UTC, or comment \`@${botLogin} review\` then.`
+  return `${prefix} Comment \`@${botLogin} review\` after midnight UTC to review ${head}.`
 }
 
 export function supersededCheckRun(newHeadSha: string, completedAt: number): UpdateCheckRun {

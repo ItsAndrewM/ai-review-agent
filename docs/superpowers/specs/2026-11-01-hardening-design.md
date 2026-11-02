@@ -200,3 +200,17 @@ In `answer()`, before `setModel`: `room(cap)`; refused → reply "Today's review
 - A question needs no reservation: it's one short call, and refusing at `spent + reserved ≥ cap` keeps it under the cap but for that call.
 - A question that runs while a review of the same object is open can be counted twice (once in its own `add`, once in the review's usage window). Small and only ever over; accepted.
 - `budgetSkip` is a separate key, not a `decided` reason, so the sweep's `decideSweep` stays as it is.
+
+### Rulings while building and after the review
+
+Built inline from `docs/superpowers/plans/2026-11-01-daily-budget.md`, then reviewed whole-branch on opus ("with fixes": no Critical, three Important, nine Minor). Live-checked on staging (fixture #210) before merge.
+
+- **Settlement sits where `pending` is deleted** (`endOwnRun`, `releasePending`, a replaced run), which every exit passes through, so each run settles once.
+- **The ledger's logic is `DayAccount` over a `DayRecord`** (`src/budget/day-account.ts`), which the object wraps, so tests drive the real arithmetic and logging without a Durable Object.
+- **The paused line's insert and remove are shared** (`src/review/summary-lines.ts`) by the paused and budget lines.
+- **A refused `full review` keeps the head's record.** `posted:<sha>` is deleted only once a full review is granted, not before the reservation.
+- **`summary` keeps working but is counted** (Q1 named it among the commands that keep working; it calls the model, so its spend is added to the day like a question's).
+- **A tagged refusal doesn't promise the sweep.** The sweep reviews only what a push would, so a refused tag's line and check run say to comment `@<login> review` after midnight; a refused push or sweep keeps "is reviewed after midnight UTC".
+- **The budget check run is created completed in one request**, so a failed second request can't leave a run in progress on a required check.
+- **Rollback:** the `v4` migration means `wrangler rollback` can't cross this deploy; the escape hatch is a redeploy with a very large `MAX_DAILY_NEURONS`.
+- **Deferred minors:** the budget line can outlive its head when the next exit doesn't rewrite the summary (`skipUnchanged`, a give-up, a settings skip); spend after `submit_review` and an aborted run's last tokens go unsettled; the 80% warning is checked only on reserve and room; `resume` past the cap says "reviewing" before the neutral run; a reserve that times out after applying leaks until midnight; the object-level tests wait on #188.
